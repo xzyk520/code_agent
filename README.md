@@ -17,6 +17,7 @@
 - [3. 术语表](#3-术语表)
 - [4. 总体架构](#4-总体架构)
   - [4.4 VS Code 扩展的技术基线（要求 + 对接清单）](#44-vs-code-扩展的技术基线要求--对接清单)
+  - [4.5 壳 ↔ 内核的 IPC 契约](#45-壳--内核的-ipc-契约json-rpc-20-over-stdio)
 - [5. 模型接入层（OpenAI 兼容）](#5-模型接入层openai-兼容)
 - [6. 三模式设计](#6-三模式设计)
 - [7. Agent 内核与循环](#7-agent-内核与循环)
@@ -43,6 +44,7 @@
 - 本文档同时是一份**调研结论文档**：每个关键设计点都尽量给出对应工业界做法与出处（见 [§14](#14-工业界参考) 与 [§20](#20-参考资料)）。
 - 项目定名 **Bee Code**：仓库名 `bee-code`，扩展 ID `<publisher>.bee-code`，显示名 `Bee Code`，命令前缀 `beeCode.`，配置项命名空间 `beeCode.*`，项目内数据目录 `.beecode/`，虚拟文档 scheme `beecode-base:` / `beecode-proposed:`。
 - 修订：**v0.1 起，改动落地范式从「Overlay 先审后写」改为工业主流的「写入 + 待审（Keep/Undo）」**，理由见 [§14.10](#1410-为什么最终改用主流范式先写后审)，方案见 [§10](#10-改动落地写入--待审write-then-review)。
+- 技术栈（v0.2 定）：**Python 内核 + TypeScript 薄壳**。VS Code 扩展 API 只有 TS/JS（Extension Host 是 Node.js），Python 无法作为扩展语言；因此把 agent 逻辑（循环/检索/提示词/补丁/协议）全部放进 Python 子进程，TS 壳只做编辑器集成。契约见 [§4.5](#45-壳--内核的-ipc-契约json-rpc-20-over-stdio)，分发方案见 [§17.1](#171-python-运行时分发这是-a-方案最大的成本必须早定)。
 - 许可证：**MIT**（见 [LICENSE](./LICENSE)）。
 
 ---
@@ -70,6 +72,7 @@
 - ❌ 不做完整的 IDE 替代（不接管补全、不实现完整的 LSP）。
 - ❌ 不做无审批的全自动「无人值守 / YOLO」模式（可作为 🧪 高级开关，默认关闭且需显式二次确认）。
 - ❌ 不追求一次支持全语言；首期聚焦 TS/JS/Python/Go/Java/Rust 这些有成熟 LSP symbol 能力的语言。
+- ❌ **不做 Web 版扩展**（vscode.dev / github.dev）：内核是 Python 子进程，拿不到 `browser` 入口。这是「Python 内核」路线的确定代价。
 
 ---
 
@@ -80,7 +83,7 @@
 3. **协议统一（One wire format）**：内部只有一种模型协议 —— OpenAI Chat Completions 兼容格式；异构厂商差异在适配层吃掉。
 4. **可解释（Every step is visible）**：每一次工具调用、每一次检索命中、每一次 token 花费都可在面板里回放。
 5. **可中断（Always cancellable）**：任何时刻一行 `AbortSignal` 就能停下循环，不产生半截写入。
-6. **内核与 UI 解耦**：`src/core` 是纯 TypeScript，不 import `vscode`，可脱离编辑器单测、复用到 CLI / Web。
+6. **内核与 UI 解耦**：agent 逻辑活在 **Python 内核**里，通过 JSON-RPC 与 TS 壳通信；内核不认识 `vscode`，能脱离编辑器跑单测、也能直接接一个 CLI。
 
 ---
 
@@ -110,23 +113,23 @@
 │  Chat/Agent 面板 · 选区右键菜单 · 快捷键 · 文件选择器(QuickPick/Tree)      │
 │  QuickDiff 红绿 · 函数级 Keep/Undo 卡片 · 检查点 · 状态栏(token/费用/停止)  │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ L2  扩展宿主适配层（Extension Host, Node.js）—— 只做「VS Code 世界的事」    │
-│  Command 注册 · 会话/工作区生命周期 · SecretStorage · workspace.fs         │
-│  DocumentSymbol 查询 · Diff/Decoration 渲染 · WorkspaceEdit 落地           │
+│ L2  薄壳（Extension Host, Node.js / TypeScript）—— 只做「VS Code 世界的事」 │
+│  activate/命令注册 · 面板宿主 · SecretStorage · WorkspaceEdit 落地         │
+│  DocumentSymbol 查询 · QuickDiff/Diff 渲染 · 检查点(git) 执行 · RPC 服务端  │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ L3  Agent 内核（@core，纯 TS，无 vscode 依赖，可单测/可复用）                │
+│ L3  Python 内核（独立子进程，JSON-RPC over stdio，不 import vscode）        │
 │  AgentLoop · ModeRouter · PromptComposer · ContextEngine · ToolRegistry   │
-│  ChangeApplier · PendingStore · ReviewPlanner · Checkpoint · Guard         │
-│  SessionStore · EventBus                                                   │
+│  PendingStore · ReviewPlanner · Guard · SessionStore · EventBus           │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ L4  出站适配层（Providers）                                                │
-│  LLMClient: OpenAI 兼容（chat.completions + tools + stream）              │
-│  Tools: 工作区读写代理 / 检索 / 诊断 / 后续的命令执行                       │
-│  MCPClient: stdio + Streamable HTTP · SkillLoader                          │
+│ L4  出站适配层（Python）                                                   │
+│  LLMClient: OpenAI 兼容（httpx + SSE + tools）                            │
+│  MCPClient: stdio + Streamable HTTP · SkillLoader · 检索(ripgrep/tree-sitter)│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**关键约束**：依赖只能自上而下。L3 不允许 `import * as vscode from 'vscode'`（用 ESLint `no-restricted-imports` 强制），所有编辑器能力通过 L2 注入的接口（`WorkspacePort`、`DiffPort`、`SecretPort`…）访问。这是 Cline / Continue 这类项目都在用的「内核与宿主解耦」做法，好处是可以在纯 Node 环境里跑回归测试、也能把同一内核接到 CLI。
+**关键约束（v0.2 修订）**：Python 进程里**没有** `vscode` 模块，所以「读文件/写文件/取符号/落地 diff/存密钥」这类动作必须由 TS 壳代劳，Python 只能通过 JSON-RPC 发**意图**（`fs.read`、`edit.apply`、`symbols.get`…）。反过来，TS 壳不含任何业务逻辑（不拼提示词、不解析模型输出、不管预算）。这条边界是硬边界，一旦越界就会出现「同一段逻辑两边各写一份」的长期维护债。
+
+> 依赖方向：L1 → L2 →（RPC）→ L3 → L4。L3 可以在没有 VS Code 的情况下降级成 CLI（用本地 fs 端口替身），这是选 Python 内核最大的收益之一：**agent 逻辑能独立跑、独立测**。
 
 ### 4.2 一次 Builder 请求的完整时序
 
@@ -136,40 +139,38 @@
   ├─(1) L2 采集「显式上下文」：选区文本 + 文件路径 + 光标位置 + 相邻 120 行
   ├─(2) L2 采集「环境事实」：workspace root / 语言 / package.json 摘要 / git 分支 / 诊断
   ├─(3) L3 ModeRouter 装配 system prompt（builder.md 覆盖层）+ 工具集（读 + apply_*）
-  ├─(4) L3 ContextEngine 生成「候选上下文包」：
-  │        · 文件清单（Git-aware，忽略 node_modules/.git/dist）
-  │        · ripgrep 关键词命中（parseConfig / yaml / config 相关）
-  │        · 符号索引命中（同名函数、调用点）
-  │        压缩到 token 预算内后作为首轮 messages
+  ├─(4) L3 ContextEngine 生成「候选上下文包」（文件清单/关键词/符号）：
+  │        · 通过 RPC 向壳请求 file.list / search.grep / symbols.outline
+  │        · 压缩到 token 预算内后作为首轮 messages
   ├─(5) LLMClient 流式请求（tools 声明）→ 模型返回 tool_calls: read_file / search_code
-  ├─(6) ToolRegistry 执行只读工具 → 结果回填 → 循环（最多 maxSteps）
+  ├─(6) ToolRegistry 执行只读工具（经 RPC 落到真实工作区）→ 结果回填 → 循环（最多 maxSteps）
   └─(7) 模型调用 apply_patch
          │
-         ├─ L3 ChangeApplier: 纯函数算出新文本（打不上就报错返回模型，磁盘不动）
-         ├─ L3 Checkpoint: 写入**前**落一次影子 git 快照（可整轮回滚）
-         ├─ L2 写入: 单次 WorkspaceEdit.applyEdit（一个 undo 单元）→ 落盘
-         ├─ L3 PendingStore: 登记 PendingEdit + 解析 hunk + 查 DocumentSymbol 归并为函数单元
+         ├─ L3 ChangeApplier: 纯 Python 算出新文本（打不上就报错返回模型，磁盘不动）
+         ├─ L3 → L2 RPC `checkpoint.create`：写入**前**落一次影子 git 快照
+         ├─ L3 → L2 RPC `edit.apply`：壳用单次 WorkspaceEdit.applyEdit 落盘（一个 undo 单元）
+         ├─ L3 PendingStore: 登记 PendingEdit + 解析 hunk + 请求 symbols 归并为函数单元
          ├─ L2 渲染: QuickDiff 红绿长在真实文件上；面板按 文件→函数→改动 列表
          └─ 用户: 逐函数 Keep / Undo，或「全部 Keep / 全部 Undo / 恢复到检查点」
-                └─ Undo 走反向 patch（同样是一个 undo 单元）；Restore 走影子 git
+                └─ Undo → RPC `edit.apply(reverse)`；Restore → RPC `checkpoint.restore`
 ```
 
 ### 4.3 模块职责
 
 | 模块 | 层 | 职责 | 不做什么 |
 | --- | --- | --- | --- |
-| `ui/*` | L1 | 渲染会话、Keep/Undo 卡片、diff 导航 | 不拼提示词、不解析模型输出 |
-| `vscode/ports/*` | L2 | 把 VS Code API 包成端口接口（fs / symbols / secrets / diff / window） | 不含业务规则 |
-| `core/loop` | L3 | 驱动循环、状态机、取消、事件广播 | 不关心渲染 |
-| `core/modes` | L3 | 模式定义、能力矩阵、模式切换 | 不直接读文件 |
-| `core/prompts` | L3 | 提示词模板装配（base + overlay + memory + tools） | 不含厂商差异 |
-| `core/llm` | L3/L4 | OpenAI 兼容客户端、流式解析、重试、用量统计 | 不选模型 |
-| `core/context` | L3 | 文件索引、检索、预算分配、压缩 | 不发起网络请求 |
-| `core/tools` | L3 | 工具注册表、schema、参数校验、权限声明 | 不直接碰磁盘 |
-| `core/apply` | L3 | 补丁解析与写入（`WorkspaceEdit`）、反向补丁 | 不做审阅 UI |
-| `core/pending` | L3 | 待审记录、函数分组、Keep/Undo 状态机 | 不直接调 git |
-| `core/checkpoint` | L3 | 影子 git 快照、Restore 三档恢复 | 不碰项目 `.git` |
-| `core/guard` | L3 | 步数/预算/重复/无进展检测、熔断 | 不做 Keep/Undo 决策 |
+| `src/ui/*` | L1 | 渲染会话、Keep/Undo 卡片、diff 导航（Webview 前端也是 TS） | 不拼提示词、不解析模型输出 |
+| `src/shell/*`（TS） | L2 | 命令/菜单/面板宿主、SecretStorage、WorkspaceEdit、QuickDiff、DocumentSymbol、RPC 服务端 | 不含业务规则 |
+| `beecode/ipc.py` | L3 | JSON-RPC 客户端（stdio）、方法注册、超时、错误映射 | 不碰 VS Code |
+| `beecode/loop` | L3 | 驱动循环、状态机、取消、事件广播 | 不关心渲染 |
+| `beecode/modes` | L3 | 模式定义、能力矩阵、模式切换 | 不直接读文件 |
+| `beecode/prompts` | L3 | 提示词模板装配（base + overlay + memory + tools） | 不含厂商差异 |
+| `beecode/llm` | L3/L4 | OpenAI 兼容客户端、SSE 解析、重试、用量统计 | 不选模型 |
+| `beecode/context` | L3 | 检索编排、预算分配、压缩（具体 I/O 走 RPC） | 不直接读盘 |
+| `beecode/tools` | L3 | 工具注册表、schema（pydantic）、参数校验、权限声明 | 不直接写盘 |
+| `beecode/apply` | L3 | 补丁解析（unified diff）、新文本计算、反向补丁 | 不做实际写入 |
+| `beecode/pending` | L3 | 待审记录、函数分组、Keep/Undo 状态机 | 不直接调 git |
+| `beecode/guard` | L3 | 步数/预算/重复/无进展检测、熔断 | 不做 Keep/Undo 决策 |
 
 ---
 
@@ -185,8 +186,8 @@
 | **必填字段** | `name`（小写、无空格、全 Marketplace 唯一）、`version`（SemVer）、`publisher`、`engines.vscode`（不能是 `*`）。扩展唯一 ID = `<publisher>.<name>` |
 | **生命周期** | 入口模块导出 `activate(context)` 与（可选）`deactivate()`；`activate` 只在某个**激活事件**发生时执行一次 |
 | **激活事件** | 1.74 起，`contributes.commands` 里声明的命令被调用时会**隐式激活**，无需再写 `onCommand:...`；`onStartupFinished` 会拖慢启动，能不用就不用 |
-| **运行进程** | 代码跑在 **Extension Host**（独立 Node.js 进程），不能碰 DOM；所有编辑器能力必须通过 `vscode` 模块的 API，UI 自定义只能靠 Webview |
-| **打包发布** | `npx @vscode/vsce package` 产出 `.vsix`；上架需要 Marketplace publisher + Azure DevOps PAT，`README.md` 会成为商店详情页正文，`icon` ≥ 128×128 |
+| **运行进程** | 代码跑在 **Extension Host**（独立 Node.js 进程），不能碰 DOM；所有编辑器能力必须通过 `vscode` 模块的 API，UI 自定义只能靠 Webview。**Python 内核是扩展自己拉起的子进程，不是宿主运行时**——它拿不到任何 `vscode` 能力 |
+| **打包发布** | `npx @vscode/vsce package` 产出 `.vsix`；上架需要 Marketplace publisher + Azure DevOps PAT，`README.md` 会成为商店详情页正文，`icon` ≥ 128×128。若随包带 sidecar 二进制，须用 `--target win32-x64 / darwin-arm64 / linux-x64` 分平台发布 |
 | **合规** | 不得静默上传用户代码/数据；有遥测必须声明并可关闭；支持 Workspace Trust 的扩展必须声明 `capabilities.untrustedWorkspaces` |
 
 最小可运行骨架（官方 Hello World 结构）：`package.json` + `src/extension.ts` + `tsconfig.json` + `.vscode/launch.json`（F5 调试）+ `.vscodeignore`。
@@ -227,6 +228,59 @@
 - CSP 严格：`default-src 'none'; img-src ${cspSource} data:; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'`。
 - 消息通道双向校验：`onDidReceiveMessage` 里对 `type` 做白名单，**不信任**前端传来的路径（前端可被注入）。
 - `retainContextWhenHidden` 默认关（它会让隐藏的 webview 一直吃内存），用「状态序列化 + 恢复」代替。
+
+---
+
+### 4.5 壳 ↔ 内核的 IPC 契约（JSON-RPC 2.0 over stdio）
+
+选 `stdio` 而不是 TCP/HTTP 的原因很实际：**不需要端口、不需要鉴权、宿主退出时子进程跟着退出**，VS Code 自己的 LSP 与 MCP 都是这么走的。框架用 **NDJSON**（一行一个 JSON）：`JSON.stringify` 永远不会输出裸换行，所以按 `\n` 分帧是安全的，比 LSP 的 `Content-Length` 头更简单。
+
+```
+TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
+      request/response（有 id）  +  notification（无 id）
+```
+
+#### 4.5.1 内核 → 壳（Python 请求编辑器干活）
+
+| 方法 | 参数 | 返回 | 说明 |
+| --- | --- | --- | --- |
+| `fs.read` | `path, startLine?, endLine?` | `{ text, version }` | 优先用编辑器里的**未保存**内容 |
+| `fs.list` | `glob, exclude?, maxResults?` | `{ paths[] }` | 壳合并 `files.exclude` + `.gitignore` |
+| `search.grep` | `query, regex?, glob?, contextLines?` | `{ hits[{path,line,col,text}] }` | 壳内跑 ripgrep |
+| `symbols.outline` | `path` | `{ symbols[] }` | `executeDocumentSymbolProvider` |
+| `diagnostics.get` | `path?` | `{ items[] }` | `languages.getDiagnostics` |
+| `edit.apply` | `path, expectedVersion, newText, reason` | `{ applied, version }` | **唯一写入通道**：单次 `WorkspaceEdit` |
+| `checkpoint.create` | `label` | `{ id }` | 影子 git 快照 |
+| `checkpoint.restore` | `id, scope: files\|task\|both` | `{ restored[] }` | 三档恢复 |
+| `diff.open` | `path, baseText` | `{}` | 打开 `vscode.diff` 对照 |
+| `confirm.ask` | `question, detail?, options[]` | `{ choice }` | 写入门闸用它问人 |
+| `secrets.get` | `key` | `{ value }` | 只在会话启动时取一次，不进日志 |
+
+#### 4.5.2 壳 → 内核（用户动作）
+
+| 方法 | 参数 | 说明 |
+| --- | --- | --- |
+| `initialize` | `protocolVersion, workspaceRoots[], modelConfig, hasKey` | 握手；版本不匹配直接失败并给可读原因 |
+| `chat.send` | `sessionId, mode, text, attachments[]` | 发起一轮（`attachments` = 选区/文件引用） |
+| `review.keep` / `review.undo` | `pendingIds[]` | 逐函数或批量 |
+| `review.keepAll` | `sessionId` | 一键 Keep |
+| `session.abort` | `sessionId` | 取消（同时 cancel 所有在飞的 RPC） |
+| `model.reload` | `modelConfig` | 用户改了配置 |
+
+#### 4.5.3 通知（无 id，单向）
+
+- `ui.delta` `{ sessionId, text }` —— 流式文本，逐块推给面板。
+- `ui.tool` `{ sessionId, name, args, status }` —— 工具开始/结束。
+- `ui.usage` `{ inputTokens, outputTokens, costUsd }`。
+- `pending.changed` `{ added[], updated[], removed[] }` —— 壳据此刷新 QuickDiff 与卡片。
+- `log` `{ level, msg, fields }` —— 壳写进 OutputChannel（先过脱敏）。
+
+#### 4.5.4 四条工程约定
+
+1. **取消要能穿透**：`$/cancelRequest` 风格（带被取消的 `id`），内核收到后 `AbortSignal` 中断 HTTP 请求与工具；壳收到 `session.abort` 时同时取消自己正在执行的 RPC。
+2. **密钥只走一次握手**：`apiKey` 通过 `initialize` 的**子进程 stdin** 传入，**绝不放在 argv**（`ps` 全机可见）也不放环境变量（同用户可读、易被 `env` 打进日志）。内核只在内存持有。
+3. **路径策略以壳为准**：内核传来的路径可能是模型编造的，壳必须独立做「是否在工作区内 / 是否命中禁止清单」的校验（纵深防御，两边都校验）。
+4. **协议要版本化**：`protocolVersion` 用整数，壳与内核不匹配时**拒绝启动**并提示「请重装扩展」，而不是带着半截语义跑。
 
 ---
 
@@ -299,30 +353,28 @@
 
 ### 5.4 请求与响应约定
 
-```ts
-// core/llm/types.ts
-interface ChatRequest {
-  model: string;                       // 来自设置
-  messages: ChatMessage[];              // system | user | assistant | tool
-  tools?: ToolSpec[];                   // JSON Schema
-  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
-  temperature?: number;
-  maxTokens?: number;
-  stream: boolean;
-}
+```python
+# beecode/llm/types.py
+class ChatRequest(BaseModel):
+    model: str                              # 来自设置
+    messages: list[ChatMessage]             # system | user | assistant | tool
+    tools: list[ToolSpec] | None = None     # JSON Schema
+    tool_choice: Literal["auto", "none"] | dict | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    stream: bool = True
 
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | ContentPart[] | null;
-  tool_calls?: ToolCall[];              // assistant 侧
-  tool_call_id?: string;                // tool 侧
-  name?: string;
-}
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | list[ContentPart] | None = None
+    tool_calls: list[ToolCall] | None = None    # assistant 侧
+    tool_call_id: str | None = None             # tool 侧
+    name: str | None = None
 ```
 
-- **流式**：解析 SSE `data: {...}`，累积 `delta.tool_calls[i].function.arguments` 片段，按 `index` 归并（这是各厂商最容易出差异的地方，需要容错：有的厂商不给 `index`，有的把 `arguments` 一次性给完）。
-- **首包/超时**：连接超时 15s，首 token 超时 90s，空闲超时 60s；`AbortController` 与 UI 的「停止」按钮联动。
-- **用量**：优先读 `usage`；没有则用 `js-tiktoken` 估算并标注「估算值」。
+- **流式**：用 `httpx` 的 `client.stream()` 解析 SSE `data: {...}`，累积 `delta.tool_calls[i].function.arguments` 片段，按 `index` 归并（各厂商最容易出差异的地方：有的不给 `index`，有的把 `arguments` 一次性给完）。
+- **首包/超时**：`httpx.Timeout(connect=15, read=90)`；空闲超时 60s 用 `asyncio.wait_for` 包一层；取消走 `asyncio.Task.cancel()`（对应壳的 `session.abort`）。
+- **用量**：优先读 `usage`；没有则用 `tiktoken` 估算并标注「估算值」。
 
 ### 5.5 兼容性矩阵与降级（🔬 逐家 PoC）
 
@@ -475,33 +527,43 @@ REVIEWING ──approve──▶ APPLYING ──▶ DONE
 ```
 
 ```ts
-// core/loop/AgentLoop.ts（示意）
-async function* run(session: Session, input: UserTurn): AsyncGenerator<LoopEvent> {
-  const guard = new Guard(session.budget);
-  let step = 0;
-  while (true) {
-    if (guard.shouldStop(step++)) return yield { type: 'stopped', reason: guard.reason };
-    const messages = session.prompts.assemble(input);        // 预算裁剪后
-    const stream = llm.streamChat({ messages, tools: session.mode.tools, stream: true });
+// beecode/loop/agent.py（示意）
+async def run(session: Session, turn: UserTurn) -> AsyncIterator[LoopEvent]:
+    guard = Guard(session.budget)
+    step = 0
+    while True:
+        step += 1
+        if reason := guard.should_stop(step):
+            yield LoopEvent("stopped", reason=reason)
+            return
 
-    for await (const ev of stream) {
-      if (ev.type === 'text') yield { type: 'delta', text: ev.text };
-      if (ev.type === 'tool_call') yield { type: 'tool_start', ...ev };
-    }
-    const turn = await stream.done();
-    session.history.push(turn);
+        messages = session.prompts.assemble(turn)          # 预算裁剪后
+        async for ev in session.llm.stream_chat(
+            ChatRequest(model=session.model, messages=messages,
+                        tools=session.mode.tools, stream=True)
+        ):
+            if ev.type == "text":
+                yield LoopEvent("delta", text=ev.text)
+            elif ev.type == "tool_call":
+                yield LoopEvent("tool_start", call=ev.call)
 
-    if (!turn.toolCalls?.length) return yield { type: 'final', text: turn.text };
+        assistant = await stream.done()
+        session.history.append(assistant)
 
-    for (const call of turn.toolCalls) {
-      const tool = registry.get(call.name);                  // 未注册 -> 回填错误，不崩
-      const args = schema.parse(tool, call.args);            // 参数校验失败 -> 回填可读错误
-      const result = await tool.run(args, session.ports);     // 只读立即返回；写工具写盘并登记待审
-      session.history.push({ role: 'tool', tool_call_id: call.id, content: result });
-      yield { type: 'tool_end', call, result };
-    }
-  }
-}
+        if not assistant.tool_calls:
+            yield LoopEvent("final", text=assistant.text)
+            return
+
+        for call in assistant.tool_calls:
+            tool = registry.get(call.name)                 # 未注册 -> 回填错误，不崩
+            try:
+                args = tool.schema.model_validate_json(call.args)   # pydantic 校验
+            except ValidationError as e:
+                yield result_event(call, f"参数错误：{e}")          # 可读错误回填
+                continue
+            result = await tool.run(args, session.ports)    # 只读立刻返回；写工具经 RPC 落盘并登记待审
+            session.history.append(tool_message(call.id, result))
+            yield LoopEvent("tool_end", call=call, result=result)
 ```
 
 ### 7.2 工具清单
@@ -662,7 +724,7 @@ interface ContextBudget {
 ### 10.2 写入路径：一次改动 = 一个 undo 单元
 
 ```ts
-// core/apply/applyPatch.ts（示意）
+// src/shell/apply.ts（TS 壳侧实现；Python 内核只通过 RPC 请求它）
 const doc = await vscode.workspace.openTextDocument(uri);
 const before = doc.getText();
 const after = applyUnifiedPatch(before, patch);   // 纯函数；打不上就抛错，绝不半写
@@ -792,6 +854,7 @@ git --git-dir="<shadow>" --work-tree="<ws>" checkout -- <path>
 方案 C 值得展开，因为它把「审阅 UI」变成了平台能力：
 
 ```ts
+// src/shell/quickdiff.ts（TS 壳侧）
 const sc = vscode.scm.createSourceControl('beeCode.pending', 'Bee Code 待审');
 sc.quickDiffProvider = {
   // 只要告诉 VS Code「这个文件的原始内容在哪」，红绿它自己算
@@ -871,6 +934,7 @@ async function groupByFunction(base: PendingEdit, symbols: DocumentSymbol[]): Fu
 ### 12.1 密钥
 
 - 只存 `SecretStorage`，见 [§5.3](#53-密钥存储)。
+- **传给内核时只走一次握手**：`apiKey` 通过 Python 子进程的 **stdin** 作为 `initialize` 参数传入，**不放 argv**（`ps` 全机可见）、**不放环境变量**（同用户可读、容易被 `env` 或崩溃转储带进日志）。内核只在内存持有，不落盘。
 - 所有日志走 `redact()`：`/sk-[A-Za-z0-9_\-]{8,}/g`、`/Bearer\s+\S+/gi`、`/([?&](api_?key|token)=)[^&]+/gi`。
 - 「导出诊断包」功能默认剔除：prompt 全文、文件内容、密钥、内网 URL。
 - 明确声明：**扩展没有后端**，请求直达用户配置的 `base_url`；不接入任何遥测（或首次启动显式询问，默认关）。
@@ -1118,47 +1182,57 @@ bee-code/
 ├─ CHANGELOG.md
 ├─ README.md                     # 本文件
 ├─ LICENSE                       # MIT
+├─ pyproject.toml                # Python 内核工程定义（uv / hatchling）
+├─ uv.lock                       # 锁定内核依赖，保证「同一份环境」可复现
 ├─ docs/
 │  ├─ architecture.md            # 详细架构（本文档的精编版）
+│  ├─ ipc.md                     # 壳 ↔ 内核的 RPC 契约与版本历史
 │  ├─ prompts.md                 # 三模式提示词变更记录
 │  ├─ change-review.md           # 写入 / 待审 / Keep-Undo / 检查点协议
 │  └─ adr/                       # 架构决策记录
-│     ├─ 0001-core-free-of-vscode.md
+│     ├─ 0001-python-core-thin-shell.md
 │     ├─ 0002-bring-your-own-endpoint.md
-│     └─ 0003-change-as-proposal.md
-├─ src/                          # 扩展侧（可 import vscode）
+│     └─ 0003-write-then-review.md
+├─ src/                          # ★ TS 薄壳：唯一允许 import 'vscode' 的地方
 │  ├─ extension.ts               # activate / deactivate
-│  ├─ commands/                  # 命令注册与路由
-│  ├─ ports/                     # VS Code 能力 → 端口接口
-│  │  ├─ workspacePort.ts        #   files / findFiles / fs
-│  │  ├─ symbolsPort.ts          #   DocumentSymbol
-│  │  ├─ secretPort.ts           #   SecretStorage
-│  │  ├─ diffPort.ts             #   vscode.diff / 多文件 diff / 装饰
-│  │  └─ editPort.ts             #   WorkspaceEdit 原子应用
-│  ├─ views/                     # WebviewViewProvider / TreeDataProvider
-│  └─ webview/                   # 面板 HTML 装配、CSP、消息桥
-├─ src/core/                     # 内核（❗禁止 import vscode）
+│  ├─ supervisor.ts              # 拉起 Python 子进程、握手、健康检查、崩溃重启
+│  ├─ commands/                  # 命令注册与路由（菜单/快捷键的落点）
+│  ├─ panel/                     # WebviewViewProvider、CSP、消息桥
+│  ├─ adapters/                  # 把 RPC 请求翻成 VS Code 动作
+│  │  ├─ fsAdapter.ts            #   fs.read / fs.list（合并 .gitignore、files.exclude）
+│  │  ├─ symbolsAdapter.ts       #   executeDocumentSymbolProvider
+│  │  ├─ editAdapter.ts          #   WorkspaceEdit + applyEdit（一个 undo 单元）
+│  │  ├─ diffAdapter.ts          #   vscode.diff / vscode.changes / QuickDiff
+│  │  ├─ checkpointAdapter.ts    #   影子 git（用 child_process 调 git）
+│  │  └─ secretAdapter.ts        #   context.secrets（密钥只经握手传入内核）
+│  └─ rpc/
+│     ├─ server.ts               # 校验 + 路由 + 取消 + 错误映射
+│     └─ client.ts               # 壳调内核（chat.send / review.* / session.abort）
+├─ webview/                      # 面板前端（Vite + React，纯静态资源）
+│  └─ src/
+├─ beecode/                      # ★ Python 内核：不认识 vscode，可独立跑
+│  ├─ __main__.py                # 入口：stdio 上的 NDJSON JSON-RPC 循环
+│  ├─ ipc.py                     # RPC 客户端、方法注册、取消、协议版本
 │  ├─ loop/                      # AgentLoop、状态机、事件
 │  ├─ modes/                     # 模式定义与能力矩阵
 │  ├─ prompts/                   # 模板装配（base + overlay）
-│  ├─ llm/                       # OpenAI 兼容客户端、SSE、重试、用量
-│  ├─ context/                   # 索引、检索、预算、压缩
-│  ├─ tools/                     # 注册表、schema、内置工具
-│  ├─ apply/                     # 补丁解析、WorkspaceEdit 写入、反向补丁
+│  ├─ llm/                       # OpenAI 兼容客户端（httpx + SSE）、重试、用量
+│  ├─ context/                   # 检索编排、预算、压缩（I/O 走 RPC）
+│  ├─ tools/                     # 注册表、pydantic schema、内置工具
+│  ├─ apply/                     # unified diff 解析、新文本计算、反向补丁
 │  ├─ pending/                   # PendingEdit、函数分组、Keep/Undo 状态机
-│  ├─ checkpoint/                # 影子 git 快照与 Restore 三档
 │  ├─ guard/                     # 预算与死循环守卫
-│  ├─ mcp/                       # MCP 客户端
-│  └─ skills/                    # 技能发现与按需加载
-├─ webview/                      # 前端（Vite + React + Monaco Diff 可选）
-│  ├─ src/
-│  └─ vite.config.ts
-├─ test/
-│  ├─ unit/                      # vitest（core，纯 Node）
-│  └─ integration/               # @vscode/test-electron（跑真扩展宿主）
+│  ├─ mcp/                       # MCP 客户端（官方 python-sdk）
+│  └─ skills/                    # SKILL.md 发现与按需加载
+├─ tests/
+│  ├─ python/                    # pytest：内核单测（无编辑器、可 CI 直跑）
+│  └─ shell/                     # @vscode/test-electron：壳 + 假内核（stub）
+├─ scripts/
+│  ├─ bootstrap.py               # 首次运行：找 Python / 建 venv / 校验版本
+│  └─ build_sidecar.py           # 发布用：PyInstaller 打各平台单文件
 └─ .github/workflows/
-   ├─ ci.yml                     # lint + typecheck + test + package
-   └─ release.yml                # tag → vsix → GitHub Release
+   ├─ ci.yml                     # lint + tsc + pytest + esbuild + smoke
+   └─ release.yml                # tag → 三平台 sidecar + vsix → GitHub Release
 ```
 
 ---
@@ -1167,8 +1241,9 @@ bee-code/
 
 | 里程碑 | 内容 | 验收标准 |
 | --- | --- | --- |
-| **M0 骨架** | 扩展脚手架、命令、面板、SecretStorage、模型配置向导、单轮对话 | 填入 DeepSeek/Ollama 端点后能一问一答，流式输出正常 |
-| **M1 只读 Agent** | Agent Loop、只读工具、文件清单、检索、Chat 模式、选区快捷键 | Chat 模式能自主读 3~5 个文件后准确回答带行号的解释 |
+| **M0 双进程骨架** | TS 壳（命令 / 面板 / SecretStorage）+ Python 子进程 + RPC 握手 + 模型配置向导 + 单轮对话 | 填 DeepSeek/Ollama 端点后能流式一问一答；协议版本不匹配时有可读报错 |
+| **M0.5 可分发** | `bootstrap.py`（uv / venv 自举）+ PyInstaller sidecar + 三平台 vsix | 干净机器装上 vsix 即可用，不需要用户手工装 Python |
+| **M1 只读 Agent** | Agent Loop、只读工具（经 RPC 读盘）、文件清单、检索、Chat 模式、选区快捷键 | Chat 模式能自主读 3~5 个文件后准确回答带行号的解释 |
 | **M2 写入与待审** | `apply_patch` + `WorkspaceEdit` 写入、`PendingEdit` 记录、影子 git 检查点、QuickDiff 红绿、逐函数 Keep/Undo | Builder 改 3 个文件后能逐函数 Keep/Undo；全部 Keep 后 typecheck 通过；`Restore` 能整轮回到改前 |
 | **M3 Debugger** | 诊断接入、Debugger 提示词、验证回路（可选 run_test） | 给一个真 bug，能定位到正确函数并给出最小补丁 |
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
@@ -1178,27 +1253,52 @@ bee-code/
 
 ## 17. 开发与构建
 
+双运行时：**Node.js 20+（壳）** + **Python 3.11+（内核）**。两边独立测试，靠 RPC 联调。
+
 ```bash
-# 依赖
-npm install          # 本仓库用 npm（若本机有 pnpm 也可 pnpm i）
+# 1) 壳的依赖与构建
+npm install
+npm run watch              # esbuild --watch → dist/extension.js（external: vscode）
 
-# 开发扩展
-npm run watch        # esbuild --watch
-# 在 VS Code 里按 F5（Run Extension）启动「扩展开发宿主」
+# 2) 内核的依赖（推荐 uv；没有 uv 就用 venv + pip）
+uv sync                    # 按 pyproject.toml / uv.lock 建 .venv
+# 或：python -m venv .venv && .venv/bin/pip install -e .
 
-# 前端面板
-npm run dev:webview
+# 3) 联调
+npm run dev:webview        # 面板前端 vite
+# 在 VS Code 里按 F5 启动「扩展开发宿主」；launch.json 里有两个配置：
+#   ① Extension（壳，Node 调试）  ② Python: Attach（内核，端口 5679）
+# 壳在 dev 模式下用 `.venv/bin/python -m beecode` 拉起内核；release 模式用打包好的 sidecar
 
-# 质量
-npm run lint         # eslint
-npm run typecheck    # tsc --noEmit
-npm test             # vitest run（core 单测）
-npm run test:it      # @vscode/test-electron 集成测试
+# 4) 质量
+npm run lint && npm run typecheck    # eslint + tsc --noEmit（壳）
+uv run pytest -q                     # 内核单测（不需要 VS Code）
+npm run test:it                      # @vscode/test-electron（壳 + 假内核 stub）
 
-# 打包/发布
-npx @vscode/vsce package            # 生成 .vsix
-npx @vscode/vsce publish -p <PAT>   # 发布到 Marketplace
+# 5) 打包
+npm run build:webview                # 面板静态资源
+npm run build:shell                  # esbuild 生产构建
+uv run python scripts/build_sidecar.py --target win32-x64   # 打单文件内核
+npx @vscode/vsce package --target win32-x64                 # 生成平台专属 vsix
 ```
+
+### 17.1 Python 运行时分发（这是 A 方案最大的成本，必须早定）
+
+| 方案 | 优点 | 缺点 | 建议 |
+| --- | --- | --- | --- |
+| **要求用户自带 Python** | 零打包成本 | 用户认知负担最大，「AI 插件为什么要 Python」 | ❌ 不单独用 |
+| **PyInstaller 单文件 sidecar** | 用户零依赖；启动 ~200ms | 每平台 15–40MB；杀毒误报；需签名；`--target` 发多个 vsix | ✅ 发布主路径 |
+| **首次运行 `uv` 自举 venv** | 体积小、依赖可更新 | 需要网络；企业代理/离线环境会卡 | ✅ 作为 fallback（sidecar 启动失败时） |
+| **随包发 Python 运行时** | 完全可控 | 体积 + 许可合规成本最高 | 🧪 不推荐 |
+
+落地建议：**sidecar 优先，失败回落 `bootstrap.py`（uv → venv → pip 三级降级），再失败给一条可复制的安装命令**。manifest 里 `extensionKind: ["workspace"]`，保证 Remote-SSH / 容器 / Codespaces 时内核跑在文件所在那一侧。
+
+```jsonc
+"extensionKind": ["workspace"],
+"main": "./dist/extension.js"     // 没有 browser 入口：Python 内核不支持 Web 扩展
+```
+
+> 也就是说：**放弃 vscode.dev / github.dev**，这是 A 方案的确定代价。
 
 `package.json` 关键字段（草案）：
 
@@ -1210,6 +1310,7 @@ npx @vscode/vsce publish -p <PAT>   # 发布到 Marketplace
   "version": "0.0.1",
   "license": "MIT",
   "engines": { "vscode": "^1.104.0" },
+  "extensionKind": ["workspace"],                // 内核要在文件所在那一侧启动
   "categories": ["Programming Languages", "Machine Learning", "Other"],
   "main": "./dist/extension.js",
   "activationEvents": [],                        // 1.74+ 由 contributes 隐式激活
@@ -1221,7 +1322,9 @@ npx @vscode/vsce publish -p <PAT>   # 发布到 Marketplace
       { "command": "beeCode.selection.debug","title": "Bee Code: 排查选中代码" },
       { "command": "beeCode.files.pick",     "title": "Bee Code: 选择要阅读的文件" },
       { "command": "beeCode.model.configure","title": "Bee Code: 配置模型（base_url / key / model）" },
-      { "command": "beeCode.review.acceptAll","title": "Bee Code: 接受全部改动" }
+      { "command": "beeCode.review.keepAll",  "title": "Bee Code: 全部 Keep" },
+      { "command": "beeCode.review.undoAll",  "title": "Bee Code: 全部 Undo" },
+      { "command": "beeCode.checkpoint.restore","title": "Bee Code: 恢复到检查点…" }
     ],
     "keybindings": [
       { "command": "beeCode.selection.chat",  "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorHasSelection" },
@@ -1293,7 +1396,9 @@ git push -u origin main
 - Extension Manifest（`package.json` 字段全表，`main` / `browser` / `engines` / `capabilities`）— <https://code.visualstudio.com/api/references/extension-manifest>
 - Contribution Points — <https://code.visualstudio.com/api/references/contribution-points>
 - Activation Events（1.74 起的隐式激活说明）— <https://code.visualstudio.com/api/references/activation-events>
-- Extension Host（扩展宿主进程模型）— <https://code.visualstudio.com/api/advanced-topics/extension-host>
+- Extension Host（扩展宿主进程模型：只有 Node.js / Browser 两种运行时，没有 Python）— <https://code.visualstudio.com/api/advanced-topics/extension-host>
+- 「能不能用 Python 写 VS Code 扩展」的社区定论（只能薄壳 + 子进程）— <https://stackoverflow.com/questions/62848396/can-i-create-vs-code-extensions-in-python-c>
+- pygls（Python 写 **LSP 语言服务器**，不是扩展框架；容易混淆）— <https://github.com/openlawlibrary/pygls>
 - Webview API 指南（CSP / nonce / `asWebviewUri` / 消息传递）— <https://code.visualstudio.com/api/extension-guides/webview>
 - Chat Participant API — <https://code.visualstudio.com/api/extension-guides/ai/chat>
 - Language Model API（`vscode.lm`）— <https://code.visualstudio.com/api/extension-guides/ai/language-model>
