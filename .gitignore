@@ -15,9 +15,14 @@ coverage/
 .env.*
 *.pem
 *.key
-.codeagent/backup/
-.codeagent/cache/
+.beecode/backup/
+.beecode/cache/
+.vscode/settings.json
 .vscode/settings.local.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
 
 # 编辑器/系统噪音
 .DS_Store

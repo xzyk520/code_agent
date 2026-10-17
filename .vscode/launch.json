@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension (beeagent)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: build",
+      "env": {
+        "BEE_CODE_DEV": "1"
+      }
+    },
+    {
+      "name": "Attach to Python core (debugpy :5679)",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": { "host": "127.0.0.1", "port": 5679 },
+      "pathMappings": [
+        { "localRoot": "${workspaceFolder}", "remoteRoot": "${workspaceFolder}" }
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Extension + Python core",
+      "configurations": ["Run Extension (beeagent)", "Attach to Python core (debugpy :5679)"]
+    }
+  ]
+}

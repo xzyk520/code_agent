@@ -1,0 +1,122 @@
+{
+  "name": "bee-code",
+  "displayName": "Bee Code",
+  "description": "BYO-model coding agent: Chat / Builder / Debugger, write-then-review with per-function Keep/Undo.",
+  "version": "0.0.1",
+  "publisher": "xzyk520",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/xzyk520/code_agent.git" },
+  "engines": { "vscode": "^1.90.0" },
+  "extensionKind": ["workspace"],
+  "categories": ["Programming Languages", "Machine Learning", "Other"],
+  "keywords": ["ai", "agent", "code", "chatgpt", "openai", "llm", "mcp"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "npm run build"
+  },
+  "contributes": {
+    "commands": [
+      { "command": "beeCode.chat.ask", "title": "提问（Chat）", "category": "Bee Code" },
+      { "command": "beeCode.selection.chat", "title": "解释选中代码", "category": "Bee Code" },
+      { "command": "beeCode.selection.build", "title": "按选中代码生成改动", "category": "Bee Code" },
+      { "command": "beeCode.selection.debug", "title": "排查选中代码", "category": "Bee Code" },
+      { "command": "beeCode.files.pick", "title": "选择要阅读的文件", "category": "Bee Code" },
+      { "command": "beeCode.model.configure", "title": "配置模型（base_url / key / model）", "category": "Bee Code" },
+      { "command": "beeCode.review.keepAll", "title": "全部 Keep", "category": "Bee Code" },
+      { "command": "beeCode.review.undoAll", "title": "全部 Undo", "category": "Bee Code" },
+      { "command": "beeCode.checkpoint.restore", "title": "恢复到检查点…", "category": "Bee Code" },
+      { "command": "beeCode.core.restart", "title": "重启内核进程", "category": "Bee Code" },
+      { "command": "beeCode.core.showOutput", "title": "显示日志", "category": "Bee Code" }
+    ],
+    "keybindings": [
+      { "command": "beeCode.selection.chat", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorHasSelection" },
+      { "command": "beeCode.selection.build", "key": "ctrl+alt+b", "mac": "cmd+alt+b", "when": "editorHasSelection" },
+      { "command": "beeCode.selection.debug", "key": "ctrl+alt+d", "mac": "cmd+alt+d", "when": "editorHasSelection" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "beeCode.selection.chat", "when": "editorHasSelection && !isInDiffEditor", "group": "beeCode@1" },
+        { "command": "beeCode.selection.build", "when": "editorHasSelection && !isInDiffEditor", "group": "beeCode@2" },
+        { "command": "beeCode.selection.debug", "when": "editorHasSelection && !isInDiffEditor", "group": "beeCode@3" }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [{ "id": "beeCode", "title": "Bee Code", "icon": "media/icon.svg" }]
+    },
+    "views": {
+      "beeCode": [{ "id": "beeCode.chatView", "name": "Agent", "type": "webview" }]
+    },
+    "configuration": {
+      "title": "Bee Code",
+      "properties": {
+        "beeCode.core.mode": {
+          "type": "string",
+          "enum": ["python", "mock"],
+          "default": "python",
+          "markdownDescription": "内核模式：`python` 拉起真实内核；`mock` 用内置假内核（只调壳时用）。"
+        },
+        "beeCode.core.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "markdownDescription": "Python 解释器路径。留 `python` 走 PATH；conda 环境请填绝对路径（如 `D:\\\\APP\\\\conda\\\\envs\\\\beeagent\\\\python.exe`）。"
+        },
+        "beeCode.core.cwd": {
+          "type": "string",
+          "default": "${workspaceFolder}",
+          "markdownDescription": "内核进程的工作目录，默认第一个工作区根。"
+        },
+        "beeCode.core.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["-m", "beecode"],
+          "markdownDescription": "传给解释器的参数。"
+        },
+        "beeCode.model.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenAI 兼容端点，例如 `https://api.deepseek.com/v1`（**不含** `/chat/completions`）。"
+        },
+        "beeCode.model.model": { "type": "string", "default": "", "markdownDescription": "模型名，例如 `deepseek-chat`。" },
+        "beeCode.model.apiKeyId": {
+          "type": "string",
+          "default": "beeCode.apiKey.default",
+          "markdownDescription": "`SecretStorage` 里的键名。**密钥本身永不写入 settings.json。**"
+        },
+        "beeCode.model.temperature": { "type": "number", "default": 0.2 },
+        "beeCode.model.maxOutputTokens": { "type": "number", "default": 8192 },
+        "beeCode.model.supportsTools": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "端点是否支持原生 function calling；关掉后内核走 JSON 模式降级。"
+        },
+        "beeCode.review.granularity": {
+          "type": "string",
+          "enum": ["function", "change", "file"],
+          "default": "function",
+          "markdownDescription": "Keep/Undo 的分组粒度。"
+        },
+        "beeCode.agent.maxSteps": { "type": "number", "default": 30 },
+        "beeCode.agent.toolTimeoutMs": { "type": "number", "default": 30000 },
+        "beeCode.checkpoint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "写入前落影子 git 快照（`<globalStorage>/shadow.git`），用于整轮 Restore。"
+        },
+        "beeCode.checkpoint.retention": { "type": "number", "default": 50 }
+      }
+    }
+  },
+  "dependencies": {
+    "ignore": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1170,70 +1170,65 @@ L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands�
 
 ## 15. 目录结构
 
+✅ = 已实现（v0.0.1 壳骨架）　⬜ = 待实现
+
 ```
 bee-code/
-├─ package.json                  # VS Code 扩展清单（manifest）
-├─ tsconfig.json                 # 基础 TS 配置
-├─ tsconfig.core.json            # core 子项目（无 DOM/vscode 类型）
-├─ esbuild.mjs                   # 扩展打包（node 平台，cjs）
-├─ .vscodeignore                 # vsce 打包排除
-├─ .gitignore
-├─ .gitattributes                # 统一 LF，避免跨平台整文件 diff
-├─ CHANGELOG.md
-├─ README.md                     # 本文件
-├─ LICENSE                       # MIT
-├─ pyproject.toml                # Python 内核工程定义（uv / hatchling）
-├─ uv.lock                       # 锁定内核依赖，保证「同一份环境」可复现
-├─ docs/
-│  ├─ architecture.md            # 详细架构（本文档的精编版）
-│  ├─ ipc.md                     # 壳 ↔ 内核的 RPC 契约与版本历史
-│  ├─ prompts.md                 # 三模式提示词变更记录
-│  ├─ change-review.md           # 写入 / 待审 / Keep-Undo / 检查点协议
-│  └─ adr/                       # 架构决策记录
-│     ├─ 0001-python-core-thin-shell.md
-│     ├─ 0002-bring-your-own-endpoint.md
-│     └─ 0003-write-then-review.md
+├─ package.json                  # ✅ 扩展清单：11 个命令 / 3 个快捷键 / 菜单 / 视图 / 15 项配置
+├─ tsconfig.json                 # ✅ strict + noUncheckedIndexedAccess + isolatedModules
+├─ esbuild.mjs                   # ✅ 打包 → dist/extension.js（cjs，vscode 保持 external）
+├─ .vscodeignore                 # ✅ vsce 打包排除规则
+├─ .vscode/                      # ✅ launch.json（Extension + debugpy attach）、tasks.json
+├─ .gitignore / .gitattributes   # ✅（本地 .vscode/settings.json 已忽略）
+├─ README.md / LICENSE (MIT)     # ✅
+├─ pyproject.toml                # ✅ 内核工程定义（hatchling，httpx + pydantic）
+├─ docs/                         # ⬜ architecture / ipc / prompts / change-review / adr
 ├─ src/                          # ★ TS 薄壳：唯一允许 import 'vscode' 的地方
-│  ├─ extension.ts               # activate / deactivate
-│  ├─ supervisor.ts              # 拉起 Python 子进程、握手、健康检查、崩溃重启
-│  ├─ commands/                  # 命令注册与路由（菜单/快捷键的落点）
-│  ├─ panel/                     # WebviewViewProvider、CSP、消息桥
-│  ├─ adapters/                  # 把 RPC 请求翻成 VS Code 动作
-│  │  ├─ fsAdapter.ts            #   fs.read / fs.list（合并 .gitignore、files.exclude）
-│  │  ├─ symbolsAdapter.ts       #   executeDocumentSymbolProvider
-│  │  ├─ editAdapter.ts          #   WorkspaceEdit + applyEdit（一个 undo 单元）
-│  │  ├─ diffAdapter.ts          #   vscode.diff / vscode.changes / QuickDiff
-│  │  ├─ checkpointAdapter.ts    #   影子 git（用 child_process 调 git）
-│  │  └─ secretAdapter.ts        #   context.secrets（密钥只经握手传入内核）
-│  └─ rpc/
-│     ├─ server.ts               # 校验 + 路由 + 取消 + 错误映射
-│     └─ client.ts               # 壳调内核（chat.send / review.* / session.abort）
-├─ webview/                      # 面板前端（Vite + React，纯静态资源）
-│  └─ src/
-├─ beecode/                      # ★ Python 内核：不认识 vscode，可独立跑
-│  ├─ __main__.py                # 入口：stdio 上的 NDJSON JSON-RPC 循环
-│  ├─ ipc.py                     # RPC 客户端、方法注册、取消、协议版本
-│  ├─ loop/                      # AgentLoop、状态机、事件
-│  ├─ modes/                     # 模式定义与能力矩阵
-│  ├─ prompts/                   # 模板装配（base + overlay）
-│  ├─ llm/                       # OpenAI 兼容客户端（httpx + SSE）、重试、用量
-│  ├─ context/                   # 检索编排、预算、压缩（I/O 走 RPC）
-│  ├─ tools/                     # 注册表、pydantic schema、内置工具
-│  ├─ apply/                     # unified diff 解析、新文本计算、反向补丁
-│  ├─ pending/                   # PendingEdit、函数分组、Keep/Undo 状态机
-│  ├─ guard/                     # 预算与死循环守卫
-│  ├─ mcp/                       # MCP 客户端（官方 python-sdk）
-│  └─ skills/                    # SKILL.md 发现与按需加载
-├─ tests/
-│  ├─ python/                    # pytest：内核单测（无编辑器、可 CI 直跑）
-│  └─ shell/                     # @vscode/test-electron：壳 + 假内核（stub）
-├─ scripts/
-│  ├─ bootstrap.py               # 首次运行：找 Python / 建 venv / 校验版本
-│  └─ build_sidecar.py           # 发布用：PyInstaller 打各平台单文件
-└─ .github/workflows/
-   ├─ ci.yml                     # lint + tsc + pytest + esbuild + smoke
-   └─ release.yml                # tag → 三平台 sidecar + vsix → GitHub Release
+│  ├─ extension.ts               # ✅ 装配根：内核生命周期、通知路由、命令依赖
+│  ├─ coreApi.ts                 # ✅ 内核抽象（PythonCore / MockCore 共用接口）
+│  ├─ protocol.ts                # ✅ 协议类型 + 方法名 + NDJSON 分帧（LineReader）
+│  ├─ config.ts                  # ✅ 设置读取、${workspaceFolder} 解析、会话 id
+│  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
+│  ├─ log.ts                     # ✅ OutputChannel + 脱敏（密钥永不落日志）
+│  ├─ rpc/
+│  │  ├─ client.ts               # ✅ 起子进程、握手、请求/响应、取消、崩溃处理
+│  │  └─ server.ts               # ✅ 内核 → 壳的方法路由（11 个）
+│  ├─ adapters/
+│  │  ├─ fsAdapter.ts            # ✅ fs.read / fs.list（.gitignore 合并、大小上限）
+│  │  ├─ searchAdapter.ts        # ✅ search.grep（公开 API 实现，见下方说明）
+│  │  ├─ symbolsAdapter.ts       # ✅ symbols.outline（DocumentSymbol / SymbolInformation 双兼容）
+│  │  ├─ diagnosticsAdapter.ts   # ✅ diagnostics.get
+│  │  ├─ editAdapter.ts          # ✅ edit.apply（WorkspaceEdit、版本冲突检测、write/delete）
+│  │  ├─ diffAdapter.ts          # ✅ diff.open（虚拟文档 + vscode.diff，另含 vscode.changes）
+│  │  ├─ checkpointAdapter.ts    # ✅ checkpoint.create / restore（影子 git）
+│  │  └─ interactionAdapter.ts   # ✅ secrets.get + confirm.ask（写入门闸）
+│  ├─ panel/
+│  │  └─ chatViewProvider.ts     # ✅ WebviewView 宿主：CSP、消息白名单、状态推送
+│  ├─ commands/
+│  │  └─ register.ts             # ✅ 命令注册 + 选区采集（多光标、上下文外扩 2 行）
+│  └─ dev/
+│     └─ mockCore.ts             # ✅ 假内核：不装 Python 也能调壳（流式/pending/取消）
+├─ media/                        # ✅ 面板前端（无构建步骤：原生 JS + CSS，跟随主题变量）
+│  ├─ panel.js / panel.css
+│  └─ icon.svg
+├─ beecode/                      # ★ Python 内核（骨架已就位，业务待实现）
+│  ├─ __main__.py                # ✅ 入口 + 方法注册；⬜ chat.send / review.* / abort
+│  ├─ ipc.py                     # ✅ JSON-RPC 对端：分发、超时、$·cancelRequest、BOM 容错
+│  ├─ shell.py                   # ✅ ShellClient：fs/search/edit/checkpoint/diff/confirm 的类型化封装
+│  ├─ loop/ modes/ prompts/      # ⬜ AgentLoop、模式、提示词
+│  ├─ llm/ context/ tools/       # ⬜ OpenAI 客户端、检索编排、工具
+│  ├─ apply/ pending/ guard/     # ⬜ 补丁解析、待审状态机、预算守卫
+│  └─ mcp/ skills/               # ⬜ MCP 客户端、Skill 加载
+├─ tests/                        # ⬜ python/ (pytest) + shell/ (@vscode/test-electron)
+├─ scripts/                      # ⬜ bootstrap.py（找 Python/建 venv）+ build_sidecar.py（PyInstaller）
+└─ .github/workflows/            # ⬜ ci.yml / release.yml
 ```
+
+### 15.1 两个实现取舍（值得知道）
+
+1. **`search.grep` 没用 `findTextInFiles`**：它至今是 proposed API（stable `@types/vscode` 里没有）。当前实现是 `findFiles` + 逐文件读 + 正则匹配，上限 4000 文件 / 256KB，能用的同时保证只用公开 API。🔬 后续可以探测系统 `rg`，有则 spawn `rg --json`。
+2. **面板前端没有构建步骤**：`media/panel.js` 是原生 JS（约 200 行），刻意不引入 Vite/React —— 壳阶段的目标是「F5 就能跑」。等 UI 复杂到需要组件化时再换，`chatViewProvider` 的 postMessage 契约不用动。
+
 
 ---
 
@@ -1249,37 +1244,55 @@ bee-code/
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
 | **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension bee-code-x.y.z.vsix` 可用 |
 
+> **当前进度（v0.0.1）**：M0 的**壳侧已完成**（`tsc --noEmit` 通过、`dist/extension.js` 构建成功、11 个 RPC 方法注册完毕、面板/命令/检查点/QuickDiff 预埋都在）。
+> 内核侧只有协议骨架：`initialize` / `shutdown` / `model.reload` 可用，`chat.send` 与 `review.*` 待实现 —— 也就是接下来 AI 逻辑的入口。
+
 ---
 
 ## 17. 开发与构建
 
 双运行时：**Node.js 20+（壳）** + **Python 3.11+（内核）**。两边独立测试，靠 RPC 联调。
 
+**本机开发环境（已就绪）**：Python 内核跑在 conda 环境 `beeagent`（Python 3.11.17，解释器 `D:\APP\conda\envs\beeagent\python.exe`）。激活：`conda activate beeagent`。
+
+扩展通过三个设置项找到它，本机值写在 `.vscode/settings.json`（**已 gitignore，不进仓库**）：
+
+```jsonc
+{
+  "beeCode.core.mode": "python",                                       // python | mock（mock 用内置假内核，便于只调壳）
+  "beeCode.core.pythonPath": "D:\\APP\\conda\\envs\\beeagent\\python.exe",
+  "beeCode.core.cwd": "${workspaceFolder}"
+}
+```
+
+别人克隆后不配置也能跑：`pythonPath` 默认是 `python`（走 PATH），内核用 `pip install -e .` 装依赖即可。
+
 ```bash
-# 1) 壳的依赖与构建
+# 1) 壳（Node 20+）
 npm install
-npm run watch              # esbuild --watch → dist/extension.js（external: vscode）
+npm run watch              # esbuild --watch → dist/extension.js（vscode 保持 external）
+npm run typecheck          # tsc --noEmit（strict）
+npm run build              # 生产构建
 
-# 2) 内核的依赖（推荐 uv；没有 uv 就用 venv + pip）
-uv sync                    # 按 pyproject.toml / uv.lock 建 .venv
-# 或：python -m venv .venv && .venv/bin/pip install -e .
+# 2) 内核依赖（conda 环境已就绪，见上）
+conda activate beeagent
+pip install -e ".[dev]"    # httpx / pydantic / pytest；不加 -e 也能 `python -m beecode`
 
-# 3) 联调
-npm run dev:webview        # 面板前端 vite
-# 在 VS Code 里按 F5 启动「扩展开发宿主」；launch.json 里有两个配置：
-#   ① Extension（壳，Node 调试）  ② Python: Attach（内核，端口 5679）
-# 壳在 dev 模式下用 `.venv/bin/python -m beecode` 拉起内核；release 模式用打包好的 sidecar
+# 3) 只调壳、不碰内核
+#    设置 beeCode.core.mode = "mock" → 内置假内核（流式、pending、取消都能验）
 
-# 4) 质量
-npm run lint && npm run typecheck    # eslint + tsc --noEmit（壳）
-uv run pytest -q                     # 内核单测（不需要 VS Code）
-npm run test:it                      # @vscode/test-electron（壳 + 假内核 stub）
+# 4) 冒烟测协议（不需要 VS Code）
+#    往 stdin 喂 NDJSON，检查 stdout 的响应：
+#      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
+#      {"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}
 
-# 5) 打包
-npm run build:webview                # 面板静态资源
-npm run build:shell                  # esbuild 生产构建
-uv run python scripts/build_sidecar.py --target win32-x64   # 打单文件内核
-npx @vscode/vsce package --target win32-x64                 # 生成平台专属 vsix
+# 5) 跑扩展
+#    在 VS Code 里打开本仓库 → F5 →「Run Extension (beeagent)」
+#    launch.json 两个配置：① Extension（壳，Node 调试） ② Python: Attach（内核，:5679）
+
+# 6) 质量与打包
+pytest -q                                  # 内核单测（无编辑器，可 CI 直跑）
+npx @vscode/vsce package                   # 生成 .vsix
 ```
 
 ### 17.1 Python 运行时分发（这是 A 方案最大的成本，必须早定）
