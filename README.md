@@ -1,7 +1,7 @@
 # Bee Code for VS Code
 
 > 一个「自带模型」（BYO-Model）的通用代码智能体 VS Code 扩展：**Chat / Builder / Debugger** 三模式协作，
-> 统一走 **OpenAI 兼容协议**，所有代码改动先进 **沙箱**，再以 **红绿 diff + 逐函数审批** 的方式落到工作区。
+> 统一走 **OpenAI 兼容协议**；所有改动**直接写入工作区**并立即标记为「待审」，以 **红绿 diff + 逐函数 Keep/Undo** 收尾，随时可整轮回滚。
 
 ![status](https://img.shields.io/badge/status-design--phase-orange)
 ![vscode](https://img.shields.io/badge/vscode-%5E1.104-blue)
@@ -22,8 +22,8 @@
 - [7. Agent 内核与循环](#7-agent-内核与循环)
 - [8. 工作区感知与上下文工程](#8-工作区感知与上下文工程)
 - [9. 选区快捷入口](#9-选区快捷入口)
-- [10. 沙箱改动（Sandbox Staging）](#10-沙箱改动sandbox-staging)
-- [11. 变更预览与逐函数审批](#11-变更预览与逐函数审批)
+- [10. 改动落地：写入 + 待审](#10-改动落地写入--待审write-then-review)
+- [11. 预览、逐函数 Keep/Undo 与回滚](#11-预览逐函数-keepundo-与回滚)
 - [12. 安全与隐私](#12-安全与隐私)
 - [13. Skill 与 MCP 集成](#13-skill-与-mcp-集成)
 - [14. 工业界参考](#14-工业界参考)
@@ -42,6 +42,7 @@
 - 标记约定：🧭 已定方案 ｜ 🔬 需在实现期验证（PoC） ｜ 🧪 实验性/可选。
 - 本文档同时是一份**调研结论文档**：每个关键设计点都尽量给出对应工业界做法与出处（见 [§14](#14-工业界参考) 与 [§20](#20-参考资料)）。
 - 项目定名 **Bee Code**：仓库名 `bee-code`，扩展 ID `<publisher>.bee-code`，显示名 `Bee Code`，命令前缀 `beeCode.`，配置项命名空间 `beeCode.*`，项目内数据目录 `.beecode/`，虚拟文档 scheme `beecode-base:` / `beecode-proposed:`。
+- 修订：**v0.1 起，改动落地范式从「Overlay 先审后写」改为工业主流的「写入 + 待审（Keep/Undo）」**，理由见 [§14.10](#1410-为什么最终改用主流范式先写后审)，方案见 [§10](#10-改动落地写入--待审write-then-review)。
 - 许可证：**MIT**（见 [LICENSE](./LICENSE)）。
 
 ---
@@ -58,10 +59,10 @@
 | --- | --- |
 | 云端订阅模型的绑定：只能用厂商自带的模型/订阅 | 用户自己填 `model` / `api_key` / `base_url`，任意 OpenAI 兼容端点（官方、DeepSeek、Qwen、Kimi、GLM、OpenRouter、Ollama、vLLM、one-api 网关…） |
 | 一个模型提示词打天下：解释、生成、修 bug 用同一套 prompt，效果都不极致 | 三模式独立提示词 + 独立工具集 + 独立的「允许做什么」约束 |
-| AI 直接改文件，改坏了才发现 | 所有写入先进 **内存 Overlay 沙箱**，产出 `ChangeSet`，**逐函数审批**后才落地 |
+| AI 直接改文件，改坏了才发现 | 改动即时写入，但**立刻标记为「待审」**并落检查点：逐函数 `Keep` / `Undo`，整轮可 `Restore` 回滚 |
 | AI 看不到「跟你这个问题相关」的代码 | 三级检索：文件清单 → 关键词/符号检索 → 工具驱动的按需精读 |
 | 想改一段代码要先复制粘贴到聊天框 | 选中即问：右键 / 快捷键直接进 Chat、Builder、Debugger |
-| 不知道 AI 到底动了哪些文件 | Multi-Diff 预览：删除标红、新增标绿，按「函数」分组，可单条接受、可一键接受 |
+| 不知道 AI 到底动了哪些文件 | 写入即标红绿（QuickDiff 长在真实文件上）+ 按「函数」分组的 Keep/Undo；可一键全部 Keep，也可整轮 Restore |
 
 ### 1.3 非目标（v1 明确不做）
 
@@ -74,7 +75,7 @@
 
 ## 2. 设计原则
 
-1. **零信任改动（Change is a proposal, not a write）**：模型只能产出「改动提案」，永远拿不到直接写文件的句柄。
+1. **改动即时、审阅即时（Write-then-Review）**：模型的写入立即落地并登记为「待审」；「可回滚」由检查点 + 反向补丁保证，而不是靠拦截写入。
 2. **用户主权（User holds the keys）**：API Key 进 `SecretStorage`（OS 级加密凭据库），不进 `settings.json`、不进日志、不进 git。
 3. **协议统一（One wire format）**：内部只有一种模型协议 —— OpenAI Chat Completions 兼容格式；异构厂商差异在适配层吃掉。
 4. **可解释（Every step is visible）**：每一次工具调用、每一次检索命中、每一次 token 花费都可在面板里回放。
@@ -90,10 +91,11 @@
 | **Mode（模式）** | Chat / Builder / Debugger，决定提示词、可用工具集、输出契约 |
 | **Agent Loop（智能体循环）** | `组装上下文 → 调模型 → 解析工具调用 → 执行工具 → 回填结果 → 再调模型` 的迭代过程 |
 | **Tool（工具）** | 暴露给模型的可调用函数，JSON Schema 描述参数，分只读 / 写 / 执行三类 |
-| **Sandbox FS（沙箱文件系统）** | 内存 Overlay：读操作回落到真实工作区，写操作只写入 overlay |
-| **ChangeSet（改动集）** | 一次任务产出的全部拟改动：文件 → hunk → 函数路径的结构化集合 |
-| **Hunk（变更块）** | 统一 diff 中一个 `@@ ... @@` 块，是「逐条审批」的最小可操作单元之一 |
-| **Function Unit（函数单元）** | 把若干 hunk 归并到其所属函数/方法后形成的审批分组（默认审批粒度） |
+| **PendingEdit（待审改动）** | 一次写入的完整记录：写入前/后全文、hunk、函数分组、状态（pending / kept / undone / stale） |
+| **Checkpoint（检查点）** | 影子 git 仓库里的一次快照，用于 `Restore` 整轮回滚 |
+| **Keep / Undo** | 审阅动词：`Keep` 承认一个**已保存**的改动，`Undo` 反向写回。注意与 `Save` 的区别 |
+| **Hunk（变更块）** | 统一 diff 中一个 `@@ ... @@` 块，是「逐条 Keep/Undo」的最小可操作单元之一 |
+| **Function Unit（函数单元）** | 把若干 hunk 归并到其所属函数/方法后形成的审阅分组（默认 Keep/Undo 粒度） |
 | **Context Budget（上下文预算）** | 按比例分配给系统提示词、检索、历史、输出的 token 配额 |
 
 ---
@@ -106,7 +108,7 @@
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ L1  UI 层（VS Code 原生 + Webview）                                       │
 │  Chat/Agent 面板 · 选区右键菜单 · 快捷键 · 文件选择器(QuickPick/Tree)      │
-│  变更预览（Multi-Diff Editor） · 函数级审批卡片 · 状态栏(token/费用/停止)   │
+│  QuickDiff 红绿 · 函数级 Keep/Undo 卡片 · 检查点 · 状态栏(token/费用/停止)  │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ L2  扩展宿主适配层（Extension Host, Node.js）—— 只做「VS Code 世界的事」    │
 │  Command 注册 · 会话/工作区生命周期 · SecretStorage · workspace.fs         │
@@ -114,7 +116,7 @@
 ├──────────────────────────────────────────────────────────────────────────┤
 │ L3  Agent 内核（@core，纯 TS，无 vscode 依赖，可单测/可复用）                │
 │  AgentLoop · ModeRouter · PromptComposer · ContextEngine · ToolRegistry   │
-│  SandboxFS · ChangeSetBuilder · ReviewPlanner · Guard(预算/死循环)         │
+│  ChangeApplier · PendingStore · ReviewPlanner · Checkpoint · Guard         │
 │  SessionStore · EventBus                                                   │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ L4  出站适配层（Providers）                                                │
@@ -133,7 +135,7 @@
   │
   ├─(1) L2 采集「显式上下文」：选区文本 + 文件路径 + 光标位置 + 相邻 120 行
   ├─(2) L2 采集「环境事实」：workspace root / 语言 / package.json 摘要 / git 分支 / 诊断
-  ├─(3) L3 ModeRouter 装配 system prompt（builder.md 覆盖层）+ 工具集（读 + propose_*）
+  ├─(3) L3 ModeRouter 装配 system prompt（builder.md 覆盖层）+ 工具集（读 + apply_*）
   ├─(4) L3 ContextEngine 生成「候选上下文包」：
   │        · 文件清单（Git-aware，忽略 node_modules/.git/dist）
   │        · ripgrep 关键词命中（parseConfig / yaml / config 相关）
@@ -141,20 +143,22 @@
   │        压缩到 token 预算内后作为首轮 messages
   ├─(5) LLMClient 流式请求（tools 声明）→ 模型返回 tool_calls: read_file / search_code
   ├─(6) ToolRegistry 执行只读工具 → 结果回填 → 循环（最多 maxSteps）
-  └─(7) 模型调用 propose_patch（只写 SandboxFS）
+  └─(7) 模型调用 apply_patch
          │
-         ├─ L3 ChangeSetBuilder: patch → 按文件解析 hunk → 查 DocumentSymbol 归属函数
-         ├─ L3 ReviewPlanner: 排序分组（函数单元），生成审批计划
-         ├─ L2 渲染: 打开 Multi-Diff 预览（红删/绿增），面板列出「函数 N 个 / hunk M 个」
-         └─ 用户: 逐条勾选或「一键全部接受」
-                └─ L2 冲突检测（文件是否被改动）→ WorkspaceEdit 原子应用 → 可撤销
+         ├─ L3 ChangeApplier: 纯函数算出新文本（打不上就报错返回模型，磁盘不动）
+         ├─ L3 Checkpoint: 写入**前**落一次影子 git 快照（可整轮回滚）
+         ├─ L2 写入: 单次 WorkspaceEdit.applyEdit（一个 undo 单元）→ 落盘
+         ├─ L3 PendingStore: 登记 PendingEdit + 解析 hunk + 查 DocumentSymbol 归并为函数单元
+         ├─ L2 渲染: QuickDiff 红绿长在真实文件上；面板按 文件→函数→改动 列表
+         └─ 用户: 逐函数 Keep / Undo，或「全部 Keep / 全部 Undo / 恢复到检查点」
+                └─ Undo 走反向 patch（同样是一个 undo 单元）；Restore 走影子 git
 ```
 
 ### 4.3 模块职责
 
 | 模块 | 层 | 职责 | 不做什么 |
 | --- | --- | --- | --- |
-| `ui/*` | L1 | 渲染会话、审批卡片、diff 导航 | 不拼提示词、不解析模型输出 |
+| `ui/*` | L1 | 渲染会话、Keep/Undo 卡片、diff 导航 | 不拼提示词、不解析模型输出 |
 | `vscode/ports/*` | L2 | 把 VS Code API 包成端口接口（fs / symbols / secrets / diff / window） | 不含业务规则 |
 | `core/loop` | L3 | 驱动循环、状态机、取消、事件广播 | 不关心渲染 |
 | `core/modes` | L3 | 模式定义、能力矩阵、模式切换 | 不直接读文件 |
@@ -162,9 +166,10 @@
 | `core/llm` | L3/L4 | OpenAI 兼容客户端、流式解析、重试、用量统计 | 不选模型 |
 | `core/context` | L3 | 文件索引、检索、预算分配、压缩 | 不发起网络请求 |
 | `core/tools` | L3 | 工具注册表、schema、参数校验、权限声明 | 不直接碰磁盘 |
-| `core/sandbox` | L3 | Overlay 文件系统、快照、冲突基线 | 不写真实文件 |
-| `core/changeset` | L3 | patch 解析、hunk/函数归并、审批计划、序列化 | 不渲染 UI |
-| `core/guard` | L3 | 步数/预算/重复/无进展检测、熔断 | 不做审批决策 |
+| `core/apply` | L3 | 补丁解析与写入（`WorkspaceEdit`）、反向补丁 | 不做审阅 UI |
+| `core/pending` | L3 | 待审记录、函数分组、Keep/Undo 状态机 | 不直接调 git |
+| `core/checkpoint` | L3 | 影子 git 快照、Restore 三档恢复 | 不碰项目 `.git` |
+| `core/guard` | L3 | 步数/预算/重复/无进展检测、熔断 | 不做 Keep/Undo 决策 |
 
 ---
 
@@ -209,10 +214,10 @@
 
 | 路线 | 能拿到什么 | 限制 | 本项目取舍 |
 | --- | --- | --- | --- |
-| **Chat Participant API**（`contributes.chatParticipants` + `vscode.chat.createChatParticipant`） | 长在 VS Code 原生 Chat 里：`@participant`、`/slash`、`#context`、原生历史与工具审批 UI | 输出只能走 `ChatResponseStream`（markdown 为主，不能自定义 React 树），流程被 `ChatRequestHandler` 框住。**技术上可以在 handler 里自己 `fetch` 任意端点**，限制在 UX 而非网络 | ❌ 不作为主界面（我们要自定义审批/预览 UI） |
+| **Chat Participant API**（`contributes.chatParticipants` + `vscode.chat.createChatParticipant`） | 长在 VS Code 原生 Chat 里：`@participant`、`/slash`、`#context`、原生历史与工具审批 UI | 输出只能走 `ChatResponseStream`（markdown 为主，不能自定义 React 树），流程被 `ChatRequestHandler` 框住。**技术上可以在 handler 里自己 `fetch` 任意端点**，限制在 UX 而非网络 | ❌ 不作为主界面（我们要自定义 Keep/Undo 与预览 UI） |
 | **Language Model API**（`vscode.lm.selectChatModels`） | 调用编辑器里已注册的模型，`LanguageModelChatMessage` + `registerTool` 原生工具调用 | 只能选**已注册**的模型（典型是 Copilot 提供），受配额与管理员策略约束；不能直接指定 `base_url` | ❌ 不能作为「任意端点」的通道 |
 | **Language Model Chat Provider**（`contributes.languageModelChatProviders` + `lm.registerLanguageModelChatProvider`） | **官方 BYO-key 路径**：把自有端点注册成 VS Code 模型选择器里的一个模型，配置项可用 `"secret": true` 交给 VS Code 存密钥 | 要实现消息/工具调用的双向转换与 token 计数；聊天 UI 仍是 VS Code 的 | 🧪 **加分项**：同一客户端复用到平台 |
-| **自建 HTTP 客户端 + Webview 面板** | 任意 OpenAI 兼容端点、任意 UI、完全掌控循环与审批 | 全部自己实现（流式、工具调用、重试、渲染、可访问性） | ✅ **v1 主线** |
+| **自建 HTTP 客户端 + Webview 面板** | 任意 OpenAI 兼容端点、任意 UI、完全掌控循环与待审流程 | 全部自己实现（流式、工具调用、重试、渲染、可访问性） | ✅ **v1 主线** |
 
 > 🧪 加分项（不冲突）：后续实现 `contributes.languageModelChatProviders`，把用户自带的端点**注册成 VS Code 的一个模型**，这样在原生 Chat 里也能选到「我的 DeepSeek」。注意两点：一是需要自己实现 `provideLanguageModelChatResponse` 的流式转换；二是 Copilot Business/Enterprise 管理员可以通过策略禁用 BYO key，属正常预期。
 
@@ -233,7 +238,7 @@
 - 只维护一套客户端 = 只维护一份工具调用解析、一份流式状态机、一份用量统计。
 - 用户「自带端点」是最高优先级需求：只要他有一个能跑 `curl` 的兼容端点，扩展就能用。
 
-> 与 VS Code 官方 AI API 的关系：`vscode.lm.selectChatModels`（Language Model API）**只能选编辑器里已注册的模型**，无法直接指定任意 `base_url` 与用户自己的 key，因此不能作为 BYO 通道。真正「官方支持自带端点」的入口是 **Language Model Chat Provider API**（`contributes.languageModelChatProviders`），但它要求你只做「provider 侧」（把端点包装成模型），聊天 UI 与循环仍归 VS Code。本项目 v1 自建客户端以便完全掌控 Agent Loop、审批与预览；🧪 v2 再把同一客户端包装成 Chat Provider 反哺平台，见 [§4.4.3](#443-三条要不要用官方-ai-api-的技术路线)。
+> 与 VS Code 官方 AI API 的关系：`vscode.lm.selectChatModels`（Language Model API）**只能选编辑器里已注册的模型**，无法直接指定任意 `base_url` 与用户自己的 key，因此不能作为 BYO 通道。真正「官方支持自带端点」的入口是 **Language Model Chat Provider API**（`contributes.languageModelChatProviders`），但它要求你只做「provider 侧」（把端点包装成模型），聊天 UI 与循环仍归 VS Code。本项目 v1 自建客户端以便完全掌控 Agent Loop、待审流程与预览；🧪 v2 再把同一客户端包装成 Chat Provider 反哺平台，见 [§4.4.3](#443-三条要不要用官方-ai-api-的技术路线)。
 
 ### 5.2 用户配置项
 
@@ -258,9 +263,10 @@
     "defaultMode": "chat"
   },
   "beeCode.review": {
-    "granularity": "function",                // function | hunk | file
-    "openDiffOnProposal": true,
-    "requireApprovalForEveryHunk": false
+    "granularity": "function",                // function | change | file
+    "autoKeepDelayMs": 0,                    // 0 = 关闭自动 Keep
+    "gateGlobs": ["**/.env*", "**/*.pem", "**/.github/workflows/**"],
+    "gateBatch": { "files": 5, "lines": 300 } // 超过则写前确认
   }
 }
 ```
@@ -351,12 +357,12 @@ interface ChatMessage {
 | 维度 | 💬 Chat | 🏗 Builder | 🐞 Debugger |
 | --- | --- | --- | --- |
 | 目标 | 解释、答疑、读懂代码、讲解设计 | 生成/重构/补全代码，产出改动 | 定位缺陷、给出修复，含回归验证 |
-| 工具集 | 只读（`list_files` / `read_file` / `search_code` / `file_outline` / `get_diagnostics`） | 只读 + `propose_*`（写沙箱） | 只读 + `propose_*` + 🧪`run_command`/`run_test` |
-| 是否允许改文件 | ❌ 硬性禁止（工具列表里根本没有写工具） | ✅ 仅沙箱 | ✅ 仅沙箱 |
+| 工具集 | 只读（`list_files` / `read_file` / `search_code` / `file_outline` / `get_diagnostics`） | 只读 + `apply_patch` / `create_file` / `delete_file`（直接写入 + 待审） | 只读 + `apply_*` + 🧪`run_command`/`run_test` |
+| 是否允许改文件 | ❌ 硬性禁止（工具列表里根本没有写工具） | ✅ 直接写入，写入即标记待审 | ✅ 直接写入，写入即标记待审 |
 | 输出契约 | 自然语言 + `file:line` 引用 + 可选 Mermaid 图 | 改动提案 + 变更说明 + 影响分析 | 根因 → 证据 → 修复提案 → 验证方式 |
 | 默认温度 | 0.3 | 0.5 | 0.2（求确定性） |
 | 典型触发 | 选中代码 `Ctrl+Alt+K`、`@chat` | 选中代码 `Ctrl+Alt+B`、`/build` | 选中代码 `Ctrl+Alt+D`、诊断右键「用 Debugger 修」 |
-| 结束条件 | 给出回答（可不调用工具） | 产出至少一个 ChangeSet 或明确「无法完成」 | 产出 ChangeSet + 验证结论 |
+| 结束条件 | 给出回答（可不调用工具） | 至少产出一条待审改动，或明确「无法完成」 | 待审改动 + 验证结论 |
 
 > 模式隔离的工程要点：Chat 模式**不要**在 `tools[]` 里声明写工具再靠提示词禁止 —— 提示词是可以被绕过的，正确的做法是「模型根本看不见这个工具」。这是权限最小化（least privilege）在 Agent 上的直接体现。
 
@@ -407,7 +413,8 @@ system =
 # Workflow（严格遵守）
 1. 先探索：用 list_files / search_code / read_file 找到所有需要改的地方，不要凭猜测写代码。
 2. 复述需求：用 3 行以内说明你理解的任务与边界（含你打算不做什么）。
-3. 再动笔：用 propose_patch 提交改动，一次一个文件，patch 用标准 unified diff。
+3. 再动笔：用 apply_patch 写入改动，一次一个文件，patch 用标准 unified diff。
+   （写入后会进入「待审」状态，用户可逐函数 Keep 或 Undo —— 你不需要在回复里再请求一次批准。）
 4. 自检：改完后检查导入、类型、命名、错误处理、边界条件。
 
 # Rules
@@ -432,7 +439,7 @@ system =
 1. 复现假设：从报错栈/诊断/用户描述里提取「症状 → 触发路径 → 可疑假设」。
 2. 证据收集：读相关函数体与调用点，必要时读测试与配置；每条假设必须标注「支持/反驳」的证据（`路径:行号`）。
 3. 收敛：排除假设，锁定根因；若无法锁定，输出「还需哪些信息」而不是硬猜。
-4. 修复：propose_patch 给出最小修复，并在说明里写「为什么这样改能消除根因，而不只是消除症状」。
+4. 修复：apply_patch 给出最小修复，并在说明里写「为什么这样改能消除根因，而不只是消除症状」。
 5. 回归：说明这次修复需要补哪些测试用例（可选：用 run_test 验证）。
 
 # Rules
@@ -489,7 +496,7 @@ async function* run(session: Session, input: UserTurn): AsyncGenerator<LoopEvent
     for (const call of turn.toolCalls) {
       const tool = registry.get(call.name);                  // 未注册 -> 回填错误，不崩
       const args = schema.parse(tool, call.args);            // 参数校验失败 -> 回填可读错误
-      const result = await tool.run(args, session.ports);     // 只读立即执行；写工具落沙箱
+      const result = await tool.run(args, session.ports);     // 只读立即返回；写工具写盘并登记待审
       session.history.push({ role: 'tool', tool_call_id: call.id, content: result });
       yield { type: 'tool_end', call, result };
     }
@@ -506,9 +513,9 @@ async function* run(session: Session, input: UserTurn): AsyncGenerator<LoopEvent
 | `search_code` | 只读 | `query`, `regex?`, `glob?`, `contextLines?` | ripgrep 后端，返回 `路径:行:内容` |
 | `file_outline` | 只读 | `path` | 符号大纲（函数/类/方法 + 行号区间） |
 | `get_diagnostics` | 只读 | `path?`, `severity?` | 读 LSP 诊断（编译错误、lint） |
-| `propose_patch` | 写（沙箱） | `path`, `patch(unified diff)`, `reason` | 唯一改文件入口；只写 SandboxFS |
-| `propose_create` | 写（沙箱） | `path`, `content`, `reason` | 新建文件 |
-| `propose_delete` | 写（沙箱） | `path`, `reason` | 删除文件（审批时默认需二次确认） |
+| `apply_patch` | 写（写盘 + 待审） | `path`, `patch(unified diff)`, `reason` | 唯一改文件入口；先落检查点，再单次 `applyEdit`，然后登记 `PendingEdit` |
+| `create_file` | 写（写盘 + 待审） | `path`, `content`, `reason` | 新建文件；同样进入待审 |
+| `delete_file` | 写（写盘 + 待审） | `path`, `reason` | 删除文件；强制单独确认，Undo 时用 `baseText` 重建 |
 | `run_command` | 执行 🧪 | `command`, `cwd?`, `timeoutMs?` | 默认关闭；需 allowlist + 每次审批 |
 | `run_test` | 执行 🧪 | `target`, `framework?` | 识别 jest/pytest/go test 等后执行 |
 | `load_skill` | 元 | `name` | 按需加载技能正文（见 [§13](#13-skill-与-mcp-集成)） |
@@ -522,7 +529,7 @@ async function* run(session: Session, input: UserTurn): AsyncGenerator<LoopEvent
 | 步数上限 `maxSteps` | 30 | 停止循环，输出「已达步数上限」+ 当前进度摘要 + 继续按钮 |
 | token 预算 `maxTokensPerTask` | 400k | 同上，并给出「本次预计花费」 |
 | 重复动作检测 | 相同 `(tool, args)` 哈希连续 2 次 | 插入纠正提示「你刚做过同样的调用，请换策略」，连续 3 次则停止 |
-| 无进展检测 | 连续 4 步没有新的文件被读取、没有新的 ChangeSet | 停止并询问用户「是否补充信息」 |
+| 无进展检测 | 连续 4 步没有新的文件被读取、没有新的待审改动 | 停止并询问用户「是否补充信息」 |
 | 错误熔断 | 同一工具连续失败 3 次 | 禁用该工具本轮，回填「工具不可用，请改用 X」 |
 | 单工具超时 | 30s（命令类可配） | 中止该工具，回填超时错误（不中断整个循环） |
 | 用户中断 | 随时 | `AbortSignal` → 丢弃 sandbox 内容 → 保留已产出文本 |
@@ -592,7 +599,7 @@ interface ContextBudget {
 
 | 触发 | 动作 |
 | --- | --- |
-| 估算 token > 窗口 × 80% | ① 折叠工具结果：只保留命中行 ± 10 行，大块内容换成「已读 `path` L10-L200，摘要：…」；② 旧轮次摘要：由模型生成结构化摘要（**已确认事实 / 已读文件 / 已产生 ChangeSet / 未决问题**）；③ 保留「首轮任务描述 + 最近 3 轮原文」 |
+| 估算 token > 窗口 × 80% | ① 折叠工具结果：只保留命中行 ± 10 行，大块内容换成「已读 `path` L10-L200，摘要：…」；② 旧轮次摘要：由模型生成结构化摘要（**已确认事实 / 已读文件 / 已写入的改动 / 未决问题**）；③ 保留「首轮任务描述 + 最近 3 轮原文」 |
 | 用户点「压缩上下文」 | 立即执行 ②③，面板显示「压缩前 42k → 压缩后 9k」 |
 | 新会话 | 从 `.beecode/memory/notes.md` 与项目规则恢复长期记忆 |
 
@@ -607,7 +614,7 @@ interface ContextBudget {
 ### 8.5 新鲜度
 
 - 每个文件缓存带 `mtime + hash`；`onDidChangeTextDocument` 时优先用编辑器内的**未保存**内容（用户经常改完没存就问）。
-- 生成 ChangeSet 时记录基线 hash，落地前比对；不一致就标红「文件已被修改，请重新生成该文件」。
+- 写入时记录 `document.version` + 内容 hash；此后用户手改了同一段 → 相关 `PendingEdit` 标 `stale`，Undo 前需重定位（详见 [§10.6](#106-冲突与并发)）。
 
 ---
 
@@ -636,228 +643,226 @@ interface ContextBudget {
 
 ---
 
-## 10. 沙箱改动（Sandbox Staging）
+## 10. 改动落地：写入 + 待审（Write-then-Review）
 
-### 10.1 四种「沙箱」，先分清
+> **方向修正（v0.1）**：早期设计是「内存 Overlay 沙箱 → 预览 → 逐函数审批 → 落地」（先审后写）。调研后改为工业主流范式「**直接写入工作区 → 标记待审 → Keep / Undo**」（先写后审）。下文是改后的方案，取舍理由见 [§14.10](#1410-为什么最终改用主流范式先写后审)。
 
-| 级别 | 机制 | 防什么 | 本项目 |
-| --- | --- | --- | --- |
-| **S0 无隔离** | 模型直接写文件 | 什么都不防；改坏了只能靠 git 兜底 | ❌ |
-| **S1 改动隔离（内存 Overlay）** | 读真实工作区，写只写内存；产出 diff 提案，审批后一次性落地 | 误改、半截改动、顺序失控 | ✅ **v1 采用** |
-| **S2 环境隔离（影子副本）** | `git worktree` / 临时目录 / copy-on-write 副本，在副本里跑构建与测试 | 构建产物污染、测试副作用 | 🔬 v2 |
-| **S3 执行隔离（容器/微虚拟机/OS sandbox）** | Docker、gVisor、Firecracker、bubblewrap/landlock、macOS seatbelt | 不可信代码的任意副作用（网络、文件、进程） | 🧪 v3，仅 `run_command` |
+### 10.1 为什么要改
 
-**必须讲清楚的边界**：S1 只是「改动隔离」，**不是安全隔离**。它能保证「你没点接受，磁盘上就什么都没变」，但不能保证「模型输出的代码是安全的」——因为 v1 根本不执行模型代码。一旦引入 `run_command`/`run_test`，就必须上 S3，否则等于把任意代码执行权交给模型。工业界的分水岭也在这里：OpenHands 把执行放进 Docker runtime；OpenAI Codex CLI 在 macOS 用 seatbelt、Linux 用 landlock/seccomp 把命令关进笼子；Cline 则干脆把「执行终端命令」交给 VS Code 终端并逐条询问。
+| 维度 | 先审后写（Overlay） | 先写后审（主流） |
+| --- | --- | --- |
+| 磁盘状态 | 审批前零改动 | 写盘即有改动，可一键 Undo / 恢复到检查点 |
+| 与编辑器生态 | 割裂：自己的虚拟文档、自己的预览、自己的 undo | **融合**：走 `WorkspaceEdit` 进原生 undo 栈，走 QuickDiff 得原生红绿 + gutter |
+| 工程量 | 预览、多文件 diff、虚拟文件系统全自建 | 预览复用 VS Code 能力，只做「待审记录 + 分组 + 回滚」 |
+| 崩溃/断电 | 提案丢失，工作区干净 | 改动已在盘上，靠检查点恢复 |
+| 用户心智 | 「AI 提案给我审」 | 「AI 改了，我看一眼决定留不留」——与 Copilot/Cursor/Cline 一致 |
 
-### 10.2 数据结构
+主流之所以是主流：**审核的成本远低于自建预览的成本**，而 VS Code 已经把「红绿 + 逐改动回退」做成了基础设施（SCM QuickDiff）。我们保留 Overlay 的两个真实好处，降级为**写入门闸**（[§10.7](#107-写入门闸guardrails)）：敏感文件先问、大批量先问。
+
+### 10.2 写入路径：一次改动 = 一个 undo 单元
 
 ```ts
-// core/sandbox/types.ts
-interface SandboxFS {
-  read(uri: Uri): Promise<string>;                    // 未修改 -> 回落真实文件
-  write(uri: Uri, text: string): Promise<void>;       // 只写 overlay
-  delete(uri: Uri): Promise<void>;
-  rename(from: Uri, to: Uri): Promise<void>;
-  diff(): FileChange[];                               // 与基线的差异
-  base(uri: Uri): string | undefined;                 // 基线内容（预览左侧用）
-  discardAll(): void;
-}
+// core/apply/applyPatch.ts（示意）
+const doc = await vscode.workspace.openTextDocument(uri);
+const before = doc.getText();
+const after = applyUnifiedPatch(before, patch);   // 纯函数；打不上就抛错，绝不半写
+const edit = new vscode.WorkspaceEdit();
+edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(before.length)), after);
+const ok = await vscode.workspace.applyEdit(edit); // 单次调用 = 单个 undo 步
+```
 
-interface FileChange {
+四条硬规则：
+
+1. **用 `WorkspaceEdit` 而不是 `TextEditor.edit`**：不受编辑器是否可见影响、可一次跨多文件、天然进 undo 栈。
+2. **同一文件的多处改动合并成一个 `WorkspaceEdit`**：否则用户要按 N 次 `Ctrl+Z`。跨文件同理，一次 `applyEdit` 搞定（但注意 [§11.5](#115-与-git-及工作区状态的关系) 的原子性说明）。
+3. **写入前必须已存在检查点**（[§10.5](#105-检查点checkpoint回滚的地基)），写入后立刻登记 `PendingEdit`。
+4. **先算后写**：`applyUnifiedPatch` 是纯函数，算不出结果就报错返回模型，磁盘不动。
+
+### 10.3 待审记录（PendingEdit）
+
+```ts
+interface PendingEdit {
+  id: string;                    // 稳定 id，UI 与命令都用它
+  taskId: string; mode: 'builder' | 'debugger';
   path: string;
-  kind: 'create' | 'update' | 'delete';
-  baseHash: string;                  // 提案生成时的磁盘文件 sha1
-  baseText: string;                  // 预览左侧
-  newText: string;                   // 预览右侧
-  hunks: Hunk[];
-  units: FunctionUnit[];             // 审批分组
-  stats: { additions: number; deletions: number };
+  baseText: string;              // 写入前全文（Undo 与预览左侧用）
+  appliedText: string;           // 写入后全文
+  appliedVersion: number;        // 写入后的 document.version
+  hunks: Hunk[];                 // 解析 patch 得到
+  units: FunctionUnit[];         // 按符号归并后的审阅分组
+  status: 'pending' | 'kept' | 'undone' | 'stale';
 }
 
-interface Hunk {
-  id: string;                        // 稳定 id：`${path}#${index}`
+interface Hunk {                 // 与统一 diff 一一对应
+  id: string;                    // `${path}#${index}`
   oldStart: number; oldLines: number;
   newStart: number; newLines: number;
-  header: string;                    // "@@ -12,7 +12,9 @@ fn parseConfig()"
+  header: string;
   lines: Array<{ kind: 'ctx' | 'del' | 'add'; text: string }>;
 }
 
 interface FunctionUnit {
-  id: string;                        // `${path}::${symbolPath}`
-  symbolPath: string;                // "ConfigParser.parse" / "<top-level>"
+  id: string;                    // `${path}::${symbolPath}`
+  symbolPath: string;            // "ConfigParser.parse" / "<top-level>"
   kind: 'function' | 'method' | 'class' | 'module';
   range: { startLine: number; endLine: number };
   hunkIds: string[];
   risk: 'low' | 'medium' | 'high';
 }
-
-interface ChangeSet {
-  id: string; taskId: string; mode: 'builder' | 'debugger';
-  createdAt: number;
-  files: FileChange[];
-  status: 'proposed' | 'partially-applied' | 'applied' | 'rejected' | 'stale';
-}
 ```
 
-### 10.3 流水线（7 步）
+- 一次 `apply_patch` 产生**一条** `PendingEdit`；同一文件被改两次就是两条（按时间排序，倒序 Undo）。
+- 面板按 `文件 → 函数 → hunk` 三级聚合展示，把多条 `PendingEdit` 合并进同一棵树。
+- `stale`：写入之后用户又手改了这段代码，Undo 前需要重定位（[§10.6](#106-冲突与并发)）。
 
-```
-① 模型调 propose_patch(path, unifiedDiff)
-② 校验 patch（语法/上下文行数/文件是否存在/是否在禁止清单）
-③ 应用到 SandboxFS（不落盘），得到 newText
-④ 从 patch 原文反解出 Hunk 列表（不靠「再 diff 一次」，避免丢信息）
-⑤ 函数归属：DocumentSymbol 计算「包含 hunk 的最近符号」→ FunctionUnit 分组
-⑥ 冲突检测：baseHash vs 当前磁盘 hash；不一致标 stale
-⑦ 生成 ReviewPlan → 渲染预览 → 用户选择 → WorkspaceEdit 落地
-```
+### 10.4 三个动词，严格区分
 
-为什么第 ④ 步要「反解 patch」而不是「比较前后文本再 diff」：模型给的 patch 里带着它**意图的边界**（哪几行属于一个改动），重新 diff 会把相邻改动合并成一个大 hunk，破坏「逐函数审批」的粒度。
-
-### 10.4 应用策略
-
-```ts
-// 选中 hunk → 生成 TextEdit（按行区间，而非整文件替换）
-const edits = selectedHunks
-  .sort((a, b) => b.newStart - a.newStart)          // 从后往前，避免行号漂移
-  .map(h => new vscode.TextEdit(
-      new vscode.Range(h.newStart - 1, 0, h.newStart - 1 + h.oldLines, 0),
-      h.lines.filter(l => l.kind !== 'del').map(l => l.text).join('\n') + '\n'));
-
-const wsEdit = new vscode.WorkspaceEdit();
-edits.forEach(e => wsEdit.replace(uri, e.range, e.newText));
-await vscode.workspace.applyEdit(wsEdit);            // 一个 undo 步，只触及改动行
-```
-
-三条硬规则：
-
-1. **只改行区间，不整文件覆盖**：整文件 `replace` 会吃掉用户在同一文件里的其它未保存编辑，也会让 undo 粒度变成一个巨大的「整文件替换」。
-2. **一次 `applyEdit` = 一个撤销单元**：用户 `Ctrl+Z` 能整体回退这次审批，符合直觉。
-3. **apply 前重算偏移**：文本可能被用户改过，按上下文行重新定位后再生效；定位失败就标 conflict 并跳过该 hunk。
-
-工业界可复用的三件工具（本项目在 L2 层可选接入，不引入新依赖时用 `diff` 这个 npm 包即可）：
-
-| 工具 | 用途 | 关键点 |
-| --- | --- | --- |
-| `git apply --recount --unidiff-zero` | 把「用户只选了一部分 hunk」的补丁打上去 | 拆/合并 hunk 后 `@@` 里的行数就不准了，`--recount` 让它按内容重算；配合 `-U0` 时还要 `--unidiff-zero` 才不要求上下文行 |
-| `git apply --check` / `-C<n>` | 预演，不做实际写入 | 用于「这个提案还打得进去吗」的快速判断 |
-| jsdiff 的 `structuredPatch` / `applyPatch` / `reversePatch` | 纯 JS 的 hunk 解析、应用、反向应用 | `structuredPatch` 产出的 `hunks[]` 正是我们 `Hunk` 结构的原型；`reversePatch` 是「撤销本次改动」的现成实现；`applyPatch` 有 `fuzzFactor` 可以容忍轻微漂移 |
-
-⚠️ **不要承诺多文件原子性**。`git apply` 的默认行为是「一个补丁文件里任何 hunk 失败就整体不落地」，这是**单补丁内**的原子；跨文件的「要么全成要么全不成」在文件系统层面没有事务，只能做「先在内存里把每个文件都算好、全部成功才逐个写」，并如实报告哪几个文件写成功。`patch-package` 也是这个策略（默认整 patch 原子，`--partial` 才显式降级）。
-
-### 10.5 一致性与回滚
-
-- **半截重构**是「逐条接受」的固有风险（改了签名却只接受一半调用点）。缓解见 [§11.4](#114-部分接受的一致性)。
-- 应用后立刻跑一遍 `get_diagnostics`，把**新增**的错误按文件列出来（对比应用前后诊断快照）。
-- 备份：默认不额外备份（`WorkspaceEdit` 的 undo + git 双保险已足够）；对「删除文件」这类不可撤销操作，先把原内容存 `.beecode/backup/<timestamp>/`。
-- 「撤销本次改动」= 反向 patch，同样走审批 UI，不搞隐式魔法。
-
-### 10.6 v1 的边界与后续演进
-
-| 能力 | v1 | v2 | v3 |
+| 动词 | 语义 | 实现 | 会不会写文件 |
 | --- | --- | --- | --- |
-| 改文件 | Overlay + 审批 | 同左 | 同左 |
-| 跑命令/测试 | ❌（默认关） | 🔬 影子 worktree 内执行 | 🧪 容器/OS sandbox 内执行 |
-| 网络访问 | 模型请求本身 | 同左 | 容器内默认禁网 |
-| 多文件大规模重构 | 支持但限额（≤ 20 文件/次） | 分批提案 | 分批 + 后台任务 |
+| **Keep** | 承认这次改动，清掉待审标记 | 只改 `status`，记一条审计日志 | ❌ 不写（文件早就写好了） |
+| **Undo** | 撤销这一组改动（回到 base 的对应行） | 反向 patch → `TextEdit` → `applyEdit` | ✅ 写（反向写回） |
+| **Restore** | 回到某个检查点（整轮/整个任务） | 影子 git 恢复 | ✅ 批量写 |
+
+**最关键的一条概念澄清**（VS Code 官方语义）：*Keep 不是 Save*。文件在 AI 改完的那一刻就已经保存了；Keep 的含义是「我不再需要回退这段改动了」。所有围绕「待审」的文案都必须遵守这个区别，否则用户会以为不点 Keep 就不会落盘。
+
+### 10.5 检查点（checkpoint）：回滚的地基
+
+采用**影子 git 仓库**（Cline 的做法），与项目 `.git` 完全隔离：
+
+```
+<globalStorage>/bee-code/shadow.git     ← GIT_DIR（不污染项目）
+<workspace>                             ← GIT_WORK_TREE
+```
+
+```bash
+git init --bare "<globalStorage>/bee-code/shadow.git"
+git --git-dir="<shadow>" --work-tree="<ws>" add -A
+git --git-dir="<shadow>" --work-tree="<ws>" commit -m "checkpoint: turn 3"
+# 查看/恢复：
+git --git-dir="<shadow>" --work-tree="<ws>" status --short
+git --git-dir="<shadow>" --work-tree="<ws>" checkout -- <path>
+```
+
+规则：
+
+- **时机**：每次 `apply_patch` **之前**落一次快照（保证「写入可回滚」），一轮任务结束时再落一次（供 Restore Task）。
+- **范围**：默认只快照「本任务涉及的文件 + 当前未提交的改动」，避免大仓库被 `add -A` 拖慢（Cline 明确记录过这个痛点：仓库越大、checkpoint 越占空间越慢）。
+- **保留**：最近 50 个（`beeCode.checkpoint.retention`），超出按时间淘汰。
+- **三档恢复**：`Restore Files`（只回文件）/ `Restore Task`（回对话 + 文件）/ `Restore Both`。
+- **降级方案**：环境里没有 git 时，退化为 `<globalStorage>/bee-code/snapshots/<ts>/<relPath>` 的纯文件快照（能恢复、不能 diff）。
+
+### 10.6 冲突与并发
+
+| 场景 | 处理 |
+| --- | --- |
+| Undo 时文件已被用户改过 | 比对当前文本与 `appliedText`：一致 → 直接反向；不一致 → 按上下文重定位（jsdiff `applyPatch` 的 `fuzzFactor`、或 `git apply --3way`）；仍失败 → 标 `stale`，弹窗让用户选「保留现状 / 覆盖 / 查看差异」 |
+| 用户正在同一文件里编辑 | 等编辑停下（`onDidChangeTextDocument` debounce ~300ms）再 Undo；或直接提示「请先停止编辑」 |
+| 同一文件有多条 PendingEdit | **倒序** Undo（后写的先撤），否则行号 / 内容会错位 |
+| 两个窗口 / 两个任务同时改同一文件 | 用 `document.version` + 内容 hash 双校验；写入串行化（每文件一个互斥队列） |
+| 写入过程中文件被外部程序改 | `applyEdit` 返回 false → 重新读、重算、重试一次；仍失败则放弃并报错 |
+
+### 10.7 写入门闸（Guardrails）
+
+保留 Overlay 范式真正有价值的部分——**在写之前挡一下**，只挡高风险：
+
+| 门闸 | 默认 | 说明 |
+| --- | --- | --- |
+| 敏感路径写前确认 | 开 | `.env*`、`*.pem`、`*.key`、`id_rsa*`、`.git/**`、`.github/workflows/**`、`package.json` 的 `dependencies` 段（可配 `beeCode.review.gateGlobs`） |
+| 大批量写前确认 | 开 | 单次 > 5 个文件 或 +/− 合计 > 300 行 → 「将改动 8 个文件 +420 −130，继续？」 |
+| 删除文件 | 开 | 删除类改动单独确认，且强制先落检查点 |
+| 自动 Keep | 关 | 可设延时（对标 `chat.editing.autoAcceptDelay`），倒计时内可撤销 |
+| 全部关闭 | 允许 | 设置项里叫 `unsafe`，UI 上标黄 |
+
+### 10.8 仍然不执行代码
+
+写入 ≠ 执行。`run_command` / `run_test` 仍默认关闭，需要 OS 级沙箱（[§14.3](#143-沙箱四个层级越往下越真隔离)）才可开启。**审批可以被说服，沙箱不能**——这条结论不因为改了审阅范式而改变。
 
 ---
 
-## 11. 变更预览与逐函数审批
+## 11. 预览、逐函数 Keep/Undo 与回滚
 
-> 先说一个容易踩空的事实：**主流产品的「审阅」是事后确认，不是事前拦截**（Copilot/Cursor 的 `Keep`/`Undo`、Cline 的 diff 卡片 + 影子 git、Claude Code 的「写前询问 + `/rewind`」）。我们选择「审批前磁盘零改动」是**少数派**设计，理由与代价都在 [§14.10](#1410-一个必须承认的事实主流是先写盘再-keepundo) 里摊开写了。这一节讲怎么做。
+### 11.1 红绿从哪来：三种方案，从轻到重
 
-### 11.1 预览怎么画「红删绿增」
+| 方案 | 红绿来源 | 集成成本 | 用途 |
+| --- | --- | --- | --- |
+| **A. `vscode.diff`** | diff 编辑器渲染两份文档 | 极低 | 「看这次改了什么」的全量对照 |
+| **B. `vscode.changes`** | 内置「更改编辑器」多文件视图 | 低 | 「本轮改了 8 个文件」的总览 |
+| **C. SCM QuickDiff** | VS Code 在**真实文件**里画红绿 + gutter 图标 | 中 | 长期主形态：改动就长在代码上，旁边就是回退按钮 |
 
-VS Code 的 diff 编辑器**原生**就是这个语义：左侧（Original）被删的行标红、右侧（Modified）新增的行标绿，行内还有字符级高亮。所以我们要做的不是「自己画颜色」，而是**给 diff 编辑器喂两份内容**：
+方案 C 值得展开，因为它把「审阅 UI」变成了平台能力：
 
 ```ts
-// 1) 注册两种只读虚拟文档 scheme
-vscode.workspace.registerTextDocumentContentProvider('beecode-base', provider);
-vscode.workspace.registerTextDocumentContentProvider('beecode-proposed', provider);
-
-// 2) 单文件预览（公开 API，稳定）
-await vscode.commands.executeCommand('vscode.diff',
-  baseUri,        // beecode-base:/abs/path?cs=<id>
-  proposedUri,    // beecode-proposed:/abs/path?cs=<id>
-  `${basename} — 改动预览（已删除 / 新增）`,
-  { preview: true, preserveFocus: true });
-
-// 3) 多文件总览：用**公开**的 changes 编辑器（推荐）
-//    resourceList: [修改后 uri, 修改前 uri | undefined, 基准 uri | undefined][]
-await vscode.commands.executeCommand('vscode.changes',
-  'Bee Code 改动（3 个文件）',
-  files.map(f => [f.uri, base(f), base(f)]));
+const sc = vscode.scm.createSourceControl('beeCode.pending', 'Bee Code 待审');
+sc.quickDiffProvider = {
+  // 只要告诉 VS Code「这个文件的原始内容在哪」，红绿它自己算
+  provideOriginalResource(uri) { return baseUriFor(uri); }   // beecode-base: 虚拟文档
+};
+// 逐改动菜单：handler 收到 VS Code 切好的 LineChange[]
+vscode.commands.registerCommand('beeCode.revertChange', (uri, changes: vscode.LineChange[], index: number) => {
+  revertHunks(uri, changesToHunks(changes.slice(index, index + 1)));
+});
+// package.json: contributes.menus["scm/change/title"]
 ```
 
-- 第 3 步优先用**有文档的** `vscode.changes`（内置「更改编辑器」/ multi-diff），它是 agent 做「一次审阅全部改动」的稳定入口。
-- `_workbench.openMultiDiffEditor` 是**内部命令**（`_` 前缀、不在公开命令列表里、未被版本化），参数形如 `{ resources: [{originalUri, modifiedUri}], label, reveal }`。它比 `vscode.changes` 多一个 `reveal`（定位到某个改动），但**会随版本变化、且在有分叉的编辑器（Cursor/Windsurf/Theia）里可能不可用**。策略：能用 `vscode.changes` 就够，需要「精确跳转到某个函数」时先试 `_workbench`，失败静默回退。
-- 红色/绿色**不是我们画的**：它由 diff 编辑器根据「两份文档内容的差异」自动渲染。我们唯一要做的是保证两侧内容正确。
-- ⚠️ 一个真实的坑：diff 编辑器默认 `ignoreTrimWhitespace: true`，**只改缩进的改动会显示成「无变化」**。审核场景必须把它设成 `false`（或在提案里强制统一缩进风格）。另可配 `renderSideBySide`、`diffAlgorithm`、`maxComputationTime`。
-- 虚拟文档必须**只读**（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象；同时注意虚拟文档是「一等公民」，会出现在 `workspace.textDocuments` 和 `onDidOpenTextDocument` 里，所有遍历文档的代码都要先 `if (doc.uri.scheme.startsWith('beecode-'))` 跳过。
-- 目录级新增/删除文件：新建文件用「空内容 → 新内容」的 diff，删除文件用「原内容 → 空内容」的 diff，语义一致。
-- 预览 URI 里带上 `?cs=<changeSetId>`，这样同一文件在两次提案中会得到两个独立 tab，不会互相覆盖缓存。
-- **更进一步的集成：QuickDiff**。如果希望「红绿标记直接长在真实文件里、且每个改动点旁边有接受/拒绝按钮」，可以用 SCM 的 `scm.createSourceControl()` → `quickDiffProvider.provideOriginalResource(uri)` 提供「原始内容」，再往 `contributes.menus["scm/change/title"]` 挂命令——它的 handler 签名是 `(uri, changes: LineChange[], index)`，**VS Code 已经把 diff 拆成了逐个 `LineChange` 并告诉你当前聚焦的是哪一个**，等于白送「逐 hunk 接受」的 gutter UI。代价是它要求把改动**先写进真实文件**（QuickDiff 的语义是「工作区 vs 某个基准」），与我们的「审批前零污染」相冲突，所以作为 v2 的可选模式。
+- 这是**唯一**能拿到「VS Code 已经帮你把 diff 切成单条 `LineChange`」的入口，等于白送「逐改动回退」的 gutter UI。
+- 它要求「改动已经在文件里」——这与写盘范式天然契合，也是我们改范式的原因之一。
+- A/B 仍然保留：`vscode.diff` 用于「函数级精确对照」，`vscode.changes` 用于「本轮总览」。
+- ⚠️ diff 编辑器默认 `ignoreTrimWhitespace: true`，**只改缩进的改动会显示成无变化**；审阅场景要显式关掉。
 
 ### 11.2 从 hunk 到「函数单元」
 
 ```ts
-async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): FunctionUnit[] {
+async function groupByFunction(base: PendingEdit, symbols: DocumentSymbol[]): FunctionUnit[] {
   const units = new Map<string, FunctionUnit>();
-  for (const h of file.hunks) {
-    const startLine = h.newStart;
-    const endLine = h.newStart + h.newLines;
-    // 取「包含该 hunk 的最小符号」——即最近的函数/方法
-    const owner = smallestEnclosingSymbol(symbols, startLine, endLine);
-    const key = owner ? `${file.path}::${symbolPathOf(owner)}` : `${file.path}::<top-level>`;
+  for (const h of base.hunks) {
+    // 用「新文件行号」定位；删除型 hunk 用 oldStart
+    const anchor = h.newLines === 0 ? h.oldStart : h.newStart;
+    const owner = smallestEnclosingSymbol(symbols, anchor);
+    const key = owner ? `${base.path}::${symbolPathOf(owner)}` : `${base.path}::<top-level>`;
     // 跨符号的大 hunk：退化为共同父符号，再退化到 <top-level>
-    ...
   }
   return [...units.values()].sort((a, b) => a.range.startLine - b.range.startLine);
 }
 ```
 
-符号来源优先级：
+- 符号来源：`vscode.executeDocumentSymbolProvider`（首选）→ `web-tree-sitter`（无 LSP 语言）→ 缩进/正则启发式（兜底并在 UI 标注）。
+- 返回值的两种形态都要兼容：`DocumentSymbol[]`（有 `children`/`range`）与 `SymbolInformation[]`（扁平 `location`）。
+- **函数单元是「批量 Keep / Undo 的单位」，不是「写入的单位」**——写入是按文件一次完成的。这是与旧设计最本质的区别：粒度用于**审阅与回滚**，不再用于**拦截写入**。
 
-1. **LSP DocumentSymbol**：`vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri)` —— 无需自己解析，TS/Python/Go/Java/Rust 的官方扩展都提供，最准。
-   ⚠️ 返回值有两种形态：`DocumentSymbol[]`（有 `range`/`children`，可嵌套）或 `SymbolInformation[]`（扁平，只有 `location`）—— 取决于语言扩展注册的 provider，代码必须同时兼容，拿不到嵌套就退化为「扁平区间集合」。
-2. **tree-sitter 兜底**：`web-tree-sitter` + 各语言 wasm，用于没有 LSP 的语言（也是 Aider 生成 repo map 的做法）。
-3. **正则/缩进启发式**：最后的兜底，只在拿不到符号时用，且 UI 上标注「按缩进推断」。
-
-### 11.3 审批 UI
+### 11.3 面板长什么样
 
 ```
-┌ Bee Code · 改动待审（3 个文件 / 7 个函数 / 11 个 hunk）──────────────┐
-│ ☑ src/config/parse.ts                                             │
-│   ☑ parseConfig()            4 hunk   +18 −6   [查看 diff] 低风险    │
-│   ☑ ConfigParser.resolve()   1 hunk   +3  −1   [查看 diff] 中风险    │
-│ ☐ src/config/parse.test.ts                                        │
-│   ☐ 新增 3 个用例             2 hunk   +42 −0   [查看 diff] 低风险    │
-│ ☑ src/index.ts                                                    │
-│   ☑ main()（调用点变更）       4 hunk   +6  −6   [查看 diff] 高风险 ⚠ │
-├───────────────────────────────────────────────────────────────────┤
-│ [逐条接受]  [全部接受 ⌘⏎]  [全部拒绝]  [导出 patch]                  │
-└───────────────────────────────────────────────────────────────────┘
+┌ Bee Code · 待审改动（3 个文件 / 7 个函数 / 11 个改动）──────────────┐
+│ ☑ src/config/parse.ts               [全部 Keep]  [全部 Undo]      │
+│   ▸ parseConfig()        4 处  +18 −6  [Keep] [Undo] [看差异] 低风险 │
+│   ▸ ConfigParser.resolve() 1 处 +3 −1  [Keep] [Undo] [看差异] 中风险 │
+│ ☐ src/config/parse.test.ts                                          │
+│   ▸ 新增 3 个用例        2 处  +42 −0  [Keep] [Undo] [看差异] 低风险 │
+│ ☑ src/index.ts                                                      │
+│   ▸ main()（调用点变更）  4 处  +6 −6  [Keep] [Undo] 高风险 ⚠ 未联动 │
+├─────────────────────────────────────────────────────────────────────┤
+│ [全部 Keep ⌘⏎]  [全部 Undo]  [恢复到检查点…]  [导出 patch]            │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-- **三档粒度**（`beeCode.review.granularity`）：`function`（默认，按函数整体接受）→ `hunk`（更细）→ `file`（更粗）。
-- **风险分级**：删除行 > 30、触碰 `package.json`/CI/`*.config.*`、新增依赖、删除文件、修改测试 → `medium/high`，高风险项在「全部接受」时二次确认。
-- **联动勾选**：同一函数内的 hunk 默认整组；跨文件的「同一次签名变更」用一个「关联组」横幅提示，取消部分勾选时警告「调用点未全部更新」。
-- **键盘**：`A` 接受当前、`R` 拒绝当前、`Shift+A`/`Shift+R` 全部、`↑↓` 移动、`Enter` 打开 diff、`Space` 勾选 —— 全程不离开键盘。
-- **一键接受**要「快但可刹车」：无高风险 → 立即应用并 toast「已应用 7 个改动 · 撤销」；有高风险 → 弹出高风险清单确认。
+- 三档粒度（`beeCode.review.granularity`）：`function`（默认）/ `change`（单条 LineChange）/ `file`。
+- 风险分级：删除行 > 30、触碰 `package.json` / CI / `*.config.*`、新增依赖、删除文件、修改测试 → `medium/high`。
+- **关联组**：同一次签名变更跨多个文件时给横幅提示；若只 Keep 了一部分，标黄「调用点未全部更新」。
+- 键盘：`A` Keep 当前、`R` Undo 当前、`Shift+A` 全部 Keep、`Shift+R` 全部 Undo、`Enter` 看差异、`Space` 展开。
+- 状态栏常驻一个 `待审 7 处` 的入口，避免用户忘了还有没 Kept 的改动。
 
-### 11.4 部分接受的一致性
+### 11.4 三个容易踩的边界
 
-逐条接受最大的坑不是技术，而是**语义**：接受了一半的改动，代码可能编译不过。三道防线：
+1. **只 Undo 一半 → 半截重构**。缓解：关联组提示 + Undo 后跑一次 `get_diagnostics`，把**新增**错误贴在卡片上（不阻塞，只提示）。
+2. **Undo 一个新建文件**：文件从「有内容」回到「不存在」，实现上要 `deleteFile` 而不是写成空文件；反之 Undo 一次删除 → 用 `baseText` 重建。
+3. **Undo 后原本的空文件 / 目录**：删除文件后如果目录空了，**不要**顺手删目录（用户可能靠它做结构约定）。
 
-1. **关联组提示**（上文）。
-2. **应用后诊断对比**：新增错误以「本次改动引入 2 个类型错误」的形式挂到面板，并提供「查看 →」跳到错误行。
-3. **可选「接受并验证」**：v2 起，接受后在影子环境跑一次 `typecheck`/`test`，把结果贴在 ChangeSet 卡片上（不阻塞应用，只提示）。
+### 11.5 与 git 及工作区状态的关系
 
-### 11.5 与 git 的关系
-
-- Agent **不自动 commit**，把提交权 100% 留给用户。
-- 可选设置：接受后自动 `git add`（只 stage，不 commit），方便用户 `git diff --cached` 复查。
-- 预览的「导出 patch」按钮：把 ChangeSet 序列化成标准 `git apply` 可用的 patch，便于用户拿去 code review 或在别处应用。
+- Agent **不自动 commit**，提交权 100% 留给用户；可选「Keep 后自动 `git add`」（只 stage，方便 `git diff --cached` 复查）。
+- 「导出 patch」把本轮所有 PendingEdit 序列化成标准 unified diff，便于在别处审视或应用。
+- ⚠️ **不要承诺多文件原子性**：文件系统没有跨文件事务。可做到的只有「先在内存里把每个文件都算成功，再逐个写」，并如实报告哪几个成功。`git apply` 的默认原子性只覆盖**单个补丁内**。
+- 会话结束时若仍有 `pending`：默认**保留为待审并提示**（不偷偷 Keep、也不偷偷 Undo），可配置为「自动 Keep」。
 
 ---
 
@@ -872,7 +877,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 
 ### 12.2 工作区信任（Workspace Trust）
 
-- 声明 `capabilities.untrustedWorkspaces.supported: "limited"`：受限模式下禁用 `run_command`/`run_test`，仅允许只读 + 沙箱提案。
+- 声明 `capabilities.untrustedWorkspaces.supported: "limited"`：受限模式下禁用 `run_command`/`run_test`，只读工具 + 写入待审仍可用，但写入门闸全部强制打开。
 - 打开不受信任工作区时，在面板顶部显示警示条。
 
 ### 12.3 文件访问边界
@@ -886,7 +891,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 
 - v1 默认 **不启用**。
 - 启用后：命令 allowlist（`npm test`、`pytest`、`go build`…）+ 每次执行前弹确认（显示完整命令行、cwd、超时）+ 输出截断回填。
-- 🧪 沙箱化执行方案见 [§10.6](#106-v1-的沙箱边界与后续演进)——宿主机隔离（容器/沙箱）是「真隔离」与「假隔离」的分水岭。
+- 🧪 执行沙箱方案见 [§14.3](#143-沙箱四个层级越往下越真隔离) 与 [§10.8](#108-仍然不执行代码)——宿主机隔离（容器 / OS 沙箱）是「真隔离」与「假隔离」的分水岭。
 
 ---
 
@@ -906,7 +911,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 name: react-form-refactor
 description: 把受控表单重构为 react-hook-form + zod 校验
 when_to_use: 用户要求迁移表单校验逻辑、或改造 Form 组件时
-allowed_tools: [read_file, search_code, file_outline, propose_patch]
+allowed_tools: [read_file, search_code, file_outline, apply_patch]
 ---
 
 ## 步骤
@@ -984,17 +989,17 @@ allowed_tools: [read_file, search_code, file_outline, propose_patch]
 
 ```
 L0 无隔离           直接写文件、直接跑命令              ← 只在可信环境可接受
-L1 审批隔离         改一次问一次；命令一条条确认         ← Cline（扩展内）、Copilot、本项目 v1（改文件侧）
+L1 审批/回滚隔离     命令逐条确认；改文件有检查点可回滚    ← Cline（扩展内）、Copilot、本项目 v1（改文件侧）
 L2 OS 级沙箱        写白名单 + 读黑名单 + 网络走代理     ← Claude Code：Seatbelt / bwrap+socat(+seccomp)
 L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands（DockerWorkspace）；云端 agent 用 VM
 ```
 
 **关键判断**（也是本项目最重要的一条安全结论）：**「改文件」和「执行代码」需要的隔离级别不同。**
-- 改文件只需要 L1（用户审批 + 可回滚）。所以 Cline 的扩展版敢在没有 OS 沙箱的情况下工作：它的边界是「每个工具调用都要你点一次」。
+- 改文件只需要 L1（可回滚 + 高风险写前门闸）。所以 Cline 的扩展版敢在没有 OS 沙箱的情况下工作：它的边界是「每个工具调用都要你点一次」；本项目的边界是「改动立即标记待审 + 影子 git 检查点」。
 - 执行代码必须有 L2/L3。因为**审批是可以被「说服」的**：一次 prompt injection 就能让模型写出一条看起来无害的命令，而用户点了「同意」。Claude Code 的沙箱配置恰好说明了这个思路：即使模型被骗，内核层也只允许写 cwd 与临时目录、网络默认无直连。
 - 一个诚实的边界说明：Claude Code 的**文件工具、MCP server、hooks、LSP 都跑在沙箱之外**，原生 Windows 下也不沙箱化。也就是说「有沙箱」不等于「所有路径都被沙箱覆盖」，读 README 的人应该知道这一点。
 
-本项目 v1 只做 L1 且默认不执行命令，就是为了不在没有 L3 的情况下埋雷；`run_command` 一旦启用，必须同时具备 L2/L3，见 [§10.6](#106-v1-的沙箱边界与后续演进)。
+本项目 v1 只做 L1 且默认不执行命令，就是为了不在没有 L3 的情况下埋雷；`run_command` 一旦启用，必须同时具备 L2/L3，见 [§10.8](#108-仍然不执行代码)。
 
 ### 14.4 API Key 隐私：两条路线
 
@@ -1046,38 +1051,43 @@ L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands�
 
 ### 14.8 我们直接采纳的六个决定
 
-1. **编辑必须逐次审批**（Cline / Copilot 的共识），且审批粒度做到函数级 —— 比业界常见的 hunk 级更贴「改一个函数」的心智模型。
+1. **改动即时写入 + 即时审阅**（`Keep` / `Undo` + 检查点），这是 Copilot / Cursor / Cline / Continue 的共同范式；本项目只在此基础上把分组粒度做到函数级。
 2. **默认不执行命令**，一旦执行必须沙箱化（Codex / Claude Code / OpenHands 的教训）。
 3. **无后端、key 本地**（开源阵营的共识），用 `SecretStorage` 而不是 `settings.json`。
 4. **agentic search 优先，向量索引不做**（Claude Code 的做法 + Continue 弃用 embedding 的旁证）。
 5. **MCP 做能力、Skill 做知识、内置工具做编辑器**，且 MCP 工具名加 `mcp__<server>__` 前缀。
 6. **只读工具并发、写工具串行、审批是一等事件**（Claude Code 与 Codex 的结构性做法）。
 
-### 14.9 我们刻意不同的两点
+### 14.9 我们与工业界的唯一差异：分组粒度
 
-| 差异点 | 工业常见 | 本项目 |
+| 维度 | 工业常见 | 本项目 |
 | --- | --- | --- |
-| 审批粒度 | 按文件 / 按 hunk 接受（`Keep` / `Undo`），或干脆只有「写前确认」 | **按函数**归并 hunk，函数内默认联动，跨文件签名变更给「关联组」警告 |
-| 改动与磁盘的关系 | 主流是**先写盘、再 Keep/Undo**；少数用容器隔离 | **内存 Overlay 先改 + 红绿预览 + 一次性落地**，磁盘在审批前零污染 |
+| 写入时机 | 先写盘、再 `Keep`/`Undo` | **相同**（v0.1 起改为一致） |
+| 回滚底座 | Cline 影子 git / Claude Code checkpoint + `/rewind` | **相同**：影子 git + Restore 三档 |
+| 审阅粒度 | 按文件 / 按单条 `LineChange` | **按函数**归并 hunk；函数内默认联动，跨文件签名变更给「关联组」警告 |
+| 写入门闸 | 敏感文件 glob 强制审批 | **相同思路** + 大批量写前确认（>5 文件或 >300 行） |
 
-### 14.10 一个必须承认的事实：主流是「先写盘，再 Keep/Undo」
+一句话：**范式随大流，粒度做细。** 唯一自己加的东西是「函数级分组 + 关联组提示」，因为它直接对应用户的心智模型（「我要不要这个函数的新实现」），而不是「我要不要第 3 个 hunk」。
 
-这是本次调研最反直觉、也最该写进文档的发现。VS Code 官方文档对「待审改动」的定义非常明确：
+### 14.10 为什么最终改用主流范式（先写后审）
+
+调研里最反直觉的一条：VS Code 官方对「待审改动」的定义是**事后确认**，不是事前拦截。
 
 > Pending means that you can keep or undo the **saved** edit. It doesn't mean that the edit is waiting to be written to disk.
 
-也就是说，Copilot / Cline / Cursor 这一类产品的「审阅」是**事后确认**（`Keep` / `Undo`），而不是**事前拦截**（`Save` / `Reject`）。词表也印证了这一点：`Keep` 是承认一个**已经发生**的写入，`Save` 才是执行写入。Cline 靠影子 git 提供 `Compare` / `Restore` 兜底，Claude Code 干脆不做 hunk 级接受、只做「写前按权限询问」+ `/rewind` 回滚。
+词表也印证：`Keep` 是承认一个**已经发生**的写入，`Save` 才是执行写入。所以 Copilot/Cursor 是 `Keep`/`Undo`，Cline 用影子 git 的 `Compare`/`Restore` 兜底，Claude Code 只做「写前按权限询问」+ `/rewind`。**早先的 Overlay 设计（先审后写）是少数派**，v0.1 决定改回主流。
 
-**为什么本项目仍然选「先审后写」**：
-
-| 理由 | 说明 |
+| 推翻 Overlay 的理由 | 具体代价 |
 | --- | --- |
-| 零污染 | 审批前磁盘完全没变，不会出现「文件已经被改了，但没人知道哪些是 AI 改的」；对「在一个脏工作区里用 AI」的场景尤其重要 |
-| 撤销粒度正确 | `Keep/Undo` 的撤销单位是「这次改动块」，一旦用户在同一文件里有自己的编辑，撤销就会互相干扰；Overlay 的撤销就是「丢掉提案」，永不会碰到用户的东西 |
-| 冲突可控 | 提案带着基线 hash，落地前能明确检测「文件已被你改过」，而不是覆盖掉 |
-| 代价 | 预览必须自己搭（虚拟文档 + diff），比「直接用真实文件 + Keep/Undo」多一倍工作量；跨文件签名重构的「半截接受」风险需要额外设计（见 [§11.4](#114-部分接受的一致性)） |
+| 与编辑器生态割裂 | 自建虚拟文档、自建预览、自建 undo，用户 `Ctrl+Z` 撤不掉「AI 的提案」，还得学一套新交互 |
+| 预览成本翻倍 | 红绿 + 多文件总览 + 逐改动回退全要自己做；而走写盘后，SCM QuickDiff 直接白送这三样 |
+| 崩溃即丢失 | 提案只在内存里，扩展一挂全没；写盘 + 检查点至少「东西还在，能回滚」 |
+| 与用户已有编辑冲突 | Overlay 里的「基线」与用户正在编辑的文档是两套状态，容易互相打架；写盘后一切以 `TextDocument` 为准，冲突检测天然统一 |
+| 生态互操作 | 写盘后，格式化、lint、git diff、外部工具、其他扩展看到的都是同一份真实内容 |
 
-结论：这不是「我们比工业界更先进」，而是**用更多工程量换一个更保守的语义**。如果后期实测发现用户在「逐函数审批」上摩擦太大，`granularity: file` + 自动应用 + 影子 git checkpoint 就是现成的降级路线（也是 Cline 的路线）。
+**代价也认了**：磁盘会短暂处于「未 Keep」状态；必须靠 `PendingEdit` 记录 + 检查点保证可回滚；扩展异常退出时以检查点为准。这三条已经写进 [§10.5](#105-检查点checkpoint回滚的地基) 与 [§10.6](#106-冲突与并发)。
+
+**从 Overlay 保留下来的一件事**：写入门闸（[§10.7](#107-写入门闸guardrails)）——敏感文件、超大批量、删除操作仍然先问。这不是范式妥协，而是「把事前拦截用在该用的地方」：**低风险改动即时写，高风险改动才拦**。
 
 ### 14.11 值得抄进代码里的具体数字
 
@@ -1111,7 +1121,7 @@ bee-code/
 ├─ docs/
 │  ├─ architecture.md            # 详细架构（本文档的精编版）
 │  ├─ prompts.md                 # 三模式提示词变更记录
-│  ├─ sandbox-and-review.md      # 沙箱与审批协议
+│  ├─ change-review.md           # 写入 / 待审 / Keep-Undo / 检查点协议
 │  └─ adr/                       # 架构决策记录
 │     ├─ 0001-core-free-of-vscode.md
 │     ├─ 0002-bring-your-own-endpoint.md
@@ -1134,8 +1144,9 @@ bee-code/
 │  ├─ llm/                       # OpenAI 兼容客户端、SSE、重试、用量
 │  ├─ context/                   # 索引、检索、预算、压缩
 │  ├─ tools/                     # 注册表、schema、内置工具
-│  ├─ sandbox/                   # SandboxFS、overlay、冲突基线
-│  ├─ changeset/                 # patch 解析、函数归并、审批计划
+│  ├─ apply/                     # 补丁解析、WorkspaceEdit 写入、反向补丁
+│  ├─ pending/                   # PendingEdit、函数分组、Keep/Undo 状态机
+│  ├─ checkpoint/                # 影子 git 快照与 Restore 三档
 │  ├─ guard/                     # 预算与死循环守卫
 │  ├─ mcp/                       # MCP 客户端
 │  └─ skills/                    # 技能发现与按需加载
@@ -1158,7 +1169,7 @@ bee-code/
 | --- | --- | --- |
 | **M0 骨架** | 扩展脚手架、命令、面板、SecretStorage、模型配置向导、单轮对话 | 填入 DeepSeek/Ollama 端点后能一问一答，流式输出正常 |
 | **M1 只读 Agent** | Agent Loop、只读工具、文件清单、检索、Chat 模式、选区快捷键 | Chat 模式能自主读 3~5 个文件后准确回答带行号的解释 |
-| **M2 沙箱与审批** | SandboxFS、`propose_patch`、ChangeSet、Multi-Diff 预览、逐函数审批 | Builder 改 3 个文件，能逐函数接受/拒绝，接受后 typecheck 通过 |
+| **M2 写入与待审** | `apply_patch` + `WorkspaceEdit` 写入、`PendingEdit` 记录、影子 git 检查点、QuickDiff 红绿、逐函数 Keep/Undo | Builder 改 3 个文件后能逐函数 Keep/Undo；全部 Keep 后 typecheck 通过；`Restore` 能整轮回到改前 |
 | **M3 Debugger** | 诊断接入、Debugger 提示词、验证回路（可选 run_test） | 给一个真 bug，能定位到正确函数并给出最小补丁 |
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
 | **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension bee-code-x.y.z.vsix` 可用 |
@@ -1252,7 +1263,7 @@ git push -u origin main
 ### 18.2 分支与提交
 
 - 分支：`main`（可发布）← `feat/*`、`fix/*`、`docs/*`、`refactor/*`；发布用 `release/x.y.z` 打 tag。
-- 提交信息遵循 **Conventional Commits**：`feat(loop): 支持并行 tool_calls`、`fix(sandbox): 修正 hunk 偏移`、`docs(readme): 补充审批流程`。
+- 提交信息遵循 **Conventional Commits**：`feat(loop): 支持并行 tool_calls`、`fix(pending): 修正 hunk 偏移`、`docs(readme): 补充 Keep/Undo 流程`。
 - 一次提交只做一件事；提示词改动单独提交（`docs(prompts): 收紧 builder 输出契约`），便于回溯「哪次改提示词导致了效果退化」。
 
 ### 18.3 版本与发布
