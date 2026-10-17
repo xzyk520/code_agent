@@ -1,11 +1,11 @@
-# Code Agent for VS Code
+# Bee Code for VS Code
 
 > 一个「自带模型」（BYO-Model）的通用代码智能体 VS Code 扩展：**Chat / Builder / Debugger** 三模式协作，
 > 统一走 **OpenAI 兼容协议**，所有代码改动先进 **沙箱**，再以 **红绿 diff + 逐函数审批** 的方式落到工作区。
 
 ![status](https://img.shields.io/badge/status-design--phase-orange)
 ![vscode](https://img.shields.io/badge/vscode-%5E1.104-blue)
-![license](https://img.shields.io/badge/license-Apache--2.0-green)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -41,7 +41,8 @@
 - 本文档描述 **v0.0.x 设计阶段** 的总体架构，会随实现持续修订；接口以代码为准，本文以「为什么这样设计」为准。
 - 标记约定：🧭 已定方案 ｜ 🔬 需在实现期验证（PoC） ｜ 🧪 实验性/可选。
 - 本文档同时是一份**调研结论文档**：每个关键设计点都尽量给出对应工业界做法与出处（见 [§14](#14-工业界参考) 与 [§20](#20-参考资料)）。
-- 命名是暂定值（仓库名 `code-agent`，扩展 ID `<publisher>.code-agent`，命令前缀 `codeAgent.`），定名后可全局替换。
+- 项目定名 **Bee Code**：仓库名 `bee-code`，扩展 ID `<publisher>.bee-code`，显示名 `Bee Code`，命令前缀 `beeCode.`，配置项命名空间 `beeCode.*`，项目内数据目录 `.beecode/`，虚拟文档 scheme `beecode-base:` / `beecode-proposed:`。
+- 许可证：**MIT**（见 [LICENSE](./LICENSE)）。
 
 ---
 
@@ -198,9 +199,9 @@
 | 红绿 diff 预览 | `workspace.registerTextDocumentContentProvider(scheme, …)` + `commands.executeCommand('vscode.diff', left, right, title)` |
 | 应用改动 | `WorkspaceEdit` + `workspace.applyEdit()`（一次调用 = 一个 undo 单元） |
 | API Key | `context.secrets`（`SecretStorage`：`get/store/delete/onDidChange`） |
-| 配置项 | `contributes.configuration` + `workspace.getConfiguration('codeAgent')` |
+| 配置项 | `contributes.configuration` + `workspace.getConfiguration('beeCode')` |
 | 状态栏（token/停止） | `window.createStatusBarItem()` |
-| 日志与排障 | `window.createOutputChannel('Code Agent')`（注意脱敏） |
+| 日志与排障 | `window.createOutputChannel('Bee Code')`（注意脱敏） |
 | MCP 工具互操作（可选） | `contributes.mcpServerDefinitionProviders` + `lm.registerMcpServerDefinitionProvider()` |
 | 原生命令/斜杠命令集成（可选） | `contributes.commands` + `menus.commandPalette`；聊天侧可另注册 Chat Participant |
 
@@ -240,23 +241,23 @@
 
 ```jsonc
 {
-  "codeAgent.model": {
+  "beeCode.model": {
     "baseUrl": "https://api.deepseek.com/v1", // 不含 /chat/completions
     "model": "deepseek-chat",
-    "apiKeyId": "codeAgent.apiKey.default",   // 指向 SecretStorage 的键名，不是密钥本身
+    "apiKeyId": "beeCode.apiKey.default",   // 指向 SecretStorage 的键名，不是密钥本身
     "temperature": 0.2,
     "maxOutputTokens": 8192,
     "stream": true,
     "supportsTools": true,                    // 能否原生 function calling
     "supportsVision": false
   },
-  "codeAgent.agent": {
+  "beeCode.agent": {
     "maxSteps": 30,
     "maxTokensPerTask": 400000,
     "toolTimeoutMs": 30000,
     "defaultMode": "chat"
   },
-  "codeAgent.review": {
+  "beeCode.review": {
     "granularity": "function",                // function | hunk | file
     "openDiffOnProposal": true,
     "requireApprovalForEveryHunk": false
@@ -264,7 +265,7 @@
 }
 ```
 
-首次使用走「设置向导」（`codeAgent.model.configure` 命令）：
+首次使用走「设置向导」（`beeCode.model.configure` 命令）：
 
 1. 输入 `base_url`（提供常用服务商下拉：DeepSeek / OpenAI / Qwen / Kimi / GLM / OpenRouter / 本地 Ollama…）。
 2. 输入 `model`（🔬 输入后调 `GET {base_url}/models` 拉候选列表，失败则允许手填）。
@@ -367,7 +368,7 @@ system =
   │ 角色定位 / 可用工具与使用纪律 / 输出格式约定
   │ 安全红线（不写密钥、不臆造 API、不确定就说不知道）
   │ 环境事实（workspace 名、根路径、语言、git 分支、时间）
-  │ 项目规则（AGENTS.md / .codeagent/rules/*.md 注入）
+  │ 项目规则（AGENTS.md / .beecode/rules/*.md 注入）
   ├ MODE OVERLAY（互斥，来自 modes/*.md）─────────────
   │ chat.md | builder.md | debugger.md
   └ 运行时附加 ───────────────────────────────────────
@@ -593,13 +594,13 @@ interface ContextBudget {
 | --- | --- |
 | 估算 token > 窗口 × 80% | ① 折叠工具结果：只保留命中行 ± 10 行，大块内容换成「已读 `path` L10-L200，摘要：…」；② 旧轮次摘要：由模型生成结构化摘要（**已确认事实 / 已读文件 / 已产生 ChangeSet / 未决问题**）；③ 保留「首轮任务描述 + 最近 3 轮原文」 |
 | 用户点「压缩上下文」 | 立即执行 ②③，面板显示「压缩前 42k → 压缩后 9k」 |
-| 新会话 | 从 `.codeagent/memory/notes.md` 与项目规则恢复长期记忆 |
+| 新会话 | 从 `.beecode/memory/notes.md` 与项目规则恢复长期记忆 |
 
 记忆分三层（与工业界一致）：
 
 1. **工作记忆**：当前会话 messages（内存 + `workspaceState` 落盘以便重启恢复）。
 2. **会话摘要**：压缩产物，可回放。
-3. **长期项目记忆**：`.codeagent/rules/*.md`（人类写的规则，随 git 提交）+ `.codeagent/memory/notes.md`（Agent/用户显式追加的事实，如「本仓库用 npm 不用 pnpm」「测试跑 `npm run test:unit`」）。同时兼容读取根目录 `AGENTS.md`。
+3. **长期项目记忆**：`.beecode/rules/*.md`（人类写的规则，随 git 提交）+ `.beecode/memory/notes.md`（Agent/用户显式追加的事实，如「本仓库用 npm 不用 pnpm」「测试跑 `npm run test:unit`」）。同时兼容读取根目录 `AGENTS.md`。
 
 > 记忆写入必须**显式**：模型想写记忆得调 `remember(note)` 工具并让用户确认，避免「模型自己给自己写规则」导致行为漂移。
 
@@ -616,7 +617,7 @@ interface ContextBudget {
 
 | 入口 | 行为 |
 | --- | --- |
-| 选中代码 → 右键 → `Code Agent: 解释 / 生成改动 / 排查` | 打开面板，把选区作为引用 chip 挂上，自动填入模式对应的默认指令 |
+| 选中代码 → 右键 → `Bee Code: 解释 / 生成改动 / 排查` | 打开面板，把选区作为引用 chip 挂上，自动填入模式对应的默认指令 |
 | 选中代码 → `Ctrl+Alt+K / B / D` | 同上，键盘直达（macOS 用 `Cmd+Alt+*`） |
 | 无选区 → 快捷键 | 自动取「光标所在的整个函数」（用 DocumentSymbol 反查），再走上面的流程 |
 | 诊断（红波浪线）→ 右键 `用 Debugger 修` | 带上诊断信息 + 所在函数进 Debugger |
@@ -624,10 +625,10 @@ interface ContextBudget {
 
 ### 9.2 实现要点
 
-1. **声明**：`contributes.menus.editor/context` + `contributes.keybindings`，两者都用 `when: "editorHasSelection"` 控制（无选区时菜单隐藏）；`group: "codeAgent@n"` 保证排序在同一组内。
+1. **声明**：`contributes.menus.editor/context` + `contributes.keybindings`，两者都用 `when: "editorHasSelection"` 控制（无选区时菜单隐藏）；`group: "beeCode@n"` 保证排序在同一组内。
 2. **采集**：`vscode.window.activeTextEditor` → `selection`（支持多选区：逐个取，合并去重）→ `document.getText(range)`；同时记录 `uri`、`range.start.line/end.line`、语言 ID。
 3. **上下文扩展**：用 `vscode.executeDocumentSymbolProvider` 拿到光标/选区所属的符号，向上扩到函数边界（避免只给半截 `if` 块）；再补「文件头 40 行（imports）+ 相邻 20 行」作为最小可理解单元。
-4. **投递**：命令里 `await vscode.commands.executeCommand('codeAgent.chatView.focus')` 后 `postMessage({ type: 'attachSelection', payload })`；面板渲染成 chip，用户可删、可再选。
+4. **投递**：命令里 `await vscode.commands.executeCommand('beeCode.chatView.focus')` 后 `postMessage({ type: 'attachSelection', payload })`；面板渲染成 chip，用户可删、可再选。
 5. **大选区策略**：> 200 行时只附 `file_outline` + 选区首尾各 40 行，并在 chip 上标注「已折叠（共 800 行）」，模型需要时再用 `read_file` 精读。
 6. **不打断输入**：若用户正在输入，把选区插入为 chip 而非覆盖草稿。
 
@@ -747,7 +748,7 @@ await vscode.workspace.applyEdit(wsEdit);            // 一个 undo 步，只触
 
 - **半截重构**是「逐条接受」的固有风险（改了签名却只接受一半调用点）。缓解见 [§11.4](#114-部分接受的一致性)。
 - 应用后立刻跑一遍 `get_diagnostics`，把**新增**的错误按文件列出来（对比应用前后诊断快照）。
-- 备份：默认不额外备份（`WorkspaceEdit` 的 undo + git 双保险已足够）；对「删除文件」这类不可撤销操作，先把原内容存 `.codeagent/backup/<timestamp>/`。
+- 备份：默认不额外备份（`WorkspaceEdit` 的 undo + git 双保险已足够）；对「删除文件」这类不可撤销操作，先把原内容存 `.beecode/backup/<timestamp>/`。
 - 「撤销本次改动」= 反向 patch，同样走审批 UI，不搞隐式魔法。
 
 ### 10.6 v1 的边界与后续演进
@@ -771,20 +772,20 @@ VS Code 的 diff 编辑器**原生**就是这个语义：左侧（Original）被
 
 ```ts
 // 1) 注册两种只读虚拟文档 scheme
-vscode.workspace.registerTextDocumentContentProvider('codeagent-base', provider);
-vscode.workspace.registerTextDocumentContentProvider('codeagent-proposed', provider);
+vscode.workspace.registerTextDocumentContentProvider('beecode-base', provider);
+vscode.workspace.registerTextDocumentContentProvider('beecode-proposed', provider);
 
 // 2) 单文件预览（公开 API，稳定）
 await vscode.commands.executeCommand('vscode.diff',
-  baseUri,        // codeagent-base:/abs/path?cs=<id>
-  proposedUri,    // codeagent-proposed:/abs/path?cs=<id>
+  baseUri,        // beecode-base:/abs/path?cs=<id>
+  proposedUri,    // beecode-proposed:/abs/path?cs=<id>
   `${basename} — 改动预览（已删除 / 新增）`,
   { preview: true, preserveFocus: true });
 
 // 3) 多文件总览：用**公开**的 changes 编辑器（推荐）
 //    resourceList: [修改后 uri, 修改前 uri | undefined, 基准 uri | undefined][]
 await vscode.commands.executeCommand('vscode.changes',
-  'Code Agent 改动（3 个文件）',
+  'Bee Code 改动（3 个文件）',
   files.map(f => [f.uri, base(f), base(f)]));
 ```
 
@@ -792,7 +793,7 @@ await vscode.commands.executeCommand('vscode.changes',
 - `_workbench.openMultiDiffEditor` 是**内部命令**（`_` 前缀、不在公开命令列表里、未被版本化），参数形如 `{ resources: [{originalUri, modifiedUri}], label, reveal }`。它比 `vscode.changes` 多一个 `reveal`（定位到某个改动），但**会随版本变化、且在有分叉的编辑器（Cursor/Windsurf/Theia）里可能不可用**。策略：能用 `vscode.changes` 就够，需要「精确跳转到某个函数」时先试 `_workbench`，失败静默回退。
 - 红色/绿色**不是我们画的**：它由 diff 编辑器根据「两份文档内容的差异」自动渲染。我们唯一要做的是保证两侧内容正确。
 - ⚠️ 一个真实的坑：diff 编辑器默认 `ignoreTrimWhitespace: true`，**只改缩进的改动会显示成「无变化」**。审核场景必须把它设成 `false`（或在提案里强制统一缩进风格）。另可配 `renderSideBySide`、`diffAlgorithm`、`maxComputationTime`。
-- 虚拟文档必须**只读**（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象；同时注意虚拟文档是「一等公民」，会出现在 `workspace.textDocuments` 和 `onDidOpenTextDocument` 里，所有遍历文档的代码都要先 `if (doc.uri.scheme.startsWith('codeagent-'))` 跳过。
+- 虚拟文档必须**只读**（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象；同时注意虚拟文档是「一等公民」，会出现在 `workspace.textDocuments` 和 `onDidOpenTextDocument` 里，所有遍历文档的代码都要先 `if (doc.uri.scheme.startsWith('beecode-'))` 跳过。
 - 目录级新增/删除文件：新建文件用「空内容 → 新内容」的 diff，删除文件用「原内容 → 空内容」的 diff，语义一致。
 - 预览 URI 里带上 `?cs=<changeSetId>`，这样同一文件在两次提案中会得到两个独立 tab，不会互相覆盖缓存。
 - **更进一步的集成：QuickDiff**。如果希望「红绿标记直接长在真实文件里、且每个改动点旁边有接受/拒绝按钮」，可以用 SCM 的 `scm.createSourceControl()` → `quickDiffProvider.provideOriginalResource(uri)` 提供「原始内容」，再往 `contributes.menus["scm/change/title"]` 挂命令——它的 handler 签名是 `(uri, changes: LineChange[], index)`，**VS Code 已经把 diff 拆成了逐个 `LineChange` 并告诉你当前聚焦的是哪一个**，等于白送「逐 hunk 接受」的 gutter UI。代价是它要求把改动**先写进真实文件**（QuickDiff 的语义是「工作区 vs 某个基准」），与我们的「审批前零污染」相冲突，所以作为 v2 的可选模式。
@@ -825,7 +826,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 ### 11.3 审批 UI
 
 ```
-┌ Code Agent · 改动待审（3 个文件 / 7 个函数 / 11 个 hunk）──────────────┐
+┌ Bee Code · 改动待审（3 个文件 / 7 个函数 / 11 个 hunk）──────────────┐
 │ ☑ src/config/parse.ts                                             │
 │   ☑ parseConfig()            4 hunk   +18 −6   [查看 diff] 低风险    │
 │   ☑ ConfigParser.resolve()   1 hunk   +3  −1   [查看 diff] 中风险    │
@@ -838,7 +839,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-- **三档粒度**（`codeAgent.review.granularity`）：`function`（默认，按函数整体接受）→ `hunk`（更细）→ `file`（更粗）。
+- **三档粒度**（`beeCode.review.granularity`）：`function`（默认，按函数整体接受）→ `hunk`（更细）→ `file`（更粗）。
 - **风险分级**：删除行 > 30、触碰 `package.json`/CI/`*.config.*`、新增依赖、删除文件、修改测试 → `medium/high`，高风险项在「全部接受」时二次确认。
 - **联动勾选**：同一函数内的 hunk 默认整组；跨文件的「同一次签名变更」用一个「关联组」横幅提示，取消部分勾选时警告「调用点未全部更新」。
 - **键盘**：`A` 接受当前、`R` 拒绝当前、`Shift+A`/`Shift+R` 全部、`↑↓` 移动、`Enter` 打开 diff、`Space` 勾选 —— 全程不离开键盘。
@@ -877,9 +878,9 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 ### 12.3 文件访问边界
 
 - 所有路径 `path.resolve` 后必须 `startsWith(workspaceRoot)`，拒绝 `..` 穿越与符号链接逃逸。
-- 默认拒绝写入：`.git/**`、`node_modules/**`、`.env*`、`*.pem`、`*.key`、`id_rsa*`、`.codeagent/secrets*`。
+- 默认拒绝写入：`.git/**`、`node_modules/**`、`.env*`、`*.pem`、`*.key`、`id_rsa*`、`.beecode/secrets*`。
 - 读取大文件截断（> 512KB 拒绝，> 100KB 只给大纲 + 片段）。
-- 忽略规则三层合并：内置默认 → `.gitignore` → 用户 `codeAgent.files.exclude`。
+- 忽略规则三层合并：内置默认 → `.gitignore` → 用户 `beeCode.files.exclude`。
 
 ### 12.4 命令执行
 
@@ -894,7 +895,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 ### 13.1 Skill（可复用的领域知识包）
 
 ```
-.codeagent/skills/<skill-name>/
+.beecode/skills/<skill-name>/
 ├─ SKILL.md          # 必填：front-matter + 正文
 ├─ examples/         # 可选：few-shot 片段
 └─ scripts/          # 可选：可被工具调用的小脚本
@@ -924,11 +925,11 @@ allowed_tools: [read_file, search_code, file_outline, propose_patch]
 - 本项目作为 **MCP Client**（因为要控制自己的 loop 与审批）：
 
 ```jsonc
-// .codeagent/mcp.json（与 VS Code 的 .vscode/mcp.json 结构对齐，便于互操作）
+// .beecode/mcp.json（与 VS Code 的 .vscode/mcp.json 结构对齐，便于互操作）
 {
   "servers": {
     "github": { "type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
-                "env": { "GITHUB_TOKEN": "${secret:codeAgent.mcp.github}" } },
+                "env": { "GITHUB_TOKEN": "${secret:beeCode.mcp.github}" } },
     "postgres": { "type": "http", "url": "https://mcp.example.com/mcp", "headers": {} }
   }
 }
@@ -1041,7 +1042,7 @@ L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands�
 
 **压缩（compaction）**：主流做法都是「**先清工具输出，再摘要历史**」——因为工具输出（大文件、长日志）通常占了窗口的一半以上，且复用价值最低。代价是压缩是有损的：Claude Code 在压缩后要**重新注入** system prompt、项目记忆、计划、以及「最近修改的 5 个文件」，技能正文按 5k/技能、25k 总量重新注入。这条经验直接对应本项目的 [§8.4](#84-压缩与记忆)。
 
-**记忆层次**：工作记忆（当前 messages）→ 压缩摘要（会话级）→ 长期项目记忆（`AGENTS.md` / `CLAUDE.md` / `.clinerules` / `.cursor/rules` 这类**跟着 git 走**的规则文件）。跨工具正在收敛：Claude Code 在没有 `CLAUDE.md` 时会读 `AGENTS.md`，`/init` 还能导入 `.cursor/rules`、`.clinerules`、`.github/copilot-instructions.md`。本项目因此**优先读 `AGENTS.md`**，`.codeagent/rules/` 作为补充。
+**记忆层次**：工作记忆（当前 messages）→ 压缩摘要（会话级）→ 长期项目记忆（`AGENTS.md` / `CLAUDE.md` / `.clinerules` / `.cursor/rules` 这类**跟着 git 走**的规则文件）。跨工具正在收敛：Claude Code 在没有 `CLAUDE.md` 时会读 `AGENTS.md`，`/init` 还能导入 `.cursor/rules`、`.clinerules`、`.github/copilot-instructions.md`。本项目因此**优先读 `AGENTS.md`**，`.beecode/rules/` 作为补充。
 
 ### 14.8 我们直接采纳的六个决定
 
@@ -1096,7 +1097,7 @@ L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands�
 ## 15. 目录结构
 
 ```
-code-agent/
+bee-code/
 ├─ package.json                  # VS Code 扩展清单（manifest）
 ├─ tsconfig.json                 # 基础 TS 配置
 ├─ tsconfig.core.json            # core 子项目（无 DOM/vscode 类型）
@@ -1106,7 +1107,7 @@ code-agent/
 ├─ .gitattributes                # 统一 LF，避免跨平台整文件 diff
 ├─ CHANGELOG.md
 ├─ README.md                     # 本文件
-├─ LICENSE                       # Apache-2.0（待定）
+├─ LICENSE                       # MIT
 ├─ docs/
 │  ├─ architecture.md            # 详细架构（本文档的精编版）
 │  ├─ prompts.md                 # 三模式提示词变更记录
@@ -1160,7 +1161,7 @@ code-agent/
 | **M2 沙箱与审批** | SandboxFS、`propose_patch`、ChangeSet、Multi-Diff 预览、逐函数审批 | Builder 改 3 个文件，能逐函数接受/拒绝，接受后 typecheck 通过 |
 | **M3 Debugger** | 诊断接入、Debugger 提示词、验证回路（可选 run_test） | 给一个真 bug，能定位到正确函数并给出最小补丁 |
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
-| **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension code-agent-x.y.z.vsix` 可用 |
+| **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension bee-code-x.y.z.vsix` 可用 |
 
 ---
 
@@ -1192,43 +1193,44 @@ npx @vscode/vsce publish -p <PAT>   # 发布到 Marketplace
 
 ```jsonc
 {
-  "name": "code-agent",
-  "displayName": "Code Agent",
+  "name": "bee-code",
+  "displayName": "Bee Code",
   "publisher": "<publisher>",
   "version": "0.0.1",
+  "license": "MIT",
   "engines": { "vscode": "^1.104.0" },
   "categories": ["Programming Languages", "Machine Learning", "Other"],
   "main": "./dist/extension.js",
   "activationEvents": [],                        // 1.74+ 由 contributes 隐式激活
   "contributes": {
     "commands": [
-      { "command": "codeAgent.chat.ask",       "title": "Code Agent: 提问（Chat）" },
-      { "command": "codeAgent.selection.chat", "title": "Code Agent: 解释选中代码" },
-      { "command": "codeAgent.selection.build","title": "Code Agent: 按选中代码生成改动" },
-      { "command": "codeAgent.selection.debug","title": "Code Agent: 排查选中代码" },
-      { "command": "codeAgent.files.pick",     "title": "Code Agent: 选择要阅读的文件" },
-      { "command": "codeAgent.model.configure","title": "Code Agent: 配置模型（base_url / key / model）" },
-      { "command": "codeAgent.review.acceptAll","title": "Code Agent: 接受全部改动" }
+      { "command": "beeCode.chat.ask",       "title": "Bee Code: 提问（Chat）" },
+      { "command": "beeCode.selection.chat", "title": "Bee Code: 解释选中代码" },
+      { "command": "beeCode.selection.build","title": "Bee Code: 按选中代码生成改动" },
+      { "command": "beeCode.selection.debug","title": "Bee Code: 排查选中代码" },
+      { "command": "beeCode.files.pick",     "title": "Bee Code: 选择要阅读的文件" },
+      { "command": "beeCode.model.configure","title": "Bee Code: 配置模型（base_url / key / model）" },
+      { "command": "beeCode.review.acceptAll","title": "Bee Code: 接受全部改动" }
     ],
     "keybindings": [
-      { "command": "codeAgent.selection.chat",  "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorHasSelection" },
-      { "command": "codeAgent.selection.build", "key": "ctrl+alt+b", "mac": "cmd+alt+b", "when": "editorHasSelection" },
-      { "command": "codeAgent.selection.debug", "key": "ctrl+alt+d", "mac": "cmd+alt+d", "when": "editorHasSelection" }
+      { "command": "beeCode.selection.chat",  "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorHasSelection" },
+      { "command": "beeCode.selection.build", "key": "ctrl+alt+b", "mac": "cmd+alt+b", "when": "editorHasSelection" },
+      { "command": "beeCode.selection.debug", "key": "ctrl+alt+d", "mac": "cmd+alt+d", "when": "editorHasSelection" }
     ],
     "menus": {
       "editor/context": [
-        { "command": "codeAgent.selection.chat",  "when": "editorHasSelection", "group": "codeAgent@1" },
-        { "command": "codeAgent.selection.build", "when": "editorHasSelection", "group": "codeAgent@2" },
-        { "command": "codeAgent.selection.debug", "when": "editorHasSelection", "group": "codeAgent@3" }
+        { "command": "beeCode.selection.chat",  "when": "editorHasSelection", "group": "beeCode@1" },
+        { "command": "beeCode.selection.build", "when": "editorHasSelection", "group": "beeCode@2" },
+        { "command": "beeCode.selection.debug", "when": "editorHasSelection", "group": "beeCode@3" }
       ]
     },
     "viewsContainers": {
-      "activitybar": [{ "id": "codeAgent", "title": "Code Agent", "icon": "media/icon.svg" }]
+      "activitybar": [{ "id": "beeCode", "title": "Bee Code", "icon": "media/icon.svg" }]
     },
     "views": {
-      "codeAgent": [{ "id": "codeAgent.chatView", "name": "Agent", "type": "webview" }]
+      "beeCode": [{ "id": "beeCode.chatView", "name": "Agent", "type": "webview" }]
     },
-    "configuration": { "title": "Code Agent", "properties": { /* §5.2 */ } }
+    "configuration": { "title": "Bee Code", "properties": { /* §5.2 */ } }
   }
 }
 ```
@@ -1243,7 +1245,7 @@ npx @vscode/vsce publish -p <PAT>   # 发布到 Marketplace
 git init -b main                 # 已完成
 git add .
 git commit -m "docs: 初始 README 与总体架构"
-git remote add origin git@github.com:<you>/code-agent.git
+git remote add origin git@github.com:<you>/bee-code.git
 git push -u origin main
 ```
 
@@ -1267,7 +1269,7 @@ git push -u origin main
 
 ## 19. 许可与致谢
 
-- 许可证：**Apache-2.0**（待定；含专利授权，适合被集成）。
+- 许可证：**MIT**（最宽松、生态最通用；任何人都可以自由使用、修改、再分发、商用，只需保留版权声明与许可声明）。随仓库的 `LICENSE` 文件为准。
 - 致谢（设计上借鉴的开源项目）：Cline、Continue.dev、Aider、OpenHands、以及 VS Code 官方扩展样例。具体借鉴点见 [§14](#14-工业界参考)。
 
 ---
