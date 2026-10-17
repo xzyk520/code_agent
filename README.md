@@ -318,7 +318,7 @@ interface ChatMessage {
 | Ollama / vLLM / LM Studio | `/v1`（本地） | 可能不支持 tools、不支持 `stream_options` | 不支持 tools 时走 **JSON 模式降级**（见下） |
 | 聚合网关（one-api/new-api/OpenRouter） | `/v1` | 上游差异被网关吃掉，但错误码不规范 | 统一错误归一化 |
 
-**工具调用降级方案**（`supportsTools: false` 时）：提示词里给出严格 JSON 输出协议，模型输出 ```json {"tool": "...", "args": {...}}``` 代码块，内核解析成「伪 tool_call」后照常执行，失败重试带上「上一次格式错误」的纠正提示。这样连最朴素的本地模型也能跑 Builder。
+**工具调用降级方案**（`supportsTools: false` 时）：提示词里给出严格 JSON 输出协议，要求模型只输出一个 `json` 代码块，内容形如 `{"tool":"read_file","args":{...}}`；内核把它解析成「伪 tool_call」后照常走同一套执行与审批链路，解析失败时重试并附带「上一次格式错误」的纠正提示。这样连最朴素的本地模型也能跑 Builder。
 
 ### 5.6 错误处理
 
@@ -555,7 +555,7 @@ UI 有三处：
     预算裁剪 → 生成「候选上下文包」→ 模型可再主动 read_file 精读
 ```
 
-- **不做**默认的向量索引：全量 embedding 有索引成本、陈旧问题和「把私钥/密钥文件也塞进向量库」的隐私风险；主流终端 Agent（Claude Code / Cline / Aider）都优先用「检索工具 + 模型自己决定读什么」的 agentic search。🧪 向量检索作为可选增强（本地 embedding 模型），默认关闭，见 [§14](#14-工业界参考) 的对比。
+- **不做**默认的向量索引：全量 embedding 有索引成本、陈旧问题和「把私钥/密钥文件也塞进向量库」的隐私风险。业界两种主流替代是 **agentic search**（Claude Code / Codex CLI / Cline：只给检索工具，让模型自己决定读什么）和 **结构化 repo map**（Aider：只把符号与引用图压成骨架，不整库向量化）。本项目优先走 agentic search 为主、repo map 为辅。🧪 向量检索作为可选增强（本地 embedding 模型），默认关闭，见 [§14](#14-工业界参考) 的对比。
 - Aider 的 **repo map** 思路（tree-sitter 抽取符号 + 引用图 + 图排序压到预算内）值得借鉴：它把「整个仓库的结构」压成 1~4k token 的骨架，对「跨文件改一处」类任务性价比很高。🔬 M2 之后作为 `file_outline` 的批量版本引入。
 
 ### 8.3 上下文预算
@@ -749,7 +749,7 @@ VS Code 的 diff 编辑器**原生**就是这个语义：左侧（Original）被
 vscode.workspace.registerTextDocumentContentProvider('codeagent-base', provider);
 vscode.workspace.registerTextDocumentContentProvider('codeagent-proposed', provider);
 
-// 2) 单文件预览
+// 2) 单文件预览（公开 API，稳定）
 await vscode.commands.executeCommand('vscode.diff',
   baseUri,        // codeagent-base:/abs/path?cs=<id>
   proposedUri,    // codeagent-proposed:/abs/path?cs=<id>
@@ -763,9 +763,11 @@ await vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
 });
 ```
 
+> 🔬 第 3 步用的是 VS Code 内部命令（`_` 前缀），**不属于稳定 API**，跨版本可能变。因此必须实现降级：多文件总览打不开时，退化为「在面板里点文件名，逐个打开 `vscode.diff`」，功能不缺失。同理，diff 编辑器的「折叠未改动区域」(`hideUnchangedRegions`) 长期在 proposed 状态，不要依赖它，自己按 hunk 生成带上下文的窄范围预览即可。
+
 - 虚拟文档必须 `readonly`（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象。
-- 单文件超过 5k 行时，预览默认**折叠未改动区域**（`vscode.diff` 的 `hideUnchangedRegions` 选项），只展开 hunk 周边。
 - 目录级新增/删除文件：新建文件用「空内容 → 新内容」的 diff，删除文件用「原内容 → 空内容」的 diff，语义一致。
+- 预览 URI 里带上 `?cs=<changeSetId>`，这样同一文件在两次提案中会得到两个独立 tab，不会互相覆盖缓存。
 
 ### 11.2 从 hunk 到「函数单元」
 
@@ -788,6 +790,7 @@ async function groupByFunction(file: FileChange, symbols: DocumentSymbol[]): Fun
 符号来源优先级：
 
 1. **LSP DocumentSymbol**：`vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri)` —— 无需自己解析，TS/Python/Go/Java/Rust 的官方扩展都提供，最准。
+   ⚠️ 返回值有两种形态：`DocumentSymbol[]`（有 `range`/`children`，可嵌套）或 `SymbolInformation[]`（扁平，只有 `location`）—— 取决于语言扩展注册的 provider，代码必须同时兼容，拿不到嵌套就退化为「扁平区间集合」。
 2. **tree-sitter 兜底**：`web-tree-sitter` + 各语言 wasm，用于没有 LSP 的语言（也是 Aider 生成 repo map 的做法）。
 3. **正则/缩进启发式**：最后的兜底，只在拿不到符号时用，且 UI 上标注「按缩进推断」。
 
@@ -918,6 +921,103 @@ allowed_tools: [read_file, search_code, file_outline, propose_patch]
 
 ---
 
+## 14. 工业界参考
+
+> 这一节是「别人怎么做的」的横向对照，目的不是抄，而是**确认我们的每个设计都不是拍脑袋**。事实性描述基于各项目公开文档/源码（链接见 [§20](#20-参考资料)），具体实现会随版本变化。
+
+### 14.1 七个项目的一张表
+
+| 项目 | 形态 | 编辑怎么落地 | 执行隔离 | 上下文怎么找 | 循环/预算 | 记忆与规则 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Cline** | VS Code 扩展（宿主 ↔ Webview 分离） | 每次编辑以 diff 呈现，用户确认；支持自动批准；有 checkpoint 可回滚 | 借用 VS Code 终端，命令逐条确认 | 文件提及 + 工具自主读取 + 自动截断 | 请求数/预算上限 + 用户随时打断 | `.clinerules` |
+| **Continue.dev** | core（Node 服务）+ 扩展 + GUI 三层 | IDE 内 diff，逐 hunk 接受/拒绝 | 无（不执行） | `@` 上下文提供者 + 代码库索引（embedding） | 单轮为主，agent 模式有步数限制 | rules / prompt files |
+| **Aider** | 终端 CLI | 直接改文件 + 自动 git commit（可逐次审阅/回滚） | 无（在本机跑） | **repo map**：tree-sitter 符号 + 引用图排序 | 多轮 edit，测试/ lint 回路可限次 | `CONVENTIONS.md`、`.aider.conf.yml` |
+| **Claude Code** | 终端 agent | 写入前展示 diff 并按权限模式确认 | OS 级沙箱（bash 工具）+ 权限模式 | **agentic search**：glob/grep 自主检索，无预建索引 | 权限门 + 上下文自动压缩 + 中断 | `CLAUDE.md`、Skills、subagents、hooks |
+| **Codex CLI** | 终端 CLI（Rust） | 结构化 patch 工具（`apply_patch`） | **默认沙箱**：macOS seatbelt / Linux Landlock+seccomp | 自主检索 | 审批模式 + 沙箱网络策略 | `AGENTS.md` |
+| **OpenHands** | 服务化平台 | 在容器内直接改文件，改动经事件流记录 | **Docker runtime**（容器即执行环境） | 文件浏览 + 检索工具 | 事件流 + 迭代上限 + 可恢复状态 | 会话状态持久化 |
+| **GitHub Copilot（VS Code）** | 原生集成 | working set + **Keep / Undo** 逐 hunk 审阅 | 工具审批（命令需确认） | `#` 上下文引用 + 内置检索 | 工具审批门 + 停止按钮 | `.github/copilot-instructions.md`、`AGENTS.md` |
+
+### 14.2 Agent Loop 的三个流派
+
+1. **单轮 tool-calling 循环**（Cline / Continue / Copilot / 本项目）
+   `while (!done) { llm(messages, tools) → 执行 tool_calls → 回填 → }`，结束条件是「模型不再调用工具」或调用显式的 `attempt_completion`。
+   优点：实现简单、可逐步展示、天然可中断；缺点：容易「走一步看一步」，长任务缺全局计划。
+2. **计划-执行分离**（Aider 的 architect 模式、Claude Code 的 plan 模式）
+   先用一个模型产出方案/待改文件名清单，再让另一个模型（或另一轮）按计划改。
+   优点：长任务稳定性显著更好，token 花费可控；缺点：多一次往返，交互变重。
+3. **事件驱动 / 状态机**（OpenHands）
+   所有动作都是事件（`Action` / `Observation`），由 `EventStream` 串联，`State` 可序列化 → 天然支持「暂停/恢复/回放/多人观察」。
+   优点：可观测性最好，适合做产品级审计；缺点：工程复杂度高。
+
+**我们的选择**：以流派 1 为骨架（`AgentLoop` 已经是「事件 → 状态」的形式，向流派 3 靠），并在 Builder 模式对「涉及 ≥3 个文件」的任务自动插入一个 **Plan 阶段**（流派 2 的轻量版），计划以清单形式给用户看一眼再执行。
+
+### 14.3 沙箱：四个层级，越往下越「真隔离」
+
+```
+L0 无隔离           直接写文件、直接跑命令            ← 只在可信环境、单人本地可接受
+L1 审批隔离         改一次问一次；命令一条条确认       ← Cline、Copilot、本项目 v1（改文件侧）
+L2 OS 级沙箱        seatbelt / Landlock+seccomp / bwrap ← Codex CLI、Claude Code（bash）
+L3 容器/微虚拟机     Docker、gVisor、Firecracker        ← OpenHands；云端/后台 agent 跑在云主机或 VM 里
+```
+
+关键判断：**「改文件」和「执行代码」需要的隔离级别不同**。改文件只需要 L1（用户审批 + 可回滚）；执行代码必须有 L2/L3，否则模型的 `rm -rf` 会直接作用在你的机器上。本项目 v1 只做 L1 且默认不执行命令，就是为了不在没有 L3 的情况下埋雷。
+
+### 14.4 API Key 隐私：两条路线
+
+| 路线 | 做法 | 代表 | 代价 |
+| --- | --- | --- | --- |
+| **本地持有** | key 存 OS 凭据库（VS Code `SecretStorage` → Keychain/DPAPI/libsecret），请求从本机直连模型端点 | Cline、Continue、Codex CLI、本项目 | 用户自付账单；每家厂商要自己配 |
+| **云端代管** | key 上传到服务端加密存储，请求经服务端代理；或干脆用订阅额度 | 商业 IDE / 订阅制产品 | 需要信任服务端；有合规与泄露面 |
+
+本项目的红线（写进 `SECURITY.md`）：**没有后端、没有中转、没有遥测**。这也意味着我们能诚实地说「你的代码只发给你自己填的那个 URL」。日志脱敏与「诊断包导出剔除敏感内容」见 [§12.1](#121-密钥)。
+
+### 14.5 Skill 与 MCP：两种扩展方式的定位
+
+- **MCP** 解决「**能力**」扩展：工具/资源/提示词由外部进程或远端服务提供，协议标准化，跨客户端复用。客户端要做的事：拉 `tools/list` → 转成模型的 function schema → 调用前审批（`readOnlyHint` 可免确认，VS Code 原生就是这么做的）→ 结果回填。
+- **Skill** 解决「**知识**」扩展：把「某类任务该怎么做」写成 Markdown，靠**渐进披露**控制成本 —— 先只暴露 `name + description`，模型判断需要时才加载正文。Claude Code 的 Agent Skills 是这个模式最完整的实现。
+- 两者互补：Skill 告诉模型「该按什么流程做」，MCP 告诉模型「能用什么工具做」，内置 Tool 提供「编辑器里必须做的事」（读写、diff、审批）。
+
+### 14.6 防死循环：工业界的「五道闸」
+
+| 闸 | 常见做法 |
+| --- | --- |
+| 步数/迭代上限 | 硬上限（如 25~50 步），到顶就停并汇报进度 |
+| 预算上限 | 按 token / 按美元累计，超阈值停止 |
+| 重复检测 | 对 `(tool, args)` 或输出做哈希，重复即注入纠正提示 |
+| 无进展检测 | 连续 N 步没有新增文件/没有新信息 → 判定卡住 |
+| 人工闸门 | 每次写文件/执行命令都要审批（本身就是最强的防跑偏机制） |
+
+外加一个经常被忽略的：**可取消性**。所有 I/O（LLM 请求、工具执行）都必须接 `AbortSignal`，否则「停止」按钮只是摆设。
+
+### 14.7 上下文记忆：三种检索流派与三种记忆层次
+
+**检索流派**：
+
+| 流派 | 做法 | 优点 | 缺点 | 代表 |
+| --- | --- | --- | --- | --- |
+| agentic search | 给模型 grep/glob/read 工具，让它自己找 | 无需索引、永远最新、可解释 | 多轮往返、依赖模型规划能力 | Claude Code、Codex CLI、Cline |
+| 结构索引 | tree-sitter 抽符号 + 引用图 → 压成 repo map | token 效率极高、跨文件任务强 | 需要语言支持、图构建有成本 | Aider |
+| 向量索引 | 全库 embedding + 相似度召回 | 语义召回强（自然语言问「哪里做鉴权」） | 索引陈旧、成本、隐私面 | Continue 代码库索引 |
+
+**记忆层次**：工作记忆（当前 messages）→ 压缩摘要（会话级）→ 长期项目记忆（`AGENTS.md` / `CLAUDE.md` / `.clinerules` / `.cursor/rules` 这类**跟着 git 走**的规则文件）。
+
+### 14.8 我们直接采纳的五个决定
+
+1. **编辑必须逐次审批**（Cline / Copilot 的共识），且审批粒度做到函数级 —— 比业界常见的 hunk 级更贴「改一个函数」的心智模型。
+2. **默认不执行命令**，一旦执行必须沙箱化（Codex CLI / OpenHands 的教训）。
+3. **无后端、key 本地**（开源阵营的共识），用 `SecretStorage` 而不是 `settings.json`。
+4. **agentic search 优先，向量索引可选**（Claude Code 的做法），先把「模型会自己找代码」跑通。
+5. **MCP 做能力、Skill 做知识、内置工具做编辑器**（VS Code 原生 MCP 支持的思路）。
+
+### 14.9 我们刻意不同的两点
+
+| 差异点 | 工业常见 | 本项目 |
+| --- | --- | --- |
+| 审批粒度 | 按文件 / 按 hunk 接受（`Keep` / `Undo`） | **按函数**归并 hunk，函数内默认联动，跨文件签名变更给「关联组」警告 |
+| 沙箱位置 | 要么直接改文件（靠 undo/git 兜底），要么在容器里改 | **内存 Overlay 先改 + 红绿预览 + 一次性落地**，磁盘在审批前零污染 |
+
+---
+
 ## 15. 目录结构
 
 ```
@@ -928,6 +1028,7 @@ code-agent/
 ├─ esbuild.mjs                   # 扩展打包（node 平台，cjs）
 ├─ .vscodeignore                 # vsce 打包排除
 ├─ .gitignore
+├─ .gitattributes                # 统一 LF，避免跨平台整文件 diff
 ├─ CHANGELOG.md
 ├─ README.md                     # 本文件
 ├─ LICENSE                       # Apache-2.0（待定）
@@ -1093,3 +1194,45 @@ git push -u origin main
 
 - 许可证：**Apache-2.0**（待定；含专利授权，适合被集成）。
 - 致谢（设计上借鉴的开源项目）：Cline、Continue.dev、Aider、OpenHands、以及 VS Code 官方扩展样例。具体借鉴点见 [§14](#14-工业界参考)。
+
+---
+
+## 20. 参考资料
+
+### 20.1 VS Code 扩展开发
+
+- Extension Anatomy（扩展三个核心概念：激活事件 / 贡献点 / API）— <https://code.visualstudio.com/api/get-started/extension-anatomy>
+- Extension Manifest（`package.json` 字段全表，`main` / `browser` / `engines` / `capabilities`）— <https://code.visualstudio.com/api/references/extension-manifest>
+- Contribution Points — <https://code.visualstudio.com/api/references/contribution-points>
+- Activation Events（1.74 起的隐式激活说明）— <https://code.visualstudio.com/api/references/activation-events>
+- Extension Host（扩展宿主进程模型）— <https://code.visualstudio.com/api/advanced-topics/extension-host>
+- Webview API 指南（CSP / nonce / `asWebviewUri` / 消息传递）— <https://code.visualstudio.com/api/extension-guides/webview>
+- Chat Participant API — <https://code.visualstudio.com/api/extension-guides/ai/chat>
+- Language Model API（`vscode.lm`）— <https://code.visualstudio.com/api/extension-guides/ai/language-model>
+- Language Model Tool API — <https://code.visualstudio.com/api/extension-guides/ai/tools>
+- AI Extensibility 总览（四种扩展 AI 的路线对比）— <https://code.visualstudio.com/api/extension-guides/ai/ai-extensibility-overview>
+- MCP Developer Guide（VS Code 的 MCP 支持面：tools / prompts / resources / elicitation / sampling / OAuth / roots）— <https://code.visualstudio.com/api/extension-guides/ai/mcp>
+- Workspace Trust — <https://code.visualstudio.com/api/extension-guides/workspace-trust>
+- Bundling & Publishing（vsce / `vscode:prepublish` / PAT）— <https://code.visualstudio.com/api/working-with-extensions/publishing-extension>
+
+### 20.2 协议与模型
+
+- Model Context Protocol 规范（2025-06-18，含 transports / authorization）— <https://modelcontextprotocol.io/specification/2025-06-18>
+- MCP TypeScript SDK — <https://github.com/modelcontextprotocol/typescript-sdk>
+- OpenAI Chat Completions（`tools` / `tool_calls` / 流式）— <https://platform.openai.com/docs/api-reference/chat>
+- Language Server Protocol（`textDocument/documentSymbol`）— <https://microsoft.github.io/language-server-protocol/>
+- tree-sitter（增量解析，用于符号与 repo map）— <https://tree-sitter.github.io/tree-sitter/>
+
+### 20.3 参考项目与工业实践
+
+| 项目 | 为什么值得看 |
+| --- | --- |
+| Cline | VS Code 内最成熟的「Agent + 逐次编辑审批 + checkpoint」实现，宿主与视图分离 |
+| Continue.dev | core / extension / GUI 三层解耦，`@` 上下文提供者、自定义模型（含本地） |
+| Aider | repo map（tree-sitter + 图排序）、多种 edit format、自动 git commit 与测试回路 |
+| Claude Code | agentic search、权限模式、Skills 渐进披露、`/compact` 压缩、MCP 双向 |
+| OpenAI Codex CLI | 平台级沙箱（seatbelt / Landlock+seccomp）与审批模式的最小可用组合 |
+| OpenHands | 容器化 runtime + 事件流架构，研究级 agent 的工程样板 |
+| GitHub Copilot（VS Code 内） | 原生 agent mode 的工具审批、working set 的 Keep / Undo 交互范式 |
+
+（具体机制对照见 [§14](#14-工业界参考)。）
