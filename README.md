@@ -16,6 +16,7 @@
 - [2. 设计原则](#2-设计原则)
 - [3. 术语表](#3-术语表)
 - [4. 总体架构](#4-总体架构)
+  - [4.4 VS Code 扩展的技术基线（要求 + 对接清单）](#44-vs-code-扩展的技术基线要求--对接清单)
 - [5. 模型接入层（OpenAI 兼容）](#5-模型接入层openai-兼容)
 - [6. 三模式设计](#6-三模式设计)
 - [7. Agent 内核与循环](#7-agent-内核与循环)
@@ -207,11 +208,12 @@
 
 | 路线 | 能拿到什么 | 限制 | 本项目取舍 |
 | --- | --- | --- | --- |
-| **Chat Participant API**（`contributes.chatParticipants` + `vscode.chat`） | 直接长在 VS Code 原生 Chat 里：`@participant`、`/slash`、`#context`、原生工具审批 UI、历史记录 | 交互流程被 `ChatRequestHandler` 框住，UI 不可自定义；模型来自 VS Code 已注册的模型 | ❌ 不作为主界面（我们要自定义审批/预览 UI） |
-| **Language Model API**（`vscode.lm.selectChatModels`） | 调用编辑器里可用的模型，`LanguageModelChatMessage` + `lm.registerTool` 原生工具调用 | **只能选已注册的模型**，无法指定 `base_url` 与用户自己的 key | ❌ 与「BYO 端点」冲突 |
-| **自建 HTTP 客户端 + Webview 面板** | 任意 OpenAI 兼容端点、任意 UI、完全掌控循环与审批 | 全部自己实现（流式、工具调用、重试、渲染） | ✅ **v1 主线** |
+| **Chat Participant API**（`contributes.chatParticipants` + `vscode.chat.createChatParticipant`） | 长在 VS Code 原生 Chat 里：`@participant`、`/slash`、`#context`、原生历史与工具审批 UI | 输出只能走 `ChatResponseStream`（markdown 为主，不能自定义 React 树），流程被 `ChatRequestHandler` 框住。**技术上可以在 handler 里自己 `fetch` 任意端点**，限制在 UX 而非网络 | ❌ 不作为主界面（我们要自定义审批/预览 UI） |
+| **Language Model API**（`vscode.lm.selectChatModels`） | 调用编辑器里已注册的模型，`LanguageModelChatMessage` + `registerTool` 原生工具调用 | 只能选**已注册**的模型（典型是 Copilot 提供），受配额与管理员策略约束；不能直接指定 `base_url` | ❌ 不能作为「任意端点」的通道 |
+| **Language Model Chat Provider**（`contributes.languageModelChatProviders` + `lm.registerLanguageModelChatProvider`） | **官方 BYO-key 路径**：把自有端点注册成 VS Code 模型选择器里的一个模型，配置项可用 `"secret": true` 交给 VS Code 存密钥 | 要实现消息/工具调用的双向转换与 token 计数；聊天 UI 仍是 VS Code 的 | 🧪 **加分项**：同一客户端复用到平台 |
+| **自建 HTTP 客户端 + Webview 面板** | 任意 OpenAI 兼容端点、任意 UI、完全掌控循环与审批 | 全部自己实现（流式、工具调用、重试、渲染、可访问性） | ✅ **v1 主线** |
 
-> 🧪 加分项（不冲突）：后续实现 `LanguageModelChatProvider`，把用户自带的端点**注册成 VS Code 的一个模型**，这样在 Copilot Chat 里也能选到「我的 DeepSeek」。这属于「反哺平台」，不改变主架构。
+> 🧪 加分项（不冲突）：后续实现 `contributes.languageModelChatProviders`，把用户自带的端点**注册成 VS Code 的一个模型**，这样在原生 Chat 里也能选到「我的 DeepSeek」。注意两点：一是需要自己实现 `provideLanguageModelChatResponse` 的流式转换；二是 Copilot Business/Enterprise 管理员可以通过策略禁用 BYO key，属正常预期。
 
 #### 4.4.4 Webview 的安全红线
 
@@ -230,7 +232,7 @@
 - 只维护一套客户端 = 只维护一份工具调用解析、一份流式状态机、一份用量统计。
 - 用户「自带端点」是最高优先级需求：只要他有一个能跑 `curl` 的兼容端点，扩展就能用。
 
-> 与 VS Code 官方 `vscode.lm`（Language Model API）的关系：官方 API 只能选「编辑器里已注册的模型」（典型是 Copilot 提供的模型），**无法指定任意 `base_url` 与用户自己的 key**。因此本项目自建 HTTP 客户端，不依赖 `vscode.lm`。🔬 后续可选：同时注册 `LanguageModelChatProvider`，把我们的 BYO 端点反哺给 VS Code 原生 Chat，属于加分项，见 [§14](#14-工业界参考)。
+> 与 VS Code 官方 AI API 的关系：`vscode.lm.selectChatModels`（Language Model API）**只能选编辑器里已注册的模型**，无法直接指定任意 `base_url` 与用户自己的 key，因此不能作为 BYO 通道。真正「官方支持自带端点」的入口是 **Language Model Chat Provider API**（`contributes.languageModelChatProviders`），但它要求你只做「provider 侧」（把端点包装成模型），聊天 UI 与循环仍归 VS Code。本项目 v1 自建客户端以便完全掌控 Agent Loop、审批与预览；🧪 v2 再把同一客户端包装成 Chat Provider 反哺平台，见 [§4.4.3](#443-三条要不要用官方-ai-api-的技术路线)。
 
 ### 5.2 用户配置项
 
@@ -278,6 +280,15 @@
 | `globalState` / `workspaceState` | ❌ | 明文 JSON |
 | 日志/遥测/崩溃上报 | ❌ | 统一走 `redact()` 过滤（`sk-*`、`Bearer *`、URL query 里的 key） |
 | 内存（请求时） | ✅ | 仅存活于发请求的那几毫秒，`AbortSignal` 结束即释放 |
+
+`SecretStorage` 的关键性质（决定了它为什么是唯一正确位置）：**落盘加密**、**不参与 Settings Sync**、桌面端底层走 Electron `safeStorage`（即 OS 凭据库）。相反，`contributes.configuration` 写入的 `settings.json` 是**明文且会随 Settings Sync 同步到其他机器/被 dotfiles 仓库提交**——这是「密钥泄露」最常见的来源。
+
+工业界的额外做法（本项目全部采纳，见 [§12](#12-安全与隐私)）：
+
+- **子进程环境变量清洗**：调用 MCP server / 命令时，把 `*TOKEN*`、`*SECRET*`、`*PASSWORD*`、`*KEY*`、`*AUTH*` 之类的环境变量剔除，避免顺手把 key 递给第三方进程（Claude Code 的做法）。
+- **URL 与错误信息脱敏**：日志与错误提示里把 URL 中的凭据替换成 `REDACTED`，且不打印「展开后」的完整 URL。
+- **凭据类型的显式选择**：像 Codex 那样让用户选 `keyring` / `file` / `ephemeral`，而不是偷偷落到明文文件；本项目只提供 `SecretStorage`，等价于 `keyring`。
+- **反例**：把 key 写进 `config.yaml` / `.env` / YAML 配置是 CLI 工具的常见做法（Continue、Aider 都如此），对一个 GUI 产品来说是不可接受的设计——用户看不到这个文件，也就不会去保护它。
 
 ### 5.4 请求与响应约定
 
@@ -523,15 +534,17 @@ async function* run(session: Session, input: UserTurn): AsyncGenerator<LoopEvent
 
 目标：**让模型在需要的时候看到正确的代码，而不是一次性塞进整个仓库。**
 
-### 8.1 文件清单索引（人可选的「文件列表」）
+### 8.1 文件清单索引（用户可选的「文件列表」）
 
 需求里明确要「根据工作区内所有文件生成一个文件列表，让用户选择指定文件针对性阅读」。实现分三层：
 
 | 层 | 机制 | 说明 |
 | --- | --- | --- |
-| 采集 | `vscode.workspace.findFiles('**/*', excludeGlob, 5000)` | 一次扫描拿全量路径；`exclude` 由三部分合成：内置默认（`**/node_modules/**`、`**/.git/**`、`**/dist/**`、`**/out/**`）+ `.gitignore` 解析（`ignore` 这个 npm 包，逐行匹配）+ 用户配置 `codeAgent.files.exclude` |
-| 过滤 | 扩展名白名单 + 大小上限 + 二进制探测 | 二进制（前 8KB 含 NUL 字节）直接排除；> 512KB 只入索引不给内容 |
+| 采集 | `vscode.workspace.findFiles('**/*', excludeGlob, 5000)` | 一次扫描拿全量路径。`exclude` 传 `undefined` 会应用 `files.exclude`+`search.exclude` 默认值，传 `null` 则**完全不过滤**——这一对语义很容易搞反 |
+| 过滤 | 默认排除 + `.gitignore` 解析 + 扩展名/大小/二进制 | ⚠️ **`findFiles` 不会读 `.gitignore`**，只认 `files.exclude` / `search.exclude`。要尊重 `.gitignore` 必须自己补：用 `ignore` 这个 npm 包（gitignore 规范的完整实现）逐路径 `ignores(relPath)`，或改用 `workspace.findTextInFiles`（ripgrep 后端，`useIgnoreFiles` 默认开）做检索 |
 | 刷新 | `createFileSystemWatcher` 增量更新 | 新增/删除/重命名只更新索引条目，不全量重扫；`.gitignore` 变化时重建 |
+
+具体规则：内置默认（`**/node_modules/**`、`**/.git/**`、`**/dist/**`、`**/out/**`）+ 用户 `files.exclude`/`search.exclude` + `.gitignore` 三份合并；二进制（前 8KB 含 NUL 字节）直接排除；> 512KB 只入索引不给内容。多根工作区里用 `new vscode.RelativePattern(folder, '**/*.ts')` 限定在某个 root 内，否则很容易把别的项目也扫进来。
 
 UI 有三处：
 
@@ -624,7 +637,7 @@ interface ContextBudget {
 
 ## 10. 沙箱改动（Sandbox Staging）
 
-### 10.1 三种「沙箱」，先分清
+### 10.1 四种「沙箱」，先分清
 
 | 级别 | 机制 | 防什么 | 本项目 |
 | --- | --- | --- | --- |
@@ -720,6 +733,16 @@ await vscode.workspace.applyEdit(wsEdit);            // 一个 undo 步，只触
 2. **一次 `applyEdit` = 一个撤销单元**：用户 `Ctrl+Z` 能整体回退这次审批，符合直觉。
 3. **apply 前重算偏移**：文本可能被用户改过，按上下文行重新定位后再生效；定位失败就标 conflict 并跳过该 hunk。
 
+工业界可复用的三件工具（本项目在 L2 层可选接入，不引入新依赖时用 `diff` 这个 npm 包即可）：
+
+| 工具 | 用途 | 关键点 |
+| --- | --- | --- |
+| `git apply --recount --unidiff-zero` | 把「用户只选了一部分 hunk」的补丁打上去 | 拆/合并 hunk 后 `@@` 里的行数就不准了，`--recount` 让它按内容重算；配合 `-U0` 时还要 `--unidiff-zero` 才不要求上下文行 |
+| `git apply --check` / `-C<n>` | 预演，不做实际写入 | 用于「这个提案还打得进去吗」的快速判断 |
+| jsdiff 的 `structuredPatch` / `applyPatch` / `reversePatch` | 纯 JS 的 hunk 解析、应用、反向应用 | `structuredPatch` 产出的 `hunks[]` 正是我们 `Hunk` 结构的原型；`reversePatch` 是「撤销本次改动」的现成实现；`applyPatch` 有 `fuzzFactor` 可以容忍轻微漂移 |
+
+⚠️ **不要承诺多文件原子性**。`git apply` 的默认行为是「一个补丁文件里任何 hunk 失败就整体不落地」，这是**单补丁内**的原子；跨文件的「要么全成要么全不成」在文件系统层面没有事务，只能做「先在内存里把每个文件都算好、全部成功才逐个写」，并如实报告哪几个文件写成功。`patch-package` 也是这个策略（默认整 patch 原子，`--partial` 才显式降级）。
+
 ### 10.5 一致性与回滚
 
 - **半截重构**是「逐条接受」的固有风险（改了签名却只接受一半调用点）。缓解见 [§11.4](#114-部分接受的一致性)。
@@ -740,6 +763,8 @@ await vscode.workspace.applyEdit(wsEdit);            // 一个 undo 步，只触
 
 ## 11. 变更预览与逐函数审批
 
+> 先说一个容易踩空的事实：**主流产品的「审阅」是事后确认，不是事前拦截**（Copilot/Cursor 的 `Keep`/`Undo`、Cline 的 diff 卡片 + 影子 git、Claude Code 的「写前询问 + `/rewind`」）。我们选择「审批前磁盘零改动」是**少数派**设计，理由与代价都在 [§14.10](#1410-一个必须承认的事实主流是先写盘再-keepundo) 里摊开写了。这一节讲怎么做。
+
 ### 11.1 预览怎么画「红删绿增」
 
 VS Code 的 diff 编辑器**原生**就是这个语义：左侧（Original）被删的行标红、右侧（Modified）新增的行标绿，行内还有字符级高亮。所以我们要做的不是「自己画颜色」，而是**给 diff 编辑器喂两份内容**：
@@ -756,18 +781,21 @@ await vscode.commands.executeCommand('vscode.diff',
   `${basename} — 改动预览（已删除 / 新增）`,
   { preview: true, preserveFocus: true });
 
-// 3) 多文件总览：内置「多文件 diff 编辑器」
-await vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
-  title: 'Code Agent 改动（3 个文件）',
-  resources: files.map(f => ({ originalUri: base(f), modifiedUri: proposed(f) }))
-});
+// 3) 多文件总览：用**公开**的 changes 编辑器（推荐）
+//    resourceList: [修改后 uri, 修改前 uri | undefined, 基准 uri | undefined][]
+await vscode.commands.executeCommand('vscode.changes',
+  'Code Agent 改动（3 个文件）',
+  files.map(f => [f.uri, base(f), base(f)]));
 ```
 
-> 🔬 第 3 步用的是 VS Code 内部命令（`_` 前缀），**不属于稳定 API**，跨版本可能变。因此必须实现降级：多文件总览打不开时，退化为「在面板里点文件名，逐个打开 `vscode.diff`」，功能不缺失。同理，diff 编辑器的「折叠未改动区域」(`hideUnchangedRegions`) 长期在 proposed 状态，不要依赖它，自己按 hunk 生成带上下文的窄范围预览即可。
-
-- 虚拟文档必须 `readonly`（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象。
+- 第 3 步优先用**有文档的** `vscode.changes`（内置「更改编辑器」/ multi-diff），它是 agent 做「一次审阅全部改动」的稳定入口。
+- `_workbench.openMultiDiffEditor` 是**内部命令**（`_` 前缀、不在公开命令列表里、未被版本化），参数形如 `{ resources: [{originalUri, modifiedUri}], label, reveal }`。它比 `vscode.changes` 多一个 `reveal`（定位到某个改动），但**会随版本变化、且在有分叉的编辑器（Cursor/Windsurf/Theia）里可能不可用**。策略：能用 `vscode.changes` 就够，需要「精确跳转到某个函数」时先试 `_workbench`，失败静默回退。
+- 红色/绿色**不是我们画的**：它由 diff 编辑器根据「两份文档内容的差异」自动渲染。我们唯一要做的是保证两侧内容正确。
+- ⚠️ 一个真实的坑：diff 编辑器默认 `ignoreTrimWhitespace: true`，**只改缩进的改动会显示成「无变化」**。审核场景必须把它设成 `false`（或在提案里强制统一缩进风格）。另可配 `renderSideBySide`、`diffAlgorithm`、`maxComputationTime`。
+- 虚拟文档必须**只读**（`TextDocumentContentProvider` 天然只读），防止用户在预览里手改造成假象；同时注意虚拟文档是「一等公民」，会出现在 `workspace.textDocuments` 和 `onDidOpenTextDocument` 里，所有遍历文档的代码都要先 `if (doc.uri.scheme.startsWith('codeagent-'))` 跳过。
 - 目录级新增/删除文件：新建文件用「空内容 → 新内容」的 diff，删除文件用「原内容 → 空内容」的 diff，语义一致。
 - 预览 URI 里带上 `?cs=<changeSetId>`，这样同一文件在两次提案中会得到两个独立 tab，不会互相覆盖缓存。
+- **更进一步的集成：QuickDiff**。如果希望「红绿标记直接长在真实文件里、且每个改动点旁边有接受/拒绝按钮」，可以用 SCM 的 `scm.createSourceControl()` → `quickDiffProvider.provideOriginalResource(uri)` 提供「原始内容」，再往 `contributes.menus["scm/change/title"]` 挂命令——它的 handler 签名是 `(uri, changes: LineChange[], index)`，**VS Code 已经把 diff 拆成了逐个 `LineChange` 并告诉你当前聚焦的是哪一个**，等于白送「逐 hunk 接受」的 gutter UI。代价是它要求把改动**先写进真实文件**（QuickDiff 的语义是「工作区 vs 某个基准」），与我们的「审批前零污染」相冲突，所以作为 v2 的可选模式。
 
 ### 11.2 从 hunk 到「函数单元」
 
@@ -929,13 +957,13 @@ allowed_tools: [read_file, search_code, file_outline, propose_patch]
 
 | 项目 | 形态 | 编辑怎么落地 | 执行隔离 | 上下文怎么找 | 循环/预算 | 记忆与规则 |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Cline** | VS Code 扩展（宿主 ↔ Webview 分离） | 每次编辑以 diff 呈现，用户确认；支持自动批准；有 checkpoint 可回滚 | 借用 VS Code 终端，命令逐条确认 | 文件提及 + 工具自主读取 + 自动截断 | 请求数/预算上限 + 用户随时打断 | `.clinerules` |
-| **Continue.dev** | core（Node 服务）+ 扩展 + GUI 三层 | IDE 内 diff，逐 hunk 接受/拒绝 | 无（不执行） | `@` 上下文提供者 + 代码库索引（embedding） | 单轮为主，agent 模式有步数限制 | rules / prompt files |
-| **Aider** | 终端 CLI | 直接改文件 + 自动 git commit（可逐次审阅/回滚） | 无（在本机跑） | **repo map**：tree-sitter 符号 + 引用图排序 | 多轮 edit，测试/ lint 回路可限次 | `CONVENTIONS.md`、`.aider.conf.yml` |
-| **Claude Code** | 终端 agent | 写入前展示 diff 并按权限模式确认 | OS 级沙箱（bash 工具）+ 权限模式 | **agentic search**：glob/grep 自主检索，无预建索引 | 权限门 + 上下文自动压缩 + 中断 | `CLAUDE.md`、Skills、subagents、hooks |
-| **Codex CLI** | 终端 CLI（Rust） | 结构化 patch 工具（`apply_patch`） | **默认沙箱**：macOS seatbelt / Linux Landlock+seccomp | 自主检索 | 审批模式 + 沙箱网络策略 | `AGENTS.md` |
-| **OpenHands** | 服务化平台 | 在容器内直接改文件，改动经事件流记录 | **Docker runtime**（容器即执行环境） | 文件浏览 + 检索工具 | 事件流 + 迭代上限 + 可恢复状态 | 会话状态持久化 |
-| **GitHub Copilot（VS Code）** | 原生集成 | working set + **Keep / Undo** 逐 hunk 审阅 | 工具审批（命令需确认） | `#` 上下文引用 + 内置检索 | 工具审批门 + 停止按钮 | `.github/copilot-instructions.md`、`AGENTS.md` |
+| **Cline** | VS Code 扩展（宿主 ↔ Webview 分离） | 每次工具调用前审批（按 read/edit/command/browser/MCP 分类可自动批准）；编辑走 diff 卡片；**Checkpoints = 影子 git 仓库**，可 Compare / Restore | 扩展内**无 OS 沙箱**，边界是逐调用人工审批；命令风险由模型用 `requires_approval` 标注（不是固定白名单） | 文件提及 + 工具自主读取 + 自动截断 | 请求数/预算上限 + 随时打断；长命令 30s 提醒 | `.clinerules/`、根 `AGENTS.md`、`~/.agents/AGENTS.md` |
+| **Continue.dev** | core（Node）+ 扩展 + GUI 三层 | **真实文件内的行内 diff**，逐 change 接受/拒绝（`Cmd+Opt+Y/N`，全部接受 `Cmd+Shift+Enter`） | 无执行 | 原 `@Codebase`（本地 embedding + 关键词 + rerank）**已弃用**，转向 agentic 探索 + rules + MCP | 单轮为主 | `rules` 每次都拼进 system（always-on 成本） |
+| **Aider** | 终端 CLI | 直接改文件 + **每次改动自动 git commit**（可回滚） | 无（可 `--docker`） | **repo map**：tree-sitter 符号 + 依赖图 **graph ranking**，`--map-tokens` 默认 **1k** | 编辑失败重试 `max_reflections` 默认 **3**；`--auto-lint` 默认开 | `CONVENTIONS.md`、`.aider.conf.yml` |
+| **Claude Code** | 终端 agent | **写前按权限确认**（无 hunk 级接受）；事后用 checkpoint + `/rewind` 回滚 | **最强 OS 沙箱**：macOS Seatbelt / Linux bwrap+socat（可选 seccomp）；写=cwd+临时目录，读=整机（含凭据文件），网络默认走本地代理且 `allowedDomains` 为空 | **agentic search**（glob/grep/read），无预建索引 | `max_turns` / `max_budget_usd`（默认不设限，超支最多一个响应）；压缩 thrashing 会主动报错；`Esc` 取消 | `CLAUDE.md`（建议 <200 行）、Skills、subagents、hooks |
+| **Codex CLI** | 终端 CLI（Rust） | 结构化 `apply_patch` 工具 | **默认沙箱** + 审批策略正交：`sandbox_mode` = read-only / workspace-write / danger-full-access；Linux 用 Landlock（+bwrap 路径），Windows 有受限令牌沙箱 | 自主检索 | `approval_policy` = on-request / granular / never；`circuit_break_action` | `AGENTS.md`、`TrustLevel` |
+| **OpenHands** | 服务化平台 | 在容器内直接改，改动进事件流 | **容器即执行环境**：`DockerWorkspace` 起 container 内 agent-server（对比 `LocalWorkspace` 无隔离） | 文件浏览 + 检索工具 | **StuckDetector**（滑窗模式匹配检测重复动作循环）+ 每步可中断 + `WAITING_FOR_CONFIRMATION` | 事件流持久化、会话状态可恢复 |
+| **GitHub Copilot（VS Code）** | 原生集成 | **Working Set** + 逐个 inline change 的 **Keep / Undo**（或全部）；`chat.editing.autoAcceptDelay` 可延时自动接受 | 工具审批（敏感文件 glob 可强制审批，如 `.env`、`.vscode/*.json`） | `#` 上下文引用 + 内置检索 | 工具审批门 + 停止按钮 | `.github/copilot-instructions.md`、`AGENTS.md` |
 
 ### 14.2 Agent Loop 的三个流派
 
@@ -949,72 +977,119 @@ allowed_tools: [read_file, search_code, file_outline, propose_patch]
    所有动作都是事件（`Action` / `Observation`），由 `EventStream` 串联，`State` 可序列化 → 天然支持「暂停/恢复/回放/多人观察」。
    优点：可观测性最好，适合做产品级审计；缺点：工程复杂度高。
 
-**我们的选择**：以流派 1 为骨架（`AgentLoop` 已经是「事件 → 状态」的形式，向流派 3 靠），并在 Builder 模式对「涉及 ≥3 个文件」的任务自动插入一个 **Plan 阶段**（流派 2 的轻量版），计划以清单形式给用户看一眼再执行。
+**我们的选择**：以流派 1 为骨架（`AgentLoop` 已经是「事件 → 状态」的形式，向流派 3 靠），并在 Builder 模式对「涉及 ≥3 个文件」的任务自动插入一个 **Plan 阶段**（流派 2 的轻量版），计划以清单形式给用户看一眼再执行。另外吸收两个已验证的细节：**只读工具并发执行、写类工具串行执行**（Claude Code 的做法，既快又不打架）；**审批是循环的一等事件**而不是事后补丁（Codex 把 `approval_policy` 做成了协议字段）。
 
 ### 14.3 沙箱：四个层级，越往下越「真隔离」
 
 ```
-L0 无隔离           直接写文件、直接跑命令            ← 只在可信环境、单人本地可接受
-L1 审批隔离         改一次问一次；命令一条条确认       ← Cline、Copilot、本项目 v1（改文件侧）
-L2 OS 级沙箱        seatbelt / Landlock+seccomp / bwrap ← Codex CLI、Claude Code（bash）
-L3 容器/微虚拟机     Docker、gVisor、Firecracker        ← OpenHands；云端/后台 agent 跑在云主机或 VM 里
+L0 无隔离           直接写文件、直接跑命令              ← 只在可信环境可接受
+L1 审批隔离         改一次问一次；命令一条条确认         ← Cline（扩展内）、Copilot、本项目 v1（改文件侧）
+L2 OS 级沙箱        写白名单 + 读黑名单 + 网络走代理     ← Claude Code：Seatbelt / bwrap+socat(+seccomp)
+L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands（DockerWorkspace）；云端 agent 用 VM
 ```
 
-关键判断：**「改文件」和「执行代码」需要的隔离级别不同**。改文件只需要 L1（用户审批 + 可回滚）；执行代码必须有 L2/L3，否则模型的 `rm -rf` 会直接作用在你的机器上。本项目 v1 只做 L1 且默认不执行命令，就是为了不在没有 L3 的情况下埋雷。
+**关键判断**（也是本项目最重要的一条安全结论）：**「改文件」和「执行代码」需要的隔离级别不同。**
+- 改文件只需要 L1（用户审批 + 可回滚）。所以 Cline 的扩展版敢在没有 OS 沙箱的情况下工作：它的边界是「每个工具调用都要你点一次」。
+- 执行代码必须有 L2/L3。因为**审批是可以被「说服」的**：一次 prompt injection 就能让模型写出一条看起来无害的命令，而用户点了「同意」。Claude Code 的沙箱配置恰好说明了这个思路：即使模型被骗，内核层也只允许写 cwd 与临时目录、网络默认无直连。
+- 一个诚实的边界说明：Claude Code 的**文件工具、MCP server、hooks、LSP 都跑在沙箱之外**，原生 Windows 下也不沙箱化。也就是说「有沙箱」不等于「所有路径都被沙箱覆盖」，读 README 的人应该知道这一点。
+
+本项目 v1 只做 L1 且默认不执行命令，就是为了不在没有 L3 的情况下埋雷；`run_command` 一旦启用，必须同时具备 L2/L3，见 [§10.6](#106-v1-的沙箱边界与后续演进)。
 
 ### 14.4 API Key 隐私：两条路线
 
 | 路线 | 做法 | 代表 | 代价 |
 | --- | --- | --- | --- |
-| **本地持有** | key 存 OS 凭据库（VS Code `SecretStorage` → Keychain/DPAPI/libsecret），请求从本机直连模型端点 | Cline、Continue、Codex CLI、本项目 | 用户自付账单；每家厂商要自己配 |
-| **云端代管** | key 上传到服务端加密存储，请求经服务端代理；或干脆用订阅额度 | 商业 IDE / 订阅制产品 | 需要信任服务端；有合规与泄露面 |
+| **本地持有** | key 存 OS 凭据库（VS Code `SecretStorage` → Electron `safeStorage` → Keychain/DPAPI/libsecret），请求从本机直连模型端点 | Cline（扩展内）、Claude Code（Keychain / 0600 文件 / 用户 ACL）、Codex（`keyring`/`file`/`ephemeral`）、本项目 | 用户自付账单；每家厂商要自己配 |
+| **云端代管** | key 上传到服务端加密存储，请求经服务端代理；或干脆用订阅额度 | 商业订阅制产品、Cline 的托管额度、企业远程配置注入 org key | 需要信任服务端；有合规与泄露面 |
 
-本项目的红线（写进 `SECURITY.md`）：**没有后端、没有中转、没有遥测**。这也意味着我们能诚实地说「你的代码只发给你自己填的那个 URL」。日志脱敏与「诊断包导出剔除敏感内容」见 [§12.1](#121-密钥)。
+本项目的红线（写进 `SECURITY.md`）：**没有后端、没有中转、没有遥测**。所以能诚实地说「你的代码只发给你自己填的那个 URL」。可借鉴的工程细节：环境变量清洗（`*TOKEN*`/`*SECRET*`/`*KEY*`/`*AUTH*`）、URL 与错误信息里的凭据一律 `REDACTED`、日志用 `SecretStr`/`RedactedString` 包装（OpenHands 的 Secret Registry 是「内存态 + 打码日志」最干净的实现）。详见 [§12.1](#121-密钥)。
 
 ### 14.5 Skill 与 MCP：两种扩展方式的定位
 
-- **MCP** 解决「**能力**」扩展：工具/资源/提示词由外部进程或远端服务提供，协议标准化，跨客户端复用。客户端要做的事：拉 `tools/list` → 转成模型的 function schema → 调用前审批（`readOnlyHint` 可免确认，VS Code 原生就是这么做的）→ 结果回填。
-- **Skill** 解决「**知识**」扩展：把「某类任务该怎么做」写成 Markdown，靠**渐进披露**控制成本 —— 先只暴露 `name + description`，模型判断需要时才加载正文。Claude Code 的 Agent Skills 是这个模式最完整的实现。
+- **MCP** 解决「**能力**」扩展：JSON-RPC 控制面，服务器暴露 **tools / resources / prompts**，客户端还要实现 sampling / roots / elicitation。传输是 `stdio`（本地子进程）与 **Streamable HTTP**（旧 `sse` 已弃用）。客户端流程：`tools/list` → 转成模型的 function schema → 调用前审批 → 结果回填。
+- **命名空间**：`mcp__<server>__<tool>`（Claude Code 就是这个格式，本项目直接对齐；插件的嵌套 server 再加一层 `mcp__plugin_<plugin>_<server>__<tool>`）。**这不是审美问题**：不加前缀，两个 server 都提供 `search` 时模型会随机调一个，而且审批弹窗没法告诉用户「这是哪个 server 的能力」。
+- **MCP 的真实难点是上下文成本**，不是协议。几十个工具、每个几百 token 的 schema，会直接把窗口吃掉。工业界的解法值得抄：**默认只注入名字 + 服务器说明，正文按需加载（tool search）**；**工具输出设硬上限**（Claude Code 是 25k token 上限、10k 开始告警、超过 50k 字符就落到临时文件并只给路径）；超大 HTTP body 直接失败。
+- **Skill** 解决「**知识**」扩展：把「某类任务该怎么做」写成 Markdown，靠**渐进披露**控制成本。三层加载：`name + description` 常驻（每个约 100 token）、正文只在被使用时加载（Cline 建议 <5k token）、附带的脚本/文档只在被引用时读。Claude Code 的 Agent Skills 是这个模式最完整的实现（`description` 决定自动触发，`allowed-tools` 收窄权限，`context: fork` 让技能在子 agent 里跑）。
+- 反例：把 `rules` **每次都拼进 system message**（Continue 的做法）实现简单，但装 20 条规则就是常驻的几千 token「上下文税」。本项目采用「规则短小常驻 + 长知识做成 skill」的组合。
 - 两者互补：Skill 告诉模型「该按什么流程做」，MCP 告诉模型「能用什么工具做」，内置 Tool 提供「编辑器里必须做的事」（读写、diff、审批）。
 
 ### 14.6 防死循环：工业界的「五道闸」
 
-| 闸 | 常见做法 |
+| 闸 | 工业界的真实实现 |
 | --- | --- |
-| 步数/迭代上限 | 硬上限（如 25~50 步），到顶就停并汇报进度 |
-| 预算上限 | 按 token / 按美元累计，超阈值停止 |
-| 重复检测 | 对 `(tool, args)` 或输出做哈希，重复即注入纠正提示 |
-| 无进展检测 | 连续 N 步没有新增文件/没有新信息 → 判定卡住 |
-| 人工闸门 | 每次写文件/执行命令都要审批（本身就是最强的防跑偏机制） |
+| 步数/迭代上限 | Claude Code 的 `max_turns`（Agent SDK，**默认不设限**）、OpenHands 的迭代上限、Aider 的 `max_reflections`（默认 3） |
+| 预算上限 | Claude Code 的 `max_budget_usd`；诚实的坑：预算在**响应返回后**才结算，因此可能超支「一个响应 + 仍在跑的子 agent」 |
+| 重复/无进展检测 | OpenHands 的 **StuckDetector**（对事件流做滑窗模式匹配，识别「重复同一动作循环」）；Claude Code 的**压缩 thrashing 检测**（压缩后一个超大文件立刻又把窗口填满 → 主动报错而不是无限压缩） |
+| 熔断 | Codex 的 `circuit_break_action`（`default` / `strict`）用结构化错误中断 |
+| 人工闸门 | Cline / Copilot 的逐工具审批；Codex 的 `approval_policy`；Claude Code 的权限模式（deny → ask → allow 的优先级） |
 
-外加一个经常被忽略的：**可取消性**。所有 I/O（LLM 请求、工具执行）都必须接 `AbortSignal`，否则「停止」按钮只是摆设。
+外加一个经常被忽略的：**可取消性**。所有 I/O（LLM 请求、工具执行）都必须接 `AbortSignal`，否则「停止」按钮只是摆设。Claude Code 的 `Esc` 能取消**正在执行的工具调用**，而不只是停止生成，这是合格线。
+
+还有一个反直觉的经验：**上限不要「一撞就死」**。先把「你重复了同一个调用」作为一条系统提示注入，往往能自愈；连续多次再硬停。本项目 [§7.3](#73-循环守卫防死循环--防烧钱) 的阈值就是这么定的。
 
 ### 14.7 上下文记忆：三种检索流派与三种记忆层次
 
 **检索流派**：
 
-| 流派 | 做法 | 优点 | 缺点 | 代表 |
-| --- | --- | --- | --- | --- |
-| agentic search | 给模型 grep/glob/read 工具，让它自己找 | 无需索引、永远最新、可解释 | 多轮往返、依赖模型规划能力 | Claude Code、Codex CLI、Cline |
-| 结构索引 | tree-sitter 抽符号 + 引用图 → 压成 repo map | token 效率极高、跨文件任务强 | 需要语言支持、图构建有成本 | Aider |
-| 向量索引 | 全库 embedding + 相似度召回 | 语义召回强（自然语言问「哪里做鉴权」） | 索引陈旧、成本、隐私面 | Continue 代码库索引 |
+| 流派 | 做法 | 优点 | 缺点 | 代表 | 现状 |
+| --- | --- | --- | --- | --- | --- |
+| agentic search | 给模型 grep/glob/read 工具，让它自己找 | 无需索引、永远最新、可解释 | 多轮往返、依赖模型规划能力 | Claude Code、Codex CLI、Cline | **主流** |
+| 结构索引 | tree-sitter 抽符号 + 依赖图排序 → 压成 repo map | token 效率极高、跨文件任务强 | 需要语言支持、图构建有成本 | Aider（`--map-tokens` 默认 1k，无文件时 ×2） | 稳定有效 |
+| 向量索引 | 全库 embedding + 相似度召回 | 语义召回强 | 索引陈旧、成本、隐私面 | Continue 原 `@Codebase` | **已弃用** |
 
-**记忆层次**：工作记忆（当前 messages）→ 压缩摘要（会话级）→ 长期项目记忆（`AGENTS.md` / `CLAUDE.md` / `.clinerules` / `.cursor/rules` 这类**跟着 git 走**的规则文件）。
+最后一行是最有信息量的：Continue 的 `@Codebase` 曾经是「本地 embedding + 关键词 + LLM rerank（25 召回 → 重排 → 5 条入上下文）」的标杆实现，但**现在已被官方标记为 deprecated，转向 agentic 探索 + MCP（如 DeepWiki/Context7）补充库外知识**。这让本项目「默认不上向量索引」的取舍有了直接依据，而不是偷懒。
 
-### 14.8 我们直接采纳的五个决定
+**压缩（compaction）**：主流做法都是「**先清工具输出，再摘要历史**」——因为工具输出（大文件、长日志）通常占了窗口的一半以上，且复用价值最低。代价是压缩是有损的：Claude Code 在压缩后要**重新注入** system prompt、项目记忆、计划、以及「最近修改的 5 个文件」，技能正文按 5k/技能、25k 总量重新注入。这条经验直接对应本项目的 [§8.4](#84-压缩与记忆)。
+
+**记忆层次**：工作记忆（当前 messages）→ 压缩摘要（会话级）→ 长期项目记忆（`AGENTS.md` / `CLAUDE.md` / `.clinerules` / `.cursor/rules` 这类**跟着 git 走**的规则文件）。跨工具正在收敛：Claude Code 在没有 `CLAUDE.md` 时会读 `AGENTS.md`，`/init` 还能导入 `.cursor/rules`、`.clinerules`、`.github/copilot-instructions.md`。本项目因此**优先读 `AGENTS.md`**，`.codeagent/rules/` 作为补充。
+
+### 14.8 我们直接采纳的六个决定
 
 1. **编辑必须逐次审批**（Cline / Copilot 的共识），且审批粒度做到函数级 —— 比业界常见的 hunk 级更贴「改一个函数」的心智模型。
-2. **默认不执行命令**，一旦执行必须沙箱化（Codex CLI / OpenHands 的教训）。
+2. **默认不执行命令**，一旦执行必须沙箱化（Codex / Claude Code / OpenHands 的教训）。
 3. **无后端、key 本地**（开源阵营的共识），用 `SecretStorage` 而不是 `settings.json`。
-4. **agentic search 优先，向量索引可选**（Claude Code 的做法），先把「模型会自己找代码」跑通。
-5. **MCP 做能力、Skill 做知识、内置工具做编辑器**（VS Code 原生 MCP 支持的思路）。
+4. **agentic search 优先，向量索引不做**（Claude Code 的做法 + Continue 弃用 embedding 的旁证）。
+5. **MCP 做能力、Skill 做知识、内置工具做编辑器**，且 MCP 工具名加 `mcp__<server>__` 前缀。
+6. **只读工具并发、写工具串行、审批是一等事件**（Claude Code 与 Codex 的结构性做法）。
 
 ### 14.9 我们刻意不同的两点
 
 | 差异点 | 工业常见 | 本项目 |
 | --- | --- | --- |
-| 审批粒度 | 按文件 / 按 hunk 接受（`Keep` / `Undo`） | **按函数**归并 hunk，函数内默认联动，跨文件签名变更给「关联组」警告 |
-| 沙箱位置 | 要么直接改文件（靠 undo/git 兜底），要么在容器里改 | **内存 Overlay 先改 + 红绿预览 + 一次性落地**，磁盘在审批前零污染 |
+| 审批粒度 | 按文件 / 按 hunk 接受（`Keep` / `Undo`），或干脆只有「写前确认」 | **按函数**归并 hunk，函数内默认联动，跨文件签名变更给「关联组」警告 |
+| 改动与磁盘的关系 | 主流是**先写盘、再 Keep/Undo**；少数用容器隔离 | **内存 Overlay 先改 + 红绿预览 + 一次性落地**，磁盘在审批前零污染 |
+
+### 14.10 一个必须承认的事实：主流是「先写盘，再 Keep/Undo」
+
+这是本次调研最反直觉、也最该写进文档的发现。VS Code 官方文档对「待审改动」的定义非常明确：
+
+> Pending means that you can keep or undo the **saved** edit. It doesn't mean that the edit is waiting to be written to disk.
+
+也就是说，Copilot / Cline / Cursor 这一类产品的「审阅」是**事后确认**（`Keep` / `Undo`），而不是**事前拦截**（`Save` / `Reject`）。词表也印证了这一点：`Keep` 是承认一个**已经发生**的写入，`Save` 才是执行写入。Cline 靠影子 git 提供 `Compare` / `Restore` 兜底，Claude Code 干脆不做 hunk 级接受、只做「写前按权限询问」+ `/rewind` 回滚。
+
+**为什么本项目仍然选「先审后写」**：
+
+| 理由 | 说明 |
+| --- | --- |
+| 零污染 | 审批前磁盘完全没变，不会出现「文件已经被改了，但没人知道哪些是 AI 改的」；对「在一个脏工作区里用 AI」的场景尤其重要 |
+| 撤销粒度正确 | `Keep/Undo` 的撤销单位是「这次改动块」，一旦用户在同一文件里有自己的编辑，撤销就会互相干扰；Overlay 的撤销就是「丢掉提案」，永不会碰到用户的东西 |
+| 冲突可控 | 提案带着基线 hash，落地前能明确检测「文件已被你改过」，而不是覆盖掉 |
+| 代价 | 预览必须自己搭（虚拟文档 + diff），比「直接用真实文件 + Keep/Undo」多一倍工作量；跨文件签名重构的「半截接受」风险需要额外设计（见 [§11.4](#114-部分接受的一致性)） |
+
+结论：这不是「我们比工业界更先进」，而是**用更多工程量换一个更保守的语义**。如果后期实测发现用户在「逐函数审批」上摩擦太大，`granularity: file` + 自动应用 + 影子 git checkpoint 就是现成的降级路线（也是 Cline 的路线）。
+
+### 14.11 值得抄进代码里的具体数字
+
+| 参数 | 参考值 | 出处 |
+| --- | --- | --- |
+| 代码压缩触发点 | 窗口的 65%（Codex 后台压缩）~ 80%（本项目） | Codex 配置 |
+| Claude Code 自动压缩阈值 | 1M 模型约在 967K；未知模型 ID 按 200K 处理 | Claude Code 文档 |
+| 压缩后重注入 | 最近修改的 5 个文件；技能正文 5k/个、25k 总量 | Claude Code 文档 |
+| 项目记忆文件建议长度 | `CLAUDE.md` < 200 行；自动记忆 `MEMORY.md` 只读前 200 行 / 25KB | Claude Code 文档 |
+| MCP 工具输出上限 | 25k token（10k 告警，>50k 字符落盘只给路径） | Claude Code 文档 |
+| repo map 预算 | `--map-tokens` 默认 1k，无文件入上下文时 ×2 | Aider 文档 |
+| 技能元数据成本 | ~100 token / 技能，正文 < 5k token | Cline 文档 |
+| 编辑失败重试 | Aider `max_reflections` = 3 | Aider 源码 |
 
 ---
 
@@ -1236,3 +1311,30 @@ git push -u origin main
 | GitHub Copilot（VS Code 内） | 原生 agent mode 的工具审批、working set 的 Keep / Undo 交互范式 |
 
 （具体机制对照见 [§14](#14-工业界参考)。）
+
+### 20.4 各项目文档（调研时实际查阅）
+
+- Claude Code：agent loop / permissions / sandboxing / context window / skills / memory / checkpointing — <https://code.claude.com/docs/en/agent-sdk/agent-loop>、<https://code.claude.com/docs/en/sandboxing>、<https://code.claude.com/docs/en/context-window>、<https://code.claude.com/docs/en/skills>、<https://code.claude.com/docs/en/checkpointing>
+- Cline：tools / auto-approve / checkpoints / skills — <https://docs.cline.bot/tools-reference/all-cline-tools>、<https://docs.cline.bot/features/auto-approve>、<https://docs.cline.bot/core-workflows/checkpoints>、<https://docs.cline.bot/customization/skills>
+- Continue：rules / edit diff 行为 / `@Codebase` 弃用说明 — <https://docs.continue.dev/reference>、<https://docs.continue.dev/ide-extensions/edit/how-it-works>、<https://docs.continue.dev/reference/deprecated-codebase>
+- Aider：repo map / 配置项（`--map-tokens`、`--max-chat-history-tokens`）— <https://aider.chat/docs/repomap.html>、<https://aider.chat/docs/config/options.html>
+- OpenHands：架构总览 / 安全 / 上下文压缩 — <https://docs.openhands.dev/sdk/arch/overview>、<https://docs.openhands.dev/sdk/guides/security>
+- Codex：配置说明（`sandbox_mode` / `approval_policy`）— <https://github.com/openai/codex>
+- VS Code 官方「审阅 AI 改动」行为（`Keep`/`Undo`、pending 语义）— <https://code.visualstudio.com/docs/agents/run/review-code-edits>
+- JetBrains AI Assistant 的逐改动 Accept/Revert gutter — <https://www.jetbrains.com/help/ai-assistant/find-and-fix-problems-with-ai.html>
+- Google《Software Engineering at Google》第 19 章 Critique（intraline diff、move detection、reviewed 标记）— <https://abseil.io/resources/swe-book/html/ch19.html>
+
+### 20.5 diff / patch 的格式与算法
+
+- GNU diffutils 统一 diff 格式（`-U3` 上下文约定）— <https://www.gnu.org/software/diffutils/manual/html_node/Unified-Format.html>
+- `git diff`（`myers`/`minimal`/`patience`/`histogram`、`--indent-heuristic`）— <https://git-scm.com/docs/git-diff>
+- `git apply`（`--recount`、`--unidiff-zero`、`--check`、`--3way`、`-R`）— <https://git-scm.com/docs/git-apply>
+- `git worktree`（多工作树、`--detach`、`--no-checkout`）— <https://git-scm.com/docs/git-worktree>
+- jsdiff（`structuredPatch` / `applyPatch` / `reversePatch`，hunk 级接受的数据模型）— <https://github.com/kpdecker/jsdiff>
+- diff-match-patch（字符级高亮；不宜作为接受/拒绝的记账层）— <https://github.com/google/diff-match-patch>
+- patch-package（「整文件原子应用 + `--partial` 显式降级」的策略范本）— <https://github.com/ds300/patch-package>
+- Monaco / VS Code diff 编辑器选项（`renderSideBySide`、`ignoreTrimWhitespace` 默认 true、`diffAlgorithm`、`maxComputationTime`）— <https://microsoft.github.io/monaco-editor/typedoc/interfaces/editor_editor_api.editor.IDiffEditorBaseOptions.html>
+- difftastic（结构化 diff 的可视化；**明确不生成可应用 patch**）— <https://github.com/Wilfred/difftastic>
+- Mergiraf（语法感知合并，可用于「过期提案自动 rebase」）— <https://mergiraf.org>
+- VS Code SCM QuickDiff（`quickDiffProvider` + `scm/change/title` 菜单的 `LineChange[]`）— <https://code.visualstudio.com/api/extension-guides/scm-provider#quick-diff>
+- `vscode.changes` 命令（公开的多文件 diff 入口）— <https://code.visualstudio.com/api/references/commands>
