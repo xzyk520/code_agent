@@ -1,0 +1,25 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+webview/dist/
+*.vsix
+*.tsbuildinfo
+
+# 测试与覆盖率
+.vscode-test/
+coverage/
+
+# 本地/机密：绝不提交
+.env
+.env.*
+*.pem
+*.key
+.codeagent/backup/
+.codeagent/cache/
+.vscode/settings.local.json
+
+# 编辑器/系统噪音
+.DS_Store
+Thumbs.db
+*.log
