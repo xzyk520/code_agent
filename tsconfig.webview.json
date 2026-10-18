@@ -1,0 +1,21 @@
+// Webview 前端（media/panel.js）单独一个 TS 项目：
+// 它跑在浏览器的 iframe 里，有 DOM、没有 Node/vscode —— 两个环境的标准库不能混。
+// 这正是「扩展宿主不许出现 document」这条约束的落地方式。
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["media/**/*.js", "media/**/*.d.ts"],
+  "exclude": []
+}

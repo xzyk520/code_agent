@@ -1175,7 +1175,8 @@ L3 容器/微虚拟机     Docker、gVisor、Firecracker          ← OpenHands�
 ```
 bee-code/
 ├─ package.json                  # ✅ 扩展清单：11 个命令 / 3 个快捷键 / 菜单 / 视图 / 15 项配置
-├─ tsconfig.json                 # ✅ strict + noUncheckedIndexedAccess + isolatedModules
+├─ tsconfig.json                 # ✅ 扩展侧：lib 无 DOM、strict、verbatimModuleSyntax、module=preserve
+├─ tsconfig.webview.json         # ✅ 前端侧：lib 含 DOM、allowJs+checkJs、不含 node/vscode 类型
 ├─ esbuild.mjs                   # ✅ 打包 → dist/extension.js（cjs，vscode 保持 external）
 ├─ .vscodeignore                 # ✅ vsce 打包排除规则
 ├─ .vscode/                      # ✅ launch.json（Extension + debugpy attach）、tasks.json
@@ -1209,7 +1210,8 @@ bee-code/
 │  └─ dev/
 │     └─ mockCore.ts             # ✅ 假内核：不装 Python 也能调壳（流式/pending/取消）
 ├─ media/                        # ✅ 面板前端（无构建步骤：原生 JS + CSS，跟随主题变量）
-│  ├─ panel.js / panel.css
+│  ├─ panel.js / panel.css       #    panel.js 由 tsconfig.webview.json 做 JSDoc 类型检查
+│  ├─ vscode-webview.d.ts        #    acquireVsCodeApi 声明（DOM lib 里没有）
 │  └─ icon.svg
 ├─ beecode/                      # ★ Python 内核（骨架已就位，业务待实现）
 │  ├─ __main__.py                # ✅ 入口 + 方法注册；⬜ chat.send / review.* / abort
@@ -1224,10 +1226,11 @@ bee-code/
 └─ .github/workflows/            # ⬜ ci.yml / release.yml
 ```
 
-### 15.1 两个实现取舍（值得知道）
+### 15.1 三个实现取舍（值得知道）
 
 1. **`search.grep` 没用 `findTextInFiles`**：它至今是 proposed API（stable `@types/vscode` 里没有）。当前实现是 `findFiles` + 逐文件读 + 正则匹配，上限 4000 文件 / 256KB，能用的同时保证只用公开 API。🔬 后续可以探测系统 `rg`，有则 spawn `rg --json`。
-2. **面板前端没有构建步骤**：`media/panel.js` 是原生 JS（约 200 行），刻意不引入 Vite/React —— 壳阶段的目标是「F5 就能跑」。等 UI 复杂到需要组件化时再换，`chatViewProvider` 的 postMessage 契约不用动。
+2. **面板前端没有构建步骤**：`media/panel.js` 是原生 JS（约 200 行），刻意不引入 Vite/React —— 壳阶段的目标是「F5 就能跑」。等 UI 复杂到需要组件化时再换，`chatViewProvider` 的 postMessage 契约不用动。但它是**被类型检查的**：`tsconfig.webview.json` 用 `allowJs + checkJs` + JSDoc 跑 `tsc -p`，所以面板里的空引用、拼错属性照样会报错。
+3. **两个 tsconfig 是刻意分开的**：扩展侧 `lib` 不含 `DOM`（宿主里没有 `document`，给了类型就会写出运行时报错的代码）；前端侧反过来，`lib` 含 `DOM`、`types` 为空（webview 里没有 Node 和 `vscode`）。`npm run typecheck` 会依次跑两个项目。
 
 
 ---

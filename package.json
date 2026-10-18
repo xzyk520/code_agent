@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "vscode:prepublish": "npm run build"
   },
   "contributes": {
