@@ -193,7 +193,7 @@ class Shell {
 
       await core.initialize(params);
       this.core = core;
-      this.log.info(`内核就绪（${core.mode}）`);
+      this.log.info(`内核就绪（${core.kind}）`);
       this.updateStatus();
       return core;
     })();

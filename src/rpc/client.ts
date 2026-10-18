@@ -47,7 +47,7 @@ interface Pending {
  *   3. 密钥只通过 stdin 的 initialize 报文传入，不碰 argv / 环境变量
  */
 export class PythonCore implements CoreApi {
-  readonly mode = "python" as const;
+  readonly kind = "python" as const;
 
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextId = 1;
@@ -55,8 +55,10 @@ export class PythonCore implements CoreApi {
   private readonly notificationHandlers = new Set<CoreNotificationHandler>();
   private readonly exitHandlers = new Set<CoreExitHandler>();
   private requestHandler: InboundRequestHandler | undefined;
-  private inbound = new Map<number, AbortController>();
+  private readonly inbound = new Map<number, AbortController>();
   private disposed = false;
+  /** shutdown 的幂等锚点 */
+  private stopping: Promise<void> | undefined;
 
   constructor(private readonly opts: PythonCoreOptions) {}
 
@@ -70,6 +72,7 @@ export class PythonCore implements CoreApi {
 
   start(): void {
     if (this.child) return;
+    this.stopping = undefined; // 允许重启后再次优雅停止
     const { pythonPath, args, cwd, logger } = this.opts;
     logger.info(`启动内核: ${pythonPath} ${args.join(" ")} (cwd=${cwd})`);
 
@@ -117,8 +120,9 @@ export class PythonCore implements CoreApi {
     return result;
   }
 
-  chatSend(params: ChatSendParams, opts?: { timeoutMs?: number }): Promise<void> {
-    return this.request("chat.send", params, opts?.timeoutMs ?? CHAT_TIMEOUT_MS).then(() => undefined);
+  chatSend(params: ChatSendParams): Promise<void> {
+    // 一轮对话可能跨多轮工具调用，给宽松上限（实现自己决定，不暴露给调用方）
+    return this.request("chat.send", params, CHAT_TIMEOUT_MS).then(() => undefined);
   }
 
   reviewKeep(params: ReviewTargetParams): Promise<void> {
@@ -150,18 +154,31 @@ export class PythonCore implements CoreApi {
     return this.request("model.reload", params).then(() => undefined);
   }
 
-  async shutdown(): Promise<void> {
-    if (!this.child) return;
+  /**
+   * 优雅停止：发 `shutdown` 请求，等对端自己退，超时再 kill。
+   * 幂等 —— 多次调用返回同一个 Promise，避免并发重复收尾。
+   */
+  shutdown(): Promise<void> {
+    this.stopping ??= this.doShutdown();
+    return this.stopping;
+  }
+
+  private async doShutdown(): Promise<void> {
+    const child = this.child;
+    if (!child) return;
     this.disposed = true;
     try {
       await this.request("shutdown", {}, 3_000);
     } catch {
       /* 内核可能已崩，忽略 */
     }
-    const child = this.child;
     this.child = undefined;
-    if (child && child.exitCode === null) {
-      child.stdin.end();
+    if (child.exitCode === null) {
+      try {
+        child.stdin.end();
+      } catch {
+        /* 管道可能已断 */
+      }
       setTimeout(() => {
         if (child.exitCode === null) child.kill();
       }, 2_000).unref();
@@ -178,9 +195,29 @@ export class PythonCore implements CoreApi {
     return { dispose: () => this.exitHandlers.delete(handler) };
   }
 
+  /**
+   * 释放资源：**同步**、尽力而为、不抛错、幂等。
+   * 与 `shutdown()` 的分工：这里不等待、不礼貌，直接 kill 并清空回调。
+   */
   dispose(): void {
-    void this.shutdown();
+    this.disposed = true;
     this.failAll(new Error("内核已释放"));
+    const child = this.child;
+    this.child = undefined;
+    if (child && child.exitCode === null) {
+      try {
+        child.stdin.end();
+      } catch {
+        /* 忽略 */
+      }
+      try {
+        child.kill();
+      } catch {
+        /* 进程可能已退出 */
+      }
+    }
+    for (const controller of this.inbound.values()) controller.abort();
+    this.inbound.clear();
     this.notificationHandlers.clear();
     this.exitHandlers.clear();
   }

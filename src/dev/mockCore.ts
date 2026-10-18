@@ -1,4 +1,4 @@
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 import type { CoreApi, CoreExitHandler, CoreNotificationHandler } from "../coreApi";
 import type { Logger } from "../log";
 import type {
@@ -18,13 +18,17 @@ import { PROTOCOL_VERSION } from "../protocol";
  * 不应该被 Python 侧的问题挡住。配 `beeCode.core.mode = "mock"` 即可。
  */
 export class MockCore implements CoreApi {
-  readonly mode = "mock" as const;
-  readonly alive = true;
+  readonly kind = "mock" as const;
+
+  get alive(): boolean {
+    return !this.disposed;
+  }
 
   private readonly notificationHandlers = new Set<CoreNotificationHandler>();
   private readonly exitHandlers = new Set<CoreExitHandler>();
   private readonly timers = new Set<NodeJS.Timeout>();
   private cancelled = false;
+  private disposed = false;
 
   constructor(private readonly logger: Logger) {}
 
@@ -98,8 +102,12 @@ export class MockCore implements CoreApi {
     this.logger.info("[mock] model.reload");
   }
 
+  /** 幂等：清掉所有在飞的定时器即可，没有进程需要等 */
   async shutdown(): Promise<void> {
-    await this.abort("");
+    this.cancelled = true;
+    this.disposed = true;
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
   }
 
   onNotification(handler: CoreNotificationHandler): vscode.Disposable {
@@ -112,8 +120,12 @@ export class MockCore implements CoreApi {
     return { dispose: () => this.exitHandlers.delete(handler) };
   }
 
+  /** 同步释放：不等待、不抛错、幂等 */
   dispose(): void {
-    void this.shutdown();
+    this.cancelled = true;
+    this.disposed = true;
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
     this.notificationHandlers.clear();
     this.exitHandlers.clear();
   }
