@@ -12,6 +12,7 @@ export interface CommandDeps {
   keepAll(): Promise<void>;
   undoAll(): Promise<void>;
   pickFiles(): Promise<void>;
+  exportDiagnostics(): Promise<void>;
 }
 
 /**
@@ -50,6 +51,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.checkpoint.restore", () => deps.restoreCheckpoint());
   register("beeCode.core.restart", () => deps.restartCore());
   register("beeCode.core.showOutput", () => deps.log.show());
+  register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
 }
 
 async function attachSelection(

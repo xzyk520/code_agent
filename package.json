@@ -95,6 +95,11 @@
         "command": "beeCode.core.showOutput",
         "title": "显示日志",
         "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.exportDiagnostics",
+        "title": "导出诊断包（已脱敏）",
+        "category": "Bee Code"
       }
     ],
     "keybindings": [

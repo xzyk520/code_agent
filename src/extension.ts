@@ -1,3 +1,5 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { createConfirmAdapter, createSecretAdapter } from "./adapters/interactionAdapter";
 import { createDiagnosticsAdapter } from "./adapters/diagnosticsAdapter";
@@ -11,6 +13,7 @@ import { registerCommands } from "./commands/register";
 import { defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import type { CoreApi } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
+import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
@@ -112,6 +115,7 @@ class Shell {
       keepAll: () => this.reviewAll("keep"),
       undoAll: () => this.reviewAll("undo"),
       pickFiles: () => this.pickFiles(),
+      exportDiagnostics: () => this.exportDiagnostics(),
     });
 
     this.disposables.push(
@@ -421,6 +425,42 @@ class Shell {
     void vscode.window.showInformationMessage(
       `Bee Code: 已恢复 ${result.restored.length} 个文件。`,
     );
+  }
+
+  /**
+   * 导出诊断包（已脱敏）。
+   *
+   * 落点：`<globalStorage>/diagnostics/` —— 扩展私有目录，不会被误提交进 git，
+   * 也不在用户工作区里制造文件。用户要发 issue 时再「另存为…」到桌面/文档。
+   */
+  private async exportDiagnostics(): Promise<void> {
+    const uri = await writeDiagnostics({
+      context: this.context,
+      logger: this.log,
+      config: this.config,
+      coreKind: this.core?.kind ?? this.config.coreMode,
+    });
+    const name = path.basename(uri.fsPath);
+
+    const choice = await vscode.window.showInformationMessage(
+      `Bee Code: 诊断包已生成（已脱敏）— ${name}`,
+      "打开所在文件夹",
+      "另存为…",
+    );
+    if (choice === "打开所在文件夹") {
+      await vscode.commands.executeCommand("revealFileInOS", uri);
+      return;
+    }
+    if (choice === "另存为…") {
+      const target = await vscode.window.showSaveDialog({
+        title: "另存诊断包",
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), name)),
+        filters: { Markdown: ["md"] },
+      });
+      if (!target) return;
+      await vscode.workspace.fs.copy(uri, target, { overwrite: true });
+      void vscode.window.showInformationMessage(`已保存到 ${target.fsPath}`);
+    }
   }
 
   // ───────────────────────── 内核通知 ─────────────────────────
