@@ -24,5 +24,5 @@ if (watch) {
   console.log("[esbuild] watching src/ ...");
 } else {
   await esbuild.build(options);
-  console.log("[esbuild] build done → dist/extension.js");
+  console.log(`[esbuild] build done → dist/extension.js (${production ? "production" : "development"})`);
 }

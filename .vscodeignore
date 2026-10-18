@@ -5,9 +5,22 @@ docs/**
 tests/**
 scripts/**
 webview/**
+
+# 构建配置（运行时不需要）
 tsconfig.json
+tsconfig.webview.json
 esbuild.mjs
-**/*.map
-**/*.ts
 .gitignore
 .gitattributes
+.vscodeignore
+
+# 源码与映射：产物是 dist/extension.js，其它都是开发期文件
+**/*.ts
+**/*.map
+
+# Python 内核的构建垃圾（.py 源码要留，字节码不留）
+**/__pycache__/**
+**/*.pyc
+**/*.pyo
+.pytest_cache/**
+.ruff_cache/**
