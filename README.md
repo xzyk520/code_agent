@@ -1270,7 +1270,7 @@ bee-code/
 
 别人克隆后不配置也能跑：`pythonPath` 默认是 `python`（走 PATH），内核用 `pip install -e .` 装依赖即可。
 
-**TypeScript 固定在 `6.0.3`**（= 当前 VS Code 内置版本），刻意不写 `^`：写 `^` 时下次 `npm install` 会装到 6.x 的更高小版本，于是又回到「本地绿、编辑器红」。查看你所用 VS Code 的版本：
+**TypeScript 固定在 `6.0.3`**（= 当前 VS Code 内置版本），刻意不写 `^`：写 `^` 时下次 `npm install` 会装到 6.x 的更高小版本，于是又回到「本地绿、编辑器红」。同理 **`@types/vscode` 精确固定 `1.90.0`**，与 `engines.vscode` 的地板一致——类型比地板新，就会让你不小心用上高版本 API：本地编译通过、打进 vsix 也成功，但在旧编辑器上一运行就 `undefined is not a function`。查看你所用 VS Code 的版本：
 
 ```powershell
 (Get-Content "<VS Code 安装目录>\resources\app\extensions\node_modules\typescript\package.json" -Raw | ConvertFrom-Json).version
