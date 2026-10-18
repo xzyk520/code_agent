@@ -10,6 +10,7 @@ import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands } from "./commands/register";
 import { defaultInstruction, describeConfig, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import type { CoreApi } from "./coreApi";
+import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
@@ -150,11 +151,17 @@ class Shell {
     if (this.starting) return this.starting;
 
     this.starting = (async () => {
-      const mode = this.config.coreMode;
-      const core: CoreApi =
-        mode === "mock"
-          ? new MockCore(this.log)
-          : this.createPythonCore();
+      let core: CoreApi;
+      try {
+        core = this.config.coreMode === "mock" ? new MockCore(this.log) : this.createPythonCore();
+      } catch (err) {
+        if (err instanceof CoreNotFoundError) {
+          // 安装模式下最常见的失败：扩展目录里没有 beecode 包
+          this.panel.setHint("找不到内核：请在工作区开发 beecode，或设置 beeCode.core.coreRoot");
+          this.log.error(err.message);
+        }
+        throw err;
+      }
 
       core.onNotification((method, params) => this.onCoreNotification(method, params));
       core.onExit((code, reason) => {
@@ -195,10 +202,21 @@ class Shell {
   }
 
   private createPythonCore(): CoreApi {
+    // 开发时内核在工作区、打包后内核在扩展目录 —— 由 locator 决定，别写死 cwd
+    const spec = locateCore({
+      configuredRoot: this.config.coreRoot,
+      configuredArgs: this.config.coreArgs,
+      workspaceRoot: workspaceRoots()[0],
+      extensionPath: this.context.extensionUri.fsPath,
+      cwdOverride: this.config.cwd,
+    });
+
+    this.log.info(`内核定位：${describeLaunch(spec)}（PYTHONPATH=${spec.env["PYTHONPATH"] ?? ""}）`);
     const core = new PythonCore({
       pythonPath: this.config.pythonPath,
-      args: this.config.coreArgs,
-      cwd: this.config.cwd,
+      args: spec.args,
+      cwd: spec.cwd,
+      env: spec.env,
       logger: this.log,
     });
     core.setRequestHandler(this.server.handle);

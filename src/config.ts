@@ -6,7 +6,11 @@ import type { ModelConfigDto, Mode } from "./protocol";
 export interface ShellConfig {
   coreMode: "python" | "mock";
   pythonPath: string;
+  /** 含 beecode/ 包的目录；空串 = 自动探测（工作区 → 扩展目录） */
+  coreRoot: string;
+  /** 解释器参数；空数组 = 默认 `["-m","beecode"]` */
   coreArgs: string[];
+  /** 子进程工作目录（已解析占位符） */
   cwd: string;
   model: ModelConfigDto;
   apiKeyId: string;
@@ -24,11 +28,13 @@ export function readConfig(): ShellConfig {
 
   const rawCwd = cfg.get<string>("core.cwd", "${workspaceFolder}");
   const cwd = resolvePlaceholders(rawCwd, firstRoot);
+  const rawCoreRoot = cfg.get<string>("core.coreRoot", "");
 
   return {
     coreMode: cfg.get<"python" | "mock">("core.mode", "python"),
     pythonPath: cfg.get<string>("core.pythonPath", "python"),
-    coreArgs: cfg.get<string[]>("core.args", ["-m", "beecode"]),
+    coreRoot: rawCoreRoot ? resolvePlaceholders(rawCoreRoot, firstRoot) : "",
+    coreArgs: cfg.get<string[]>("core.args", []),
     cwd,
     apiKeyId: cfg.get<string>("model.apiKeyId", "beeCode.apiKey.default"),
     model: {

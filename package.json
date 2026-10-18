@@ -35,7 +35,9 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",
-    "vscode:prepublish": "node esbuild.mjs --production"
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
   },
   "contributes": {
     "commands": [
@@ -169,6 +171,11 @@
           "default": "python",
           "markdownDescription": "Python 解释器路径。留 `python` 走 PATH；conda 环境请填绝对路径（如 `D:\\\\APP\\\\conda\\\\envs\\\\beeagent\\\\python.exe`）。"
         },
+        "beeCode.core.coreRoot": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "包含 `beecode/` 包的目录（会加入 `PYTHONPATH`）。留空则自动探测：先看工作区根（开发模式），再看扩展安装目录（安装模式）。"
+        },
         "beeCode.core.cwd": {
           "type": "string",
           "default": "${workspaceFolder}",
@@ -179,11 +186,8 @@
           "items": {
             "type": "string"
           },
-          "default": [
-            "-m",
-            "beecode"
-          ],
-          "markdownDescription": "传给解释器的参数。"
+          "default": [],
+          "markdownDescription": "传递给解释器的参数。**留空表示 `-m beecode`**；调试内核时可改成 `[\"-m\",\"debugpy\",\"--listen\",\"5679\",\"-m\",\"beecode\"]`。"
         },
         "beeCode.model.baseUrl": {
           "type": "string",
@@ -249,6 +253,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.24.0",
     "typescript": "6.0.3"
   }

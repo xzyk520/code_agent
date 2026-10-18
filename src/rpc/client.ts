@@ -22,6 +22,8 @@ export interface PythonCoreOptions {
   pythonPath: string;
   args: string[];
   cwd: string;
+  /** 追加的环境变量（PYTHONPATH / 编码相关），与 process.env 合并 */
+  env?: Record<string, string>;
   logger: Logger;
 }
 
@@ -75,7 +77,8 @@ export class PythonCore implements CoreApi {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      // 不传任何 BEE_CODE_* 秘钥；密钥走 stdin 报文
+      // PYTHONPATH（定位 beecode 包）+ 编码相关；密钥仍走 stdin 报文，不进程环境
+      env: { ...process.env, ...(this.opts.env ?? {}) },
     });
     this.child = child;
 
