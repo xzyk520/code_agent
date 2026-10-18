@@ -908,9 +908,19 @@ async function groupByFunction(base: PendingEdit, symbols: DocumentSymbol[]): Fu
 
 ### 12.1.1 日志脱敏与诊断包（已实现）
 
-**两个 OutputChannel**（`Logger` 构造时创建）：`Bee Code` 主日志、`Bee Code · 内核 stderr`。分开的理由是 Python traceback 又长又带行号，混进主日志会把"这一次请求发生了什么"彻底淹没。
+**两个 `LogOutputChannel`**（`createOutputChannel(name, { log: true })`）：`Bee Code` 主日志、`Bee Code · 内核 stderr`。分开的理由是 Python traceback 又长又带行号，混进主日志会把"这一次请求发生了什么"彻底淹没。
 
-**内存环形缓冲**：`Logger` 额外保留最近 **500 行**（主日志与 stderr 各一份）。原因是 `OutputChannel` **只提供写、不提供读**——想导出"刚刚发生了什么"，必须自己留一份。
+用 log channel 而不是普通 `OutputChannel`，换来三件事：
+
+| 能力 | 说明 |
+| --- | --- |
+| **落盘** | 内容写进 VS Code 的日志文件（`Developer: Open Logs Folder` 可找到），**扩展崩溃后仍可查** —— 这是"诊断包"覆盖不到的场景（诊断包要用户手动导出，崩了就没机会了） |
+| **级别可调** | 用户在输出面板下拉里选 Trace/Debug/Info…，不用改代码。默认级别是 info，所以 `debug()` 默认被过滤（启动期那行"已注册 RPC 方法"因此提到 info 级） |
+| **统一格式** | 时间戳与级别前缀由 VS Code 添加，`log.ts` 不再手拼 |
+
+**内存有界队列**：`Logger` 额外保留最近 **500 行**（主日志与 stderr 各一份）。原因是 log channel 的内容**同样只写不读**——想导出"刚刚发生了什么"必须自己留一份。严格说这是"有界队列/滑动窗口"（容量恒定、溢出丢最旧，但用 `splice` 搬移），不是教科书意义的环形缓冲；500 行的搬移成本可忽略，换来的是代码可读性。
+
+**内核 stderr 按行缓冲 + 分级**：stderr 是流式 chunk（可能是半行），所以先攒到 `\n` 再作为一条日志写出，`dispose()` 时冲刷残余；命中 `Traceback (most recent call last)` / `XxxError:` 的行用 error 级，其余用 info 级。这样 traceback 既落盘、又在日志里显眼，并且**同样过 `redact()`**。
 
 **导出命令**：`Bee Code: 导出诊断包（已脱敏）`
 

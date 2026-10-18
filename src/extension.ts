@@ -549,7 +549,8 @@ class Shell {
     this.server.register("secrets.get", (params) => secrets.get(params as never));
     this.server.register("confirm.ask", (params) => confirm.ask(params as never));
 
-    this.log.debug(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
+    // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
+    this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
   }
 
   // ───────────────────────── 杂项 ─────────────────────────

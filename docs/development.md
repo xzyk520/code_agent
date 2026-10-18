@@ -26,7 +26,7 @@ bee-code/
 │  ├─ coreLocator.ts             # ✅ 内核定位：工作区 → 扩展目录，注入 PYTHONPATH / 编码变量
 │  ├─ diagnostics.ts             # ✅ 导出脱敏诊断包（落 globalStorage，可另存）
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
-│  ├─ log.ts                     # ✅ 双 OutputChannel + 脱敏 + 500 行环形缓冲（供诊断包）
+│  ├─ log.ts                     # ✅ 双 LogOutputChannel（自动落盘）+ 脱敏 + 500 行缓冲
 │  ├─ rpc/
 │  │  ├─ client.ts               # ✅ 起子进程、握手、请求/响应、取消、崩溃处理
 │  │  └─ server.ts               # ✅ 内核 → 壳的方法路由（11 个）
