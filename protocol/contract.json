@@ -1,0 +1,29 @@
+{
+  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
+  "version": 1,
+  "shellMethods": {
+    "fs.read": { "required": ["path"], "optional": ["startLine", "endLine"], "result": ["text", "version", "totalLines"] },
+    "fs.list": { "required": [], "optional": ["glob", "exclude", "maxResults"], "result": ["paths"] },
+    "search.grep": { "required": ["query"], "optional": ["regex", "glob", "contextLines", "maxResults"], "result": ["hits", "truncated"] },
+    "symbols.outline": { "required": ["path"], "optional": [], "result": ["symbols", "source"] },
+    "diagnostics.get": { "required": [], "optional": ["path"], "result": ["items"] },
+    "edit.apply": { "required": ["path", "newText"], "optional": ["op", "expectedVersion", "reason"], "result": ["applied", "version", "conflict", "message"] },
+    "checkpoint.create": { "required": [], "optional": ["label"], "result": ["id", "files"] },
+    "checkpoint.restore": { "required": ["id"], "optional": ["scope"], "result": ["restored"] },
+    "diff.open": { "required": ["path", "baseText"], "optional": ["title"], "result": ["opened"] },
+    "confirm.ask": { "required": ["question", "options"], "optional": ["detail"], "result": ["choice"] },
+    "secrets.get": { "required": ["key"], "optional": [], "result": ["value"] }
+  },
+  "coreMethods": [
+    "initialize",
+    "chat.send",
+    "review.keep",
+    "review.undo",
+    "review.keepAll",
+    "review.undoAll",
+    "session.abort",
+    "model.reload",
+    "shutdown"
+  ],
+  "notifications": ["ui.delta", "ui.tool", "ui.usage", "pending.changed", "log"]
+}

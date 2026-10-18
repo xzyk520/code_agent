@@ -241,12 +241,22 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 - `pending.changed` `{ added[], updated[], removed[] }` —— 壳据此刷新 QuickDiff 与卡片。
 - `log` `{ level, msg, fields }` —— 壳写进 OutputChannel（先过脱敏）。
 
-#### 4.5.4 四条工程约定
+#### 4.5.4 五条工程约定
 
 1. **取消要能穿透**：`$/cancelRequest` 风格（带被取消的 `id`），内核收到后 `AbortSignal` 中断 HTTP 请求与工具；壳收到 `session.abort` 时同时取消自己正在执行的 RPC。
 2. **密钥只走一次握手**：`apiKey` 通过 `initialize` 的**子进程 stdin** 传入，**绝不放在 argv**（`ps` 全机可见）也不放环境变量（同用户可读、易被 `env` 打进日志）。内核只在内存持有。
 3. **路径策略以壳为准**：内核传来的路径可能是模型编造的，壳必须独立做「是否在工作区内 / 是否命中禁止清单」的校验（纵深防御，两边都校验）。
 4. **协议要版本化**：`protocolVersion` 用整数，壳与内核不匹配时**拒绝启动**并提示「请重装扩展」，而不是带着半截语义跑。
+5. **契约有唯一真相**：`protocol/contract.json` 列出全部方法、必填/可选参数与返回字段。两侧启动时各跑一次对账：
+
+   | 侧 | 校验内容 | 失败表现 |
+   | --- | --- | --- |
+   | 壳（`src/contract.ts`） | 运行时注册的方法 ↔ 契约声明；契约 `version` ↔ `PROTOCOL_VERSION` | 日志 `error` + 一条警告，指出「已注册但契约未声明 / 契约声明但未注册」 |
+   | 内核（`beecode/contract.py`） | 每次发 RPC 前：方法名存在、必填参数齐全、无拼错的多余参数 | 抛 `ContractError`，**在发出去之前**拦住 |
+
+   为什么需要它：TS 的接口编译后消失、Python 也看不到 TypeScript，两侧方法名/参数名只能靠人肉同步。这份 JSON 把「人肉」变成「启动 100 ms 内的自动对账」。
+
+   `id` 类型也在这条约定里：JSON-RPC 允许 `number | string`，壳发出的请求用自增 `number`，但收到对端的 `string` id 必须原样回显（`JsonRpcId`）。
 
 ---
 

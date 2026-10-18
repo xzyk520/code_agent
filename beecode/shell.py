@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .contract import check_shell_call
 from .ipc import JsonRpcPeer
 
 
@@ -60,10 +61,37 @@ class Diagnostic:
 
 
 class ShellClient:
-    """所有 `shell.*` RPC 的薄封装。方法名与 README §4.5.1 一一对应。"""
+    """所有 `shell.*` RPC 的薄封装。方法名与 README §4.5.1 一一对应。
+
+    每个请求都过 `contract.check_shell_call()`：方法名拼错、必填参数漏了、
+    多传了契约没声明的字段，都会在**发出去之前**抛 `ContractError`，
+    而不是等壳回一个 `METHOD_NOT_FOUND` 或静默忽略参数。
+    """
+
+    #: 本类会发出的全部线缆方法名（供 `tests/python/test_contract.py` 与契约对账）
+    SHELL_METHODS: frozenset[str] = frozenset(
+        {
+            "fs.read",
+            "fs.list",
+            "search.grep",
+            "symbols.outline",
+            "diagnostics.get",
+            "edit.apply",
+            "checkpoint.create",
+            "checkpoint.restore",
+            "diff.open",
+            "confirm.ask",
+            "secrets.get",
+        }
+    )
 
     def __init__(self, peer: JsonRpcPeer) -> None:
         self._peer = peer
+
+    async def _call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0) -> Any:
+        payload = params or {}
+        check_shell_call(method, payload)
+        return await self._peer.request(method, payload, timeout=timeout)
 
     # ───────────────────────── 读 ─────────────────────────
 
@@ -73,7 +101,7 @@ class ShellClient:
             payload["startLine"] = start_line
         if end_line is not None:
             payload["endLine"] = end_line
-        result = await self._peer.request("fs.read", payload)
+        result = await self._call("fs.read", payload)
         return ReadResult(
             text=result.get("text", ""),
             version=int(result.get("version", 0)),
@@ -84,7 +112,7 @@ class ShellClient:
         payload: dict[str, Any] = {"glob": glob, "maxResults": max_results}
         if exclude is not None:
             payload["exclude"] = exclude
-        result = await self._peer.request("fs.list", payload)
+        result = await self._call("fs.list", payload)
         return list(result.get("paths", []))
 
     async def grep(
@@ -104,11 +132,11 @@ class ShellClient:
         }
         if glob:
             payload["glob"] = glob
-        result = await self._peer.request("search.grep", payload)
+        result = await self._call("search.grep", payload)
         return [GrepHit(**hit) for hit in result.get("hits", [])]
 
     async def outline(self, path: str) -> list[Symbol]:
-        result = await self._peer.request("symbols.outline", {"path": path})
+        result = await self._call("symbols.outline", {"path": path})
         symbols: list[Symbol] = []
         for item in result.get("symbols", []):
             rng = item.get("range", {})
@@ -125,7 +153,7 @@ class ShellClient:
 
     async def diagnostics(self, path: str | None = None) -> list[Diagnostic]:
         payload = {"path": path} if path else {}
-        result = await self._peer.request("diagnostics.get", payload)
+        result = await self._call("diagnostics.get", payload)
         out: list[Diagnostic] = []
         for item in result.get("items", []):
             rng = item.get("range", {})
@@ -157,7 +185,7 @@ class ShellClient:
             payload["expectedVersion"] = expected_version
         if reason:
             payload["reason"] = reason
-        result = await self._peer.request("edit.apply", payload, timeout=60.0)
+        result = await self._call("edit.apply", payload, timeout=60.0)
         return ApplyResult(
             applied=bool(result.get("applied")),
             version=result.get("version"),
@@ -166,21 +194,21 @@ class ShellClient:
         )
 
     async def checkpoint(self, label: str | None = None) -> str:
-        result = await self._peer.request("checkpoint.create", {"label": label or ""})
+        result = await self._call("checkpoint.create", {"label": label or ""})
         return str(result.get("id", ""))
 
     async def restore_checkpoint(self, checkpoint_id: str, scope: str = "files") -> list[str]:
-        result = await self._peer.request("checkpoint.restore", {"id": checkpoint_id, "scope": scope}, timeout=120.0)
+        result = await self._call("checkpoint.restore", {"id": checkpoint_id, "scope": scope}, timeout=120.0)
         return list(result.get("restored", []))
 
     # ───────────────────────── UI ─────────────────────────
 
     async def open_diff(self, path: str, base_text: str, title: str | None = None) -> bool:
-        result = await self._peer.request("diff.open", {"path": path, "baseText": base_text, "title": title or ""})
+        result = await self._call("diff.open", {"path": path, "baseText": base_text, "title": title or ""})
         return bool(result.get("opened"))
 
     async def confirm(self, question: str, options: list[dict[str, str]], detail: str | None = None) -> str | None:
-        result = await self._peer.request(
+        result = await self._call(
             "confirm.ask",
             {"question": question, "detail": detail or "", "options": options},
             timeout=300.0,
@@ -188,5 +216,5 @@ class ShellClient:
         return result.get("choice")
 
     async def get_secret(self, key: str) -> str | None:
-        result = await self._peer.request("secrets.get", {"key": key})
+        result = await self._call("secrets.get", {"key": key})
         return result.get("value")

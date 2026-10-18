@@ -22,6 +22,7 @@ bee-code/
 │  ├─ extension.ts               # ✅ 装配根：内核生命周期、通知路由、命令依赖
 │  ├─ coreApi.ts                 # ✅ 内核抽象（PythonCore / MockCore 共用接口）
 │  ├─ protocol.ts                # ✅ 协议类型 + 方法名 + NDJSON 分帧（LineReader）
+│  ├─ contract.ts                # ✅ 读 contract.json，与运行时注册表对账（启动自检）
 │  ├─ config.ts                  # ✅ 设置读取（带类型/范围校验）、${workspaceFolder} 解析、会话 id
 │  ├─ coreLocator.ts             # ✅ 内核定位：工作区 → 扩展目录，注入 PYTHONPATH / 编码变量
 │  ├─ diagnostics.ts             # ✅ 导出脱敏诊断包（落 globalStorage，可另存）
@@ -52,12 +53,14 @@ bee-code/
 ├─ beecode/                      # ★ Python 内核（骨架已就位，业务待实现）
 │  ├─ __main__.py                # ✅ 入口 + 方法注册；⬜ chat.send / review.* / abort
 │  ├─ ipc.py                     # ✅ JSON-RPC 对端：分发、超时、$·cancelRequest、BOM 容错
+│  ├─ contract.py                # ✅ 读 protocol/contract.json，发 RPC 前校验方法名与参数
 │  ├─ shell.py                   # ✅ ShellClient：fs/search/edit/checkpoint/diff/confirm 的类型化封装
 │  ├─ loop/ modes/ prompts/      # ⬜ AgentLoop、模式、提示词
 │  ├─ llm/ context/ tools/       # ⬜ OpenAI 客户端、检索编排、工具
 │  ├─ apply/ pending/ guard/     # ⬜ 补丁解析、待审状态机、预算守卫
 │  └─ mcp/ skills/               # ⬜ MCP 客户端、Skill 加载
-├─ tests/                        # ⬜ python/ (pytest) + shell/ (@vscode/test-electron)
+├─ protocol/contract.json        # ✅ 协议唯一真相（方法/参数/返回字段），两侧启动时对账
+├─ tests/                        # ◐ python/test_contract.py ✅；shell/ (@vscode/test-electron) ⬜
 ├─ scripts/                      # ⬜ bootstrap.py（找 Python/建 venv）+ build_sidecar.py（PyInstaller）
 └─ .github/workflows/            # ⬜ ci.yml / release.yml
 ```

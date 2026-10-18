@@ -11,6 +11,7 @@ import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands } from "./commands/register";
 import { defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
+import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
 import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
@@ -22,6 +23,7 @@ import type {
   Attachment,
   ChatSendParams,
   InitializeParams,
+  LogParams,
   Mode,
   PendingItemDto,
   PendingChangedParams,
@@ -489,7 +491,7 @@ class Shell {
         return;
       }
       case "log": {
-        const p = params as { level?: string; msg?: string };
+        const p = params as LogParams;
         const level = p.level === "error" ? "error" : p.level === "warn" ? "warn" : "info";
         this.log[level](`[内核] ${p.msg ?? ""}`);
         return;
@@ -537,20 +539,51 @@ class Shell {
     const secrets = createSecretAdapter(this.context, this.log);
     const confirm = createConfirmAdapter(this.log);
 
-    this.server.register("fs.read", (params, ctx) => fs.read(params as never, ctx));
-    this.server.register("fs.list", (params, ctx) => fs.list(params as never, ctx));
-    this.server.register("search.grep", (params, ctx) => search.grep(params as never, ctx));
-    this.server.register("symbols.outline", (params, ctx) => symbols.outline(params as never, ctx));
-    this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params as never, ctx));
-    this.server.register("edit.apply", (params, ctx) => edit.apply(params as never, ctx));
-    this.server.register("checkpoint.create", (params) => this.checkpoint.create(params as never));
-    this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params as never));
-    this.server.register("diff.open", (params) => this.diff.open(params as never));
-    this.server.register("secrets.get", (params) => secrets.get(params as never));
-    this.server.register("confirm.ask", (params) => confirm.ask(params as never));
+    // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
+    this.server.register("fs.read", (params, ctx) => fs.read(params, ctx));
+    this.server.register("fs.list", (params, ctx) => fs.list(params, ctx));
+    this.server.register("search.grep", (params, ctx) => search.grep(params, ctx));
+    this.server.register("symbols.outline", (params, ctx) => symbols.outline(params, ctx));
+    this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params, ctx));
+    this.server.register("edit.apply", (params, ctx) => edit.apply(params, ctx));
+    this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
+    this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
+    this.server.register("diff.open", (params) => this.diff.open(params));
+    this.server.register("secrets.get", (params) => secrets.get(params));
+    this.server.register("confirm.ask", (params) => confirm.ask(params));
 
     // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
     this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
+
+    this.verifyProtocolContract();
+  }
+
+  /**
+   * 协议自检：把「运行时注册的方法」与 `protocol/contract.json` 对账。
+   *
+   * 这是唯一能发现「TS 侧加了方法但 Python 契约没跟上」（或反之）的机制——
+   * 类型在编译后消失，Python 也看不到 TypeScript，只能靠这份 JSON 做共同真相。
+   * 失败不阻塞启动（可能是工作区里没有契约文件），但会显著地提示。
+   */
+  private verifyProtocolContract(): void {
+    const check = loadContract([
+      this.context.extensionUri.fsPath,
+      workspaceRoots()[0],
+      process.cwd(),
+    ]);
+    if (!check.contract) {
+      for (const problem of check.problems) this.log.warn(`协议契约：${problem}`);
+      return;
+    }
+    const problems = verifyRegistration(check.contract, this.server.listed());
+    if (problems.length === 0) {
+      this.log.info(`协议契约校验通过（version=${check.contract.version}, ${this.server.listed().length} 个方法）`);
+      return;
+    }
+    for (const problem of problems) this.log.error(`协议契约不一致：${problem}`);
+    void vscode.window.showWarningMessage(
+      `Bee Code: 协议契约与实际注册不一致（${problems.length} 处），详见输出面板。`,
+    );
   }
 
   // ───────────────────────── 杂项 ─────────────────────────

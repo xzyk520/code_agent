@@ -3,6 +3,7 @@ import type {
   ChatSendParams,
   InitializeParams,
   InitializeResult,
+  JsonRpcId,
   ModelReloadParams,
   ReviewAllParams,
   ReviewTargetParams,
@@ -57,7 +58,8 @@ export type CoreExitHandler = (code: number | null, reason: string) => void;
 
 /** 内核收到 `$/cancelRequest` 后应中断对应 id 的 RPC；壳收到 abort 后取消所有在飞请求 */
 export interface InboundRequestContext {
-  id: number;
+  /** 对端（内核）发来的请求 id，回包时必须原样带回；可能是 number 或 string */
+  id: JsonRpcId;
   signal: AbortSignal;
   /** 已被取消时抛这个；适配器里可据此提前返回 */
   throwIfCancelled(): void;

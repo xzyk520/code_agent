@@ -5,6 +5,7 @@ import { cancelledError } from "../coreApi";
 import type { Logger } from "../log";
 import {
   isRequest,
+  isResponse,
   LineReader,
   PROTOCOL_VERSION,
   RpcError,
@@ -12,10 +13,12 @@ import {
   type InitializeParams,
   type InitializeResult,
   type JsonRpcErrorObject,
+  type JsonRpcId,
   type JsonRpcMessage,
   type ModelReloadParams,
   type ReviewAllParams,
   type ReviewTargetParams,
+  type SessionAbortParams,
 } from "../protocol";
 
 export interface PythonCoreOptions {
@@ -55,7 +58,7 @@ export class PythonCore implements CoreApi {
   private readonly notificationHandlers = new Set<CoreNotificationHandler>();
   private readonly exitHandlers = new Set<CoreExitHandler>();
   private requestHandler: InboundRequestHandler | undefined;
-  private readonly inbound = new Map<number, AbortController>();
+  private readonly inbound = new Map<string, AbortController>();
   private disposed = false;
   /** shutdown 的幂等锚点 */
   private stopping: Promise<void> | undefined;
@@ -143,11 +146,12 @@ export class PythonCore implements CoreApi {
 
   abort(sessionId: string): Promise<void> {
     // 先取消本地所有在飞的 inbound（适配器），再通知内核
-    for (const [id, controller] of this.inbound) {
+    for (const [key, controller] of this.inbound) {
       controller.abort();
-      this.inbound.delete(id);
+      this.inbound.delete(key);
     }
-    return this.request("session.abort", { sessionId }, 10_000).then(() => undefined).catch(() => undefined);
+    const params: SessionAbortParams = { sessionId };
+    return this.request("session.abort", params, 10_000).then(() => undefined).catch(() => undefined);
   }
 
   modelReload(params: ModelReloadParams): Promise<void> {
@@ -237,9 +241,17 @@ export class PythonCore implements CoreApi {
       void this.handleInbound(msg.id, msg.method, msg.params);
       return;
     }
-    const maybeResponse = msg as { id?: unknown; result?: unknown; error?: JsonRpcErrorObject };
-    if (typeof maybeResponse.id === "number") {
-      this.settle({ id: maybeResponse.id, result: maybeResponse.result, error: maybeResponse.error });
+    if (isResponse(msg)) {
+      if (typeof msg.id !== "number") {
+        // 我们自己发的请求 id 都是 number；对端回了个 string id 就是对端 bug，不能静默丢
+        this.opts.logger.warn(`收到非数字 id 的响应（${typeof msg.id}），已忽略`);
+        return;
+      }
+      this.settle(
+        "error" in msg
+          ? { id: msg.id, error: msg.error }
+          : { id: msg.id, result: msg.result },
+      );
       return;
     }
     const note = msg as { method?: string; params?: unknown };
@@ -250,23 +262,25 @@ export class PythonCore implements CoreApi {
 
   private handleNotification(method: string, params: unknown): void {
     if (method === "$/cancelRequest") {
-      const id = (params as { id?: number } | undefined)?.id;
-      if (typeof id === "number") {
-        this.inbound.get(id)?.abort();
-        this.inbound.delete(id);
+      const id = (params as { id?: JsonRpcId } | undefined)?.id;
+      if (id !== undefined) {
+        const key = String(id);
+        this.inbound.get(key)?.abort();
+        this.inbound.delete(key);
       }
       return;
     }
     for (const handler of this.notificationHandlers) handler(method, params);
   }
 
-  private async handleInbound(id: number, method: string, params: unknown): Promise<void> {
+  private async handleInbound(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     if (!this.requestHandler) {
       this.write({ jsonrpc: "2.0", id, error: { code: RpcError.METHOD_NOT_FOUND, message: "壳未注册请求处理器" } });
       return;
     }
     const controller = new AbortController();
-    this.inbound.set(id, controller);
+    const key = String(id);
+    this.inbound.set(key, controller);
     try {
       const result = await this.requestHandler(method, params, {
         id,
@@ -287,7 +301,7 @@ export class PythonCore implements CoreApi {
         },
       });
     } finally {
-      this.inbound.delete(id);
+      this.inbound.delete(key);
     }
   }
 
@@ -346,7 +360,7 @@ function toRpcCode(err: unknown): number {
   const name = err instanceof Error ? err.name : "";
   switch (name) {
     case "PathPolicyError":
-      return RpcError.SIG_DENIED;
+      return RpcError.DENIED;
     default:
       return RpcError.SHELL_ERROR;
   }

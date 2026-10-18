@@ -15,9 +15,17 @@ export const PROTOCOL_VERSION = 1;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
+/**
+ * JSON-RPC 的 id。规范允许 number 或 string。
+ *
+ * 我们自己发出的请求一律用 number（自增计数器，好匹配），
+ * 但**收到**的请求可能是对端用 string 发的，必须原样回显。
+ */
+export type JsonRpcId = number | string;
+
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
-  id: number;
+  id: JsonRpcId;
   method: string;
   params?: unknown;
 }
@@ -36,13 +44,13 @@ export interface JsonRpcErrorObject {
 
 export interface JsonRpcSuccess {
   jsonrpc: "2.0";
-  id: number;
+  id: JsonRpcId;
   result: unknown;
 }
 
 export interface JsonRpcFailure {
   jsonrpc: "2.0";
-  id: number;
+  id: JsonRpcId;
   error: JsonRpcErrorObject;
 }
 
@@ -61,14 +69,28 @@ export const RpcError = {
   INTERNAL: -32603,
   /** 工具/适配器抛出的业务错误 */
   SHELL_ERROR: -32000,
-  SIG_VERSION_MISMATCH: -32010,
-  SIG_CONFLICT: -32011,
-  SIG_NOT_FOUND: -32012,
-  SIG_DENIED: -32013,
+  VERSION_MISMATCH: -32010,
+  CONFLICT: -32011,
+  NOT_FOUND: -32012,
+  DENIED: -32013,
 } as const;
 
+/** 请求/响应：同时有 `id` 与 `method`。id 为 number 或 string 都算。 */
 export function isRequest(msg: JsonRpcMessage): msg is JsonRpcRequest {
-  return typeof (msg as JsonRpcRequest).id === "number" && typeof (msg as JsonRpcRequest).method === "string";
+  const candidate = msg as JsonRpcRequest;
+  return (
+    (typeof candidate.id === "number" || typeof candidate.id === "string") &&
+    typeof candidate.method === "string"
+  );
+}
+
+/** 响应：有 `id` 但没有 `method`。用于 settle 前判别（不会与 request 混淆）。 */
+export function isResponse(msg: JsonRpcMessage): msg is JsonRpcSuccess | JsonRpcFailure {
+  const candidate = msg as { id?: unknown; method?: unknown };
+  return (
+    (typeof candidate.id === "number" || typeof candidate.id === "string") &&
+    typeof candidate.method !== "string"
+  );
 }
 
 // ────────────────────── 内核 → 壳（shell 实现） ──────────────────────

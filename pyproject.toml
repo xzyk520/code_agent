@@ -24,6 +24,7 @@ packages = ["beecode"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests/python"]
+pythonpath = ["."]        # 让 `from beecode import ...` 在未安装时也能跑
 
 [tool.ruff]
 line-length = 110
