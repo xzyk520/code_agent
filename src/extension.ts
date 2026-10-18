@@ -8,7 +8,7 @@ import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands } from "./commands/register";
-import { defaultInstruction, describeConfig, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
+import { defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import type { CoreApi } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
 import { MockCore } from "./dev/mockCore";
@@ -66,7 +66,9 @@ class Shell {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.log = new Logger();
-    this.config = readConfig();
+    const read = readConfig();
+    this.config = read.config;
+    for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
     this.server = new ShellServer(this.log);
     this.diff = new DiffAdapter(this.log);
     this.checkpoint = new CheckpointAdapter(
@@ -115,7 +117,9 @@ class Shell {
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (!event.affectsConfiguration("beeCode")) return;
-        this.config = readConfig();
+        const read = readConfig();
+        this.config = read.config;
+        for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
         this.log.info(`配置已更新：${describeConfig(this.config)}`);
         // 内核持有 modelConfig 与检查点开关，改配置后直接重启最省心
         void this.restartCore();
@@ -252,6 +256,13 @@ class Shell {
       this.panel.setHint("上一轮还没结束（可点 ■ 停止）");
       return;
     }
+
+    // 没有工作区就没有代码可读、没有检查点可落 —— 先说清楚，而不是让内核抛 ModuleNotFound
+    if (isWorkspaceEmpty()) {
+      await this.promptOpenWorkspace();
+      return;
+    }
+
     const trimmed = text.trim();
     if (trimmed.length === 0 && attachments.length === 0) return;
 
@@ -367,7 +378,9 @@ class Shell {
     await cfg.update("model.baseUrl", baseUrl.trim(), vscode.ConfigurationTarget.Global);
     await cfg.update("model.model", model.trim(), vscode.ConfigurationTarget.Global);
 
-    this.config = readConfig();
+    const read = readConfig();
+    this.config = read.config;
+    for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
     this.log.info(`模型已配置：${this.config.model.model} @ ${this.config.model.baseUrl}（key 已入库）`);
     void vscode.window.showInformationMessage("Bee Code: 模型配置完成。");
 
@@ -518,11 +531,29 @@ class Shell {
   }
 
   private hintForState(): string {
+    if (isWorkspaceEmpty()) return "请先打开一个工作区（文件夹），否则无法读取代码。";
     const missing: string[] = [];
     if (!this.config.model.baseUrl) missing.push("base_url");
     if (!this.config.model.model) missing.push("model");
     if (missing.length > 0) return `未配置 ${missing.join(" / ")}：运行「Bee Code: 配置模型」`;
     return `内核模式：${this.config.coreMode}`;
+  }
+
+  /**
+   * 没有工作区时的统一引导：面板里留一条记录 + 弹一次带操作按钮的提示。
+   *
+   * 为什么不让它直接失败：内核拿不到 workspaceRoots 时，读文件/落检查点/diff
+   * 全都会以「路径越界」「找不到工作区」这类间接错误暴露，用户根本猜不到原因。
+   */
+  private async promptOpenWorkspace(): Promise<void> {
+    const message = "Bee Code: 请先打开一个工作区（文件夹），扩展需要它来读取代码与保存检查点。";
+    this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: message });
+    this.panel.setHint("未打开工作区");
+
+    const choice = await vscode.window.showWarningMessage(message, "打开文件夹", "稍后");
+    if (choice === "打开文件夹") {
+      await vscode.commands.executeCommand("vscode.openFolder");
+    }
   }
 }
 

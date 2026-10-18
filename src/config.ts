@@ -1,8 +1,17 @@
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ModelConfigDto, Mode } from "./protocol";
 
-/** 壳侧只读配置视图：设置项 + 路径占位符解析。 */
+/**
+ * 壳侧配置收敛层。
+ *
+ * 设计要点：
+ *   1. **快照制**：`readConfig()` 返回普通对象，设置变了不会自动更新 —— 调用方负责重读。
+ *   2. **拿不到密钥**：这里只有 `apiKeyId`（SecretStorage 的键名），密钥本身由 extension 取。
+ *   3. **运行时校验**：用户在 settings.json 里手写错了类型，就回退默认值并记录问题，
+ *      而不是让 `step > "30"` 这类比较静默出错。
+ */
 export interface ShellConfig {
   coreMode: "python" | "mock";
   pythonPath: string;
@@ -10,7 +19,7 @@ export interface ShellConfig {
   coreRoot: string;
   /** 解释器参数；空数组 = 默认 `["-m","beecode"]` */
   coreArgs: string[];
-  /** 子进程工作目录（已解析占位符） */
+  /** 子进程工作目录（已解析占位符）；无工作区时为空串，由 coreLocator 决定回退 */
   cwd: string;
   model: ModelConfigDto;
   apiKeyId: string;
@@ -21,43 +30,121 @@ export interface ShellConfig {
   checkpointRetention: number;
 }
 
-export function readConfig(): ShellConfig {
-  const cfg = vscode.workspace.getConfiguration("beeCode");
+export interface ConfigReadResult {
+  config: ShellConfig;
+  /** 校验发现的问题（已回退默认值）。启动时写日志并提示用户，不阻塞运行。 */
+  problems: string[];
+}
+
+export function readConfig(): ConfigReadResult {
+  const reader = new Reader(vscode.workspace.getConfiguration("beeCode"));
   const folders = vscode.workspace.workspaceFolders ?? [];
   const firstRoot = folders[0]?.uri.fsPath;
 
-  const rawCwd = cfg.get<string>("core.cwd", "${workspaceFolder}");
-  const cwd = resolvePlaceholders(rawCwd, firstRoot);
-  const rawCoreRoot = cfg.get<string>("core.coreRoot", "");
-
-  return {
-    coreMode: cfg.get<"python" | "mock">("core.mode", "python"),
-    pythonPath: cfg.get<string>("core.pythonPath", "python"),
-    coreRoot: rawCoreRoot ? resolvePlaceholders(rawCoreRoot, firstRoot) : "",
-    coreArgs: cfg.get<string[]>("core.args", []),
-    cwd,
-    apiKeyId: cfg.get<string>("model.apiKeyId", "beeCode.apiKey.default"),
+  const config: ShellConfig = {
+    coreMode: reader.oneOf("core.mode", "python", ["python", "mock"] as const),
+    pythonPath: reader.str("core.pythonPath", "python"),
+    coreRoot: resolvePlaceholders(reader.str("core.coreRoot", ""), firstRoot),
+    coreArgs: reader.strArray("core.args", []),
+    cwd: resolvePlaceholders(reader.str("core.cwd", "${workspaceFolder}"), firstRoot),
+    apiKeyId: reader.str("model.apiKeyId", "beeCode.apiKey.default"),
     model: {
-      baseUrl: cfg.get<string>("model.baseUrl", ""),
-      model: cfg.get<string>("model.model", ""),
-      temperature: cfg.get<number>("model.temperature", 0.2),
-      maxOutputTokens: cfg.get<number>("model.maxOutputTokens", 8192),
-      supportsTools: cfg.get<boolean>("model.supportsTools", true),
+      baseUrl: reader.str("model.baseUrl", ""),
+      model: reader.str("model.model", ""),
+      temperature: reader.num("model.temperature", 0.2, 0, 2),
+      maxOutputTokens: reader.num("model.maxOutputTokens", 8192, 1, 1_000_000),
+      supportsTools: reader.bool("model.supportsTools", true),
     },
-    maxSteps: cfg.get<number>("agent.maxSteps", 30),
-    toolTimeoutMs: cfg.get<number>("agent.toolTimeoutMs", 30000),
-    granularity: cfg.get<"function" | "change" | "file">("review.granularity", "function"),
-    checkpointEnabled: cfg.get<boolean>("checkpoint.enabled", true),
-    checkpointRetention: cfg.get<number>("checkpoint.retention", 50),
+    maxSteps: reader.num("agent.maxSteps", 30, 1, 500),
+    toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),
+    granularity: reader.oneOf("review.granularity", "function", ["function", "change", "file"] as const),
+    checkpointEnabled: reader.bool("checkpoint.enabled", true),
+    checkpointRetention: reader.num("checkpoint.retention", 50, 1, 1_000),
   };
+
+  return { config, problems: reader.problems };
 }
 
-/** 把 `${workspaceFolder}` / `${workspaceFolder:name}` / `${userHome}` 换成真实路径 */
+/**
+ * 带类型校验的读取器：每次 `get` 都验证真实类型与取值范围。
+ *
+ * 为什么不能只写 `cfg.get<number>(...)`：泛型只是在**编译期**声称类型，
+ * 运行时完全可能是 `"30"`（用户在 settings.json 里手写字符串）。
+ */
+class Reader {
+  readonly problems: string[] = [];
+
+  constructor(private readonly cfg: vscode.WorkspaceConfiguration) {}
+
+  str(key: string, fallback: string): string {
+    const raw = this.cfg.get<unknown>(key);
+    if (raw === undefined || raw === null) return fallback;
+    if (typeof raw !== "string") return this.bad(key, "字符串", raw, fallback);
+    return raw;
+  }
+
+  num(key: string, fallback: number, min: number, max: number): number {
+    const raw = this.cfg.get<unknown>(key);
+    if (raw === undefined || raw === null) return fallback;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return this.bad(key, "数字", raw, fallback);
+    if (raw < min || raw > max) {
+      this.problems.push(`beeCode.${key} 超出范围 [${min}, ${max}]（实际 ${raw}），已使用默认值 ${fallback}`);
+      return fallback;
+    }
+    return raw;
+  }
+
+  bool(key: string, fallback: boolean): boolean {
+    const raw = this.cfg.get<unknown>(key);
+    if (raw === undefined || raw === null) return fallback;
+    if (typeof raw !== "boolean") return this.bad(key, "布尔值", raw, fallback);
+    return raw;
+  }
+
+  oneOf<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
+    const raw = this.cfg.get<unknown>(key);
+    if (raw === undefined || raw === null) return fallback;
+    if (typeof raw !== "string" || !allowed.includes(raw as T)) {
+      const expected = allowed.map((a) => `"${a}"`).join(" / ");
+      this.problems.push(
+        `beeCode.${key} 只能是 ${expected}，实际是 ${safeJson(raw)}，已使用默认值 "${fallback}"`,
+      );
+      return fallback;
+    }
+    return raw as T;
+  }
+
+  strArray(key: string, fallback: string[]): string[] {
+    const raw = this.cfg.get<unknown>(key);
+    if (raw === undefined || raw === null) return [...fallback];
+    if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) {
+      return this.bad(key, "字符串数组", raw, fallback);
+    }
+    return [...(raw as string[])];
+  }
+
+  private bad<T>(key: string, expect: string, raw: unknown, fallback: T): T {
+    this.problems.push(
+      `beeCode.${key} 应为${expect}，实际是 ${typeOf(raw)}（${safeJson(raw)}），已使用默认值 ${safeJson(fallback)}`,
+    );
+    return fallback;
+  }
+}
+
+/**
+ * 把 `${workspaceFolder}` / `${workspaceFolder:name}` / `${userHome}` / `${env:X}` 换成真实路径。
+ *
+ * ⚠️ `getConfiguration().get()` **不会**替你展开这些占位符 —— 拿到的就是原始字符串。
+ * 没有工作区时 `${workspaceFolder}` 展开成空串（而不是 `process.cwd()`：
+ * 扩展宿主进程的 cwd 通常是 VS Code 安装目录，几乎肯定不是用户想要的）。
+ */
 export function resolvePlaceholders(raw: string, workspaceRoot?: string): string {
+  if (!raw) return "";
   return raw
-    .replace(/\$\{workspaceFolder(?::[^}]*)?\}/g, workspaceRoot ?? process.cwd())
-    .replace(/\$\{userHome\}/g, process.env["USERPROFILE"] ?? process.env["HOME"] ?? process.cwd())
-    .replace(/\$\{env:([^}]+)\}/g, (_m, name: string) => process.env[name] ?? "");
+    .replace(/\$\{workspaceFolder(?::[^}]*)?\}/g, workspaceRoot ?? "")
+    .replace(/\$\{userHome\}/g, os.homedir())
+    .replace(/\$\{env:([^}]+)\}/g, (_match, name: string) => process.env[name] ?? "")
+    .trim();
 }
 
 /** 每个会话一个 id；壳不解释它，只做路由 */
@@ -82,13 +169,30 @@ export function workspaceRoots(): string[] {
   return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 }
 
+/** 没有打开任何文件夹时，扩展的绝大多数能力都无从谈起（读文件、检查点、diff） */
 export function isWorkspaceEmpty(): boolean {
   return workspaceRoots().length === 0;
 }
 
-/** 供 footer/日志用 */
+/** 供 footer/日志用（不含任何密钥；baseUrl 由 Logger 统一脱敏） */
 export function describeConfig(cfg: ShellConfig): string {
   const model = cfg.model.model || "<未配置>";
   const base = cfg.model.baseUrl || "<未配置>";
-  return `mode=${cfg.coreMode} python=${path.basename(cfg.pythonPath)} model=${model} base=${base}`;
+  const cwd = cfg.cwd || "<无工作区>";
+  return `mode=${cfg.coreMode} python=${path.basename(cfg.pythonPath)} model=${model} base=${base} cwd=${cwd}`;
+}
+
+function typeOf(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    return text === undefined ? String(value) : text;
+  } catch {
+    return String(value);
+  }
 }
