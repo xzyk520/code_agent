@@ -173,7 +173,7 @@
 | API Key | `context.secrets`（`SecretStorage`：`get/store/delete/onDidChange`） |
 | 配置项 | `contributes.configuration` + `workspace.getConfiguration('beeCode')` |
 | 状态栏（token/停止） | `window.createStatusBarItem()` |
-| 日志与排障 | `window.createOutputChannel('Bee Code')`（注意脱敏） |
+| 日志与排障 | `window.createOutputChannel('Bee Code')` + `… · 内核 stderr`（两个 channel，写入前统一 `redact()`；诊断包见 [§12.1.1](#1211-日志脱敏与诊断包已实现)） |
 | MCP 工具互操作（可选） | `contributes.mcpServerDefinitionProviders` + `lm.registerMcpServerDefinitionProvider()` |
 | 原生命令/斜杠命令集成（可选） | `contributes.commands` + `menus.commandPalette`；聊天侧可另注册 Chat Participant |
 
@@ -305,7 +305,7 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | `settings.json`（用户/工作区） | ❌ | 明文、会被同步、会被 git 提交 |
 | `context.secrets`（SecretStorage） | ✅ **唯一位置** | 底层由 OS 凭据库加密（macOS Keychain / Windows DPAPI / Linux libsecret） |
 | `globalState` / `workspaceState` | ❌ | 明文 JSON |
-| 日志/遥测/崩溃上报 | ❌ | 统一走 `redact()` 过滤（`sk-*`、`Bearer *`、URL query 里的 key） |
+| 日志/遥测/崩溃上报 | ❌ | 统一走 `redact()` 过滤（`sk-*` 及 `gsk_`/`ghp_`/`AIza` 等厂商前缀、`Bearer *`、URL query 里的 key/signature、JSON 配置字段）；内核 stderr 同样过滤 |
 | 内存（请求时） | ✅ | 仅存活于发请求的那几毫秒，`AbortSignal` 结束即释放 |
 
 `SecretStorage` 的关键性质（决定了它为什么是唯一正确位置）：**落盘加密**、**不参与 Settings Sync**、桌面端底层走 Electron `safeStorage`（即 OS 凭据库）。相反，`contributes.configuration` 写入的 `settings.json` 是**明文且会随 Settings Sync 同步到其他机器/被 dotfiles 仓库提交**——这是「密钥泄露」最常见的来源。
@@ -901,9 +901,34 @@ async function groupByFunction(base: PendingEdit, symbols: DocumentSymbol[]): Fu
 
 - 只存 `SecretStorage`，见 [§5.3](#53-密钥存储)。
 - **传给内核时只走一次握手**：`apiKey` 通过 Python 子进程的 **stdin** 作为 `initialize` 参数传入，**不放 argv**（`ps` 全机可见）、**不放环境变量**（同用户可读、容易被 `env` 或崩溃转储带进日志）。内核只在内存持有，不落盘。
-- 所有日志走 `redact()`：`/sk-[A-Za-z0-9_\-]{8,}/g`、`/Bearer\s+\S+/gi`、`/([?&](api_?key|token)=)[^&]+/gi`。
-- 「导出诊断包」功能默认剔除：prompt 全文、文件内容、密钥、内网 URL。
+- 所有日志走 `redact()`（`src/log.ts`），共 6 条规则：`sk-` 家族、十余种厂商前缀（`gsk_`/`hf_`/`ghp_`/`gho_`/`ghs_`/`github_pat_`/`xox[baprs]-`/`AIza`/`ya29.`/`sk_live_`/`rk_live_`）、AWS `AKIA`/`ASIA`、`Bearer` 头、URL 查询参数（含 `signature`）、JSON/配置字段。每条规则**保留前缀**，日志仍能看出"这里本来有个 token"。
+- **内核 stderr 也过同一条脱敏管道**（`coreStderr()`）：否则 Python 把带 `?api_key=` 的 traceback 打进面板，就等于开了个绕过通道。
+- 诊断包（见 [§12.1.1](#1211-日志脱敏与诊断包已实现)）默认剔除：prompt 全文、文件内容、密钥、完整工作区路径、内网 URL。
 - 明确声明：**扩展没有后端**，请求直达用户配置的 `base_url`；不接入任何遥测（或首次启动显式询问，默认关）。
+
+### 12.1.1 日志脱敏与诊断包（已实现）
+
+**两个 OutputChannel**（`Logger` 构造时创建）：`Bee Code` 主日志、`Bee Code · 内核 stderr`。分开的理由是 Python traceback 又长又带行号，混进主日志会把"这一次请求发生了什么"彻底淹没。
+
+**内存环形缓冲**：`Logger` 额外保留最近 **500 行**（主日志与 stderr 各一份）。原因是 `OutputChannel` **只提供写、不提供读**——想导出"刚刚发生了什么"，必须自己留一份。
+
+**导出命令**：`Bee Code: 导出诊断包（已脱敏）`
+
+| 项 | 值 |
+| --- | --- |
+| 落点 | `<globalStorage>/diagnostics/bee-code-diagnostics-<YYYYMMDD-HHmmss>.md` |
+| 格式 | 单个 Markdown（可直接贴进 GitHub Issue；不引 zip 依赖） |
+| 后续动作 | 生成后弹提示，可选「打开所在文件夹」或「另存为…」（`showSaveDialog`，默认目录 `os.homedir()`） |
+| 为什么落在扩展私有目录 | 一定可写、不进 git、不污染用户工作区；用户要分享时再另存 |
+
+诊断包包含：环境（扩展/VS Code/平台/Node/Electron/内存/内核模式/Python 解释器 basename）、配置（**baseUrl 只保留 origin**，路径与查询参数全部丢弃）、主日志、内核 stderr、以及一段「明确未包含」的隐私声明。
+
+四个硬约束（都写在 `src/diagnostics.ts` 顶部）：
+
+1. **不读 `SecretStorage`**——文件里根本不存在密钥，不依赖脱敏兜底；
+2. **baseUrl 只留 `protocol://host`**——避免 `?api_key=` 与内网路径泄漏；
+3. **工作区只留文件夹名**——不写入用户名与目录层级；
+4. **整份文档最后再过一遍 `redact()`**——兜底。
 
 ### 12.2 工作区信任（Workspace Trust）
 

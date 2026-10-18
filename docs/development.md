@@ -8,7 +8,7 @@
 
 ```
 bee-code/
-├─ package.json                  # ✅ 扩展清单：11 个命令 / 3 个快捷键 / 菜单 / 视图 / 15 项配置
+├─ package.json                  # ✅ 扩展清单：12 个命令 / 3 个快捷键 / 菜单 / 视图 / 16 项配置
 ├─ tsconfig.json                 # ✅ 扩展侧：lib 无 DOM、strict、verbatimModuleSyntax、module=preserve
 ├─ tsconfig.webview.json         # ✅ 前端侧：lib 含 DOM、allowJs+checkJs、不含 node/vscode 类型
 ├─ esbuild.mjs                   # ✅ 打包 → dist/extension.js（cjs，vscode 保持 external）
@@ -17,14 +17,16 @@ bee-code/
 ├─ .gitignore / .gitattributes   # ✅（本地 .vscode/settings.json 已忽略）
 ├─ README.md / LICENSE (MIT)     # ✅
 ├─ pyproject.toml                # ✅ 内核工程定义（hatchling，httpx + pydantic）
-├─ docs/                         # ⬜ architecture / ipc / prompts / change-review / adr
+├─ docs/                         # ✅ architecture / reference；⬜ ipc / prompts / change-review / adr
 ├─ src/                          # ★ TS 薄壳：唯一允许 import 'vscode' 的地方
 │  ├─ extension.ts               # ✅ 装配根：内核生命周期、通知路由、命令依赖
 │  ├─ coreApi.ts                 # ✅ 内核抽象（PythonCore / MockCore 共用接口）
 │  ├─ protocol.ts                # ✅ 协议类型 + 方法名 + NDJSON 分帧（LineReader）
-│  ├─ config.ts                  # ✅ 设置读取、${workspaceFolder} 解析、会话 id
+│  ├─ config.ts                  # ✅ 设置读取（带类型/范围校验）、${workspaceFolder} 解析、会话 id
+│  ├─ coreLocator.ts             # ✅ 内核定位：工作区 → 扩展目录，注入 PYTHONPATH / 编码变量
+│  ├─ diagnostics.ts             # ✅ 导出脱敏诊断包（落 globalStorage，可另存）
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
-│  ├─ log.ts                     # ✅ OutputChannel + 脱敏（密钥永不落日志）
+│  ├─ log.ts                     # ✅ 双 OutputChannel + 脱敏 + 500 行环形缓冲（供诊断包）
 │  ├─ rpc/
 │  │  ├─ client.ts               # ✅ 起子进程、握手、请求/响应、取消、崩溃处理
 │  │  └─ server.ts               # ✅ 内核 → 壳的方法路由（11 个）
