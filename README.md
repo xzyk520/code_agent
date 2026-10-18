@@ -1270,6 +1270,12 @@ bee-code/
 
 别人克隆后不配置也能跑：`pythonPath` 默认是 `python`（走 PATH），内核用 `pip install -e .` 装依赖即可。
 
+**TypeScript 固定在 `6.0.3`**（= 当前 VS Code 内置版本），刻意不写 `^`：写 `^` 时下次 `npm install` 会装到 6.x 的更高小版本，于是又回到「本地绿、编辑器红」。查看你所用 VS Code 的版本：
+
+```powershell
+(Get-Content "<VS Code 安装目录>\resources\app\extensions\node_modules\typescript\package.json" -Raw | ConvertFrom-Json).version
+```
+
 ```bash
 # 1) 壳（Node 20+）
 npm install
