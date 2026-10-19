@@ -1,11 +1,9 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import ignore, { type Ignore } from "ignore";
 import * as vscode from "vscode";
 import type { InboundRequestContext } from "../coreApi";
 import type { Logger } from "../log";
 import { toWorkspaceRelative } from "../paths";
 import type { GrepHit, SearchGrepParams, SearchGrepResult } from "../protocol";
+import { isIgnored } from "../workspaceIgnore";
 
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_FILES_SCANNED = 4_000;
@@ -29,8 +27,6 @@ export function createSearchAdapter(logger: Logger) {
 
       const limit = Math.min(params.maxResults ?? 200, 2_000);
       const contextLines = Math.max(0, Math.min(params.contextLines ?? 0, 5));
-      const matcher = buildGitignoreMatcher();
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
 
       const re = params.regex ? safeRegex(query) : new RegExp(escapeRegExp(query), "i");
       const files = await vscode.workspace.findFiles(
@@ -48,10 +44,8 @@ export function createSearchAdapter(logger: Logger) {
           truncated = true;
           break;
         }
-        if (matcher && root) {
-          const rel = path.relative(root, uri.fsPath).split(path.sep).join("/");
-          if (matcher.ignores(rel)) continue;
-        }
+        // 统一的忽略规则（噪声目录 + .gitignore），与 fs.list / diagnostics 一致
+        if (isIgnored(uri.fsPath)) continue;
 
         let text: string;
         try {
@@ -113,17 +107,4 @@ function safeRegex(pattern: string): RegExp {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** 只读工作区根的 .gitignore（子目录的暂不支持，README 已注明） */
-function buildGitignoreMatcher(): Ignore | undefined {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) return undefined;
-  const file = path.join(root, ".gitignore");
-  try {
-    if (!fs.existsSync(file)) return undefined;
-    return ignore().add(fs.readFileSync(file, "utf8"));
-  } catch {
-    return undefined;
-  }
 }

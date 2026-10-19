@@ -214,7 +214,7 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | `fs.list` | `glob, exclude?, maxResults?` | `{ paths[] }` | 壳合并 `files.exclude` + `.gitignore` |
 | `search.grep` | `query, regex?, glob?, contextLines?` | `{ hits[{path,line,col,text}] }` | 壳内跑 ripgrep |
 | `symbols.outline` | `path` | `{ symbols[] }` | `executeDocumentSymbolProvider` |
-| `diagnostics.get` | `path?` | `{ items[] }` | `languages.getDiagnostics` |
+| `diagnostics.get` | `path?` / `minSeverity?` / `maxItems?`（默认 200，上限 2000）/ `includeIgnored?` | `{ items[], total, truncated }`；每条含 `code`（`TS2322` 等）与 1-based 行列 | `languages.getDiagnostics`，按严重度排序、默认过滤 `node_modules`/`.git`/`.gitignore` |
 | `edit.apply` | `path, expectedVersion, newText, reason` | `{ applied, version }` | **唯一写入通道**：单次 `WorkspaceEdit` |
 | `checkpoint.create` | `label` | `{ id }` | 影子 git 快照 |
 | `checkpoint.restore` | `id, scope: files\|task\|both` | `{ restored[] }` | 三档恢复 |
@@ -474,6 +474,9 @@ system =
 - 禁止「先把异常 try/catch 掉」式的伪修复，除非用户明确要求容错。
 - 区分「根因」与「触发条件」，两者都要写清楚。
 - 任何修复都必须说明副作用与回滚方式。
+- **诊断为空 ≠ 代码没问题**：`diagnostics.get` 只返回「已被语言服务分析过」的文件；
+  刚打开窗口时可能只有少数文件有值。诊断为空时明确写「未获得诊断信息，可能是工程尚未分析」，
+  而不是断言「没有编译错误」。
 
 # Output
 ## 根因

@@ -5,12 +5,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **协议 v3**：`diagnostics.get` 支持 `minSeverity` / `maxItems` / `includeIgnored`，返回 `{items, total, truncated}`；
+  每条诊断新增 `code`（`TS2322` 等）与 1-based 列号
+- **诊断默认过滤噪声**：`node_modules` / `.git` / 构建产物 / `.gitignore` 里的文件不再进入结果
+- **诊断按严重度排序**（error 优先）并默认最多 200 条，避免一次塞爆上下文
+- 忽略规则抽成 `src/workspaceIgnore.ts`，由 fs / search / diagnostics 三个适配器共用（之前是两份拷贝，规则容易漂移）
+
 ### Planned
 
 - 内核 `chat.send` 最小闭环（读文件 → 调模型 → 流式吐字）
 - 逐函数 Keep/Undo 的状态机（`beecode/pending`）
 - MCP 客户端与 Skill 按需加载
 - sidecar 打包（PyInstaller）与首次运行引导（`scripts/bootstrap.py`）
+- `checkpoint.list` RPC（内核目前无法列出检查点，见 docs §10.5.1）
 
 ## [0.0.1] - 2026-10-19
 

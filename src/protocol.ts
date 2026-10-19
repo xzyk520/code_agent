@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -120,9 +120,39 @@ export interface SymbolsOutlineParams { path: string }
 export interface SymbolDto { name: string; kind: string; container?: string; range: TextRangeDto }
 export interface SymbolsOutlineResult { symbols: SymbolDto[]; source: "lsp" | "none" }
 
-export interface DiagnosticsGetParams { path?: string }
-export interface DiagnosticDto { path: string; severity: "error" | "warning" | "info" | "hint"; message: string; source?: string; range: TextRangeDto }
-export interface DiagnosticsGetResult { items: DiagnosticDto[] }
+export interface DiagnosticsGetParams {
+  /** 只看这个文件；省略 = 全量（只包含已被语言服务分析过的文件） */
+  path?: string;
+  /** 只返回不低于该严重度的诊断（默认 hint = 全部） */
+  minSeverity?: "error" | "warning" | "info" | "hint";
+  /** 最多返回多少条（默认 200，硬上限 2000） */
+  maxItems?: number;
+  /** 是否包含 node_modules/.git 与 .gitignore 忽略的文件（默认 false） */
+  includeIgnored?: boolean;
+}
+
+export interface DiagnosticDto {
+  path: string;
+  severity: "error" | "warning" | "info" | "hint";
+  message: string;
+  /** 诊断码：`TS2322` / `no-unused-vars` / `E501` …（模型定位问题的最强线索） */
+  code?: string;
+  source?: string;
+  range: {
+    startLine: number;
+    endLine: number;
+    /** 1-based 列，可选（旧客户端可能没有） */
+    startColumn?: number;
+    endColumn?: number;
+  };
+}
+
+export interface DiagnosticsGetResult {
+  items: DiagnosticDto[];
+  /** 过滤后、截断前的总数 */
+  total: number;
+  truncated: boolean;
+}
 
 /** 内核算好新文本，壳负责落盘（唯一写入通道）。 */
 export interface EditApplyParams {

@@ -1,11 +1,9 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import ignore, { type Ignore } from "ignore";
 import * as vscode from "vscode";
 import type { InboundRequestContext } from "../coreApi";
 import type { Logger } from "../log";
 import { resolveTarget, toWorkspaceRelative } from "../paths";
 import type { FsListParams, FsListResult, FsReadParams, FsReadResult } from "../protocol";
+import { isIgnored } from "../workspaceIgnore";
 
 const MAX_FILE_BYTES = 512 * 1024;
 const DEFAULT_LIST_LIMIT = 5000;
@@ -58,37 +56,18 @@ export function createFsAdapter(logger: Logger) {
       const limit = Math.min(params.maxResults ?? DEFAULT_LIST_LIMIT, 20_000);
 
       const found = await vscode.workspace.findFiles(glob, params.exclude ?? undefined, limit);
-      const matcher = buildGitignoreMatcher();
-      const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
-
       const paths: string[] = [];
       for (const uri of found) {
         ctx.throwIfCancelled();
-        const rel = toWorkspaceRelative(uri.fsPath);
-        if (matcher && roots.length > 0) {
-          const relToRoot = path.relative(roots[0]!, uri.fsPath).split(path.sep).join("/");
-          if (matcher.ignores(relToRoot)) continue;
-        }
-        paths.push(rel);
+        // 统一的忽略规则（噪声目录 + .gitignore），与 search / diagnostics 一致
+        if (isIgnored(uri.fsPath)) continue;
+        paths.push(toWorkspaceRelative(uri.fsPath));
         if (paths.length >= limit) break;
       }
       logger.debug(`fs.list ${glob} → ${paths.length} 个文件`);
       return { paths };
     },
   };
-}
-
-/** 只在工作区根上读 .gitignore（子目录里的暂不支持，见 README 的已知限制） */
-function buildGitignoreMatcher(): Ignore | undefined {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) return undefined;
-  const file = path.join(root, ".gitignore");
-  if (!fs.existsSync(file)) return undefined;
-  try {
-    return ignore().add(fs.readFileSync(file, "utf8"));
-  } catch {
-    return undefined;
-  }
 }
 
 function clamp(value: number, min: number, max: number): number {

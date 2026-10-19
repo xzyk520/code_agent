@@ -58,6 +58,9 @@ class Diagnostic:
     start_line: int
     end_line: int
     source: str | None = None
+    code: str | None = None
+    start_column: int | None = None
+    end_column: int | None = None
 
 
 def turn_label(turn: int, note: str = "") -> str:
@@ -163,9 +166,28 @@ class ShellClient:
             )
         return symbols
 
-    async def diagnostics(self, path: str | None = None) -> list[Diagnostic]:
-        payload = {"path": path} if path else {}
-        result = await self._call("diagnostics.get", payload)
+    async def diagnostics(
+        self,
+        path: str | None = None,
+        *,
+        min_severity: str | None = None,
+        max_items: int | None = None,
+        include_ignored: bool = False,
+    ) -> list[Diagnostic]:
+        """读取 LSP 诊断（error 优先排序、默认最多 200 条）。
+
+        ⚠️ **诊断为空 ≠ 代码没问题**：壳只能返回「已被语言服务分析过」的文件的诊断，
+        刚打开窗口时可能只有少数文件有值。写 Debugger 提示词时要说明这一点。
+
+        参数：
+            path: 只看这个文件；省略 = 全量
+            min_severity: `"error"` / `"warning"` / `"info"` / `"hint"`，低于它的被过滤
+            max_items: 最多返回多少条（默认 200，硬上限 2000）
+            include_ignored: 是否包含 node_modules/.git/.gitignore 里的文件
+        """
+        result = await self.diagnostics_result(
+            path, min_severity=min_severity, max_items=max_items, include_ignored=include_ignored
+        )
         out: list[Diagnostic] = []
         for item in result.get("items", []):
             rng = item.get("range", {})
@@ -177,9 +199,30 @@ class ShellClient:
                     start_line=int(rng.get("startLine", 1)),
                     end_line=int(rng.get("endLine", 1)),
                     source=item.get("source"),
+                    code=item.get("code"),
+                    start_column=rng.get("startColumn"),
+                    end_column=rng.get("endColumn"),
                 )
             )
         return out
+
+    async def diagnostics_result(
+        self,
+        path: str | None = None,
+        *,
+        min_severity: str | None = None,
+        max_items: int | None = None,
+        include_ignored: bool = False,
+    ) -> dict[str, Any]:
+        """同上，但返回 `{items, total, truncated}` —— 需要知道「是否被截断」时用。"""
+        payload: dict[str, Any] = {"includeIgnored": include_ignored}
+        if path:
+            payload["path"] = path
+        if min_severity:
+            payload["minSeverity"] = min_severity
+        if max_items is not None:
+            payload["maxItems"] = max_items
+        return dict(await self._call("diagnostics.get", payload))
 
     # ───────────────────────── 写 ─────────────────────────
 
