@@ -84,6 +84,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
   }
 
+  /** 重载后恢复聊天记录（不改状态机，只回填视图） */
+  restore(messages: ChatMessageView[], mode?: PanelState["mode"]): void {
+    this.state.messages = messages;
+    if (mode) this.state.mode = mode;
+    this.pushState();
+  }
+
+  /** 当前完整消息列表（会话持久化用） */
+  getMessages(): ChatMessageView[] {
+    return [...this.state.messages];
+  }
+
+  getMode(): PanelState["mode"] {
+    return this.state.mode;
+  }
+
   setBusy(busy: boolean): void {
     this.state.busy = busy;
     this.pushState();

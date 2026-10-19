@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **会话持久化**：重载（Reload Window / 更新扩展 / 宿主崩溃）后恢复聊天记录与「上一轮停在哪」。
+  停在模型生成 → 作废并提示；停在工具调用 → 可「继续上次的操作」；停在待审提案 → 可「重新生成提案」。
+  快照落 `<globalStorage>/sessions/<sessionId>.json`（原子写、裁剪上限、不含密钥与提案正文）
+
 ### Changed
 
 - **改动落地改为「提案 + 逐文件审批」（协议 v4）**：内核产出修正后的完整文件内容，作为**虚拟文件**预览
@@ -12,6 +18,7 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **协议 v5**：`chat.send` 新增可选 `history[]`，重载后「继续」时可带上上下文
 - **协议 v3**：`diagnostics.get` 支持 `minSeverity` / `maxItems` / `includeIgnored`，返回 `{items, total, truncated}`；
   每条诊断新增 `code`（`TS2322` 等）与 1-based 列号
 - **诊断默认过滤噪声**：`node_modules` / `.git` / 构建产物 / `.gitignore` 里的文件不再进入结果

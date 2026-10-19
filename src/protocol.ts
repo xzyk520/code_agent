@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -275,11 +275,22 @@ export interface Attachment {
   kind?: "selection" | "file" | "diagnostic";
 }
 
+/** 会话历史里的一条消息（重载后恢复上下文用；只带文本，不带工具调用细节） */
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  text: string;
+}
+
 export interface ChatSendParams {
   sessionId: string;
   mode: Mode;
   text: string;
   attachments?: Attachment[];
+  /**
+   * 之前轮次的对话（重载恢复 / "继续上次"时由壳带上）。
+   * 内核可以据此重建上下文；不传就是全新会话。
+   */
+  history?: ChatMessage[];
 }
 
 /** 提案（虚拟文件）：内核把「修正后的代码」暂存在自己那边，壳按需拉取，用户批准后才真正落盘 */

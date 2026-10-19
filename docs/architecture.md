@@ -684,6 +684,43 @@ interface ContextBudget {
 
 ---
 
+### 9.3 重载恢复：聊天记录与"上一轮停在哪"
+
+扩展重载（Reload Window / 更新扩展 / 宿主崩溃重启）会清空所有内存状态。用户不能接受"聊到一半没了"，所以壳侧做一层会话快照。
+
+**存什么**（`<globalStorage>/sessions/<sessionId>.json`）：
+
+```jsonc
+{
+  "version": 1,
+  "sessionId": "s_1730000000000_ab12",
+  "mode": "builder",
+  "messages": [{ "id": "u_...", "role": "user", "text": "..." }],
+  "status": "tool",              // idle | thinking | tool | awaiting-decision
+  "statusDetail": "read_file",   // 停在工具调用时记下工具名
+  "updatedAt": 1730000000123
+}
+```
+
+**三条硬约束**：
+
+| 约束 | 为什么 |
+| --- | --- |
+| 先写 `.tmp` 再 `rename` | 断电/崩溃不会留下半个 JSON（读到坏文件就当成"没有历史"） |
+| 裁剪到 200 条 / 单条 20k 字符 / 整文件 2MB | 长期使用不能把 `globalStorage` 写满 |
+| 只存消息文本与状态，**不存密钥/提案正文** | 密钥永远只在 `SecretStorage`；提案正文体积大且可重新生成 |
+
+**重载后按"停在哪"分流**（三种情况，行为不同）：
+
+| 上次停在 | 含义 | 重载后的行为 |
+| --- | --- | --- |
+| `thinking` | 模型生成中被中断 | **直接作废**：插一条 system 消息告知，不自动续写（半截输出没有价值，还可能误导模型） |
+| `tool` | 工具调用执行中被中断 | 提示「发**继续上次的操作**即可接着做」；命令 `beeCode.session.continue` 带上历史重新发起 |
+| `awaiting-decision` | 面板上有待审提案 | 提案正文只在内存，已丢失 → 提示「发**重新生成提案**」；命令 `beeCode.session.regenerate` |
+
+**为什么"继续"能成立**：`chat.send` 新增可选字段 `history[]`（协议 v5），壳把恢复出来的最近 50 条消息一并带上，内核据此重建上下文——不需要内核自己持久化。
+
+**边界**：只保存**当前会话**（`sessionId` 在壳启动时生成一次）。历史会话列表、重命名、搜索属于后续版本。
 ## 10. 改动落地：提案 + 逐文件审批（Proposal-then-Apply）
 
 > **方向修正（v0.3，最终形态）**：v0.1 曾改为「直接写入 → Keep/Undo」，v0.3 又回到**先审后写**，但形态不同：

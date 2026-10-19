@@ -11,6 +11,10 @@ export interface CommandDeps {
   restoreCheckpoint(): Promise<void>;
   acceptAll(): Promise<void>;
   rejectAll(): Promise<void>;
+  /** 重载中断后：让 agent 接着上次的工具调用继续 */
+  continueTurn(): Promise<void>;
+  /** 重载中断后：让 agent 重新生成提案 */
+  regenerateProposal(): Promise<void>;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -46,6 +50,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
   register("beeCode.files.pick", () => deps.pickFiles());
   register("beeCode.model.configure", () => deps.configureModel());
+  register("beeCode.session.continue", () => deps.continueTurn());
+  register("beeCode.session.regenerate", () => deps.regenerateProposal());
   register("beeCode.proposal.acceptAll", () => deps.acceptAll());
   register("beeCode.proposal.rejectAll", () => deps.rejectAll());
   register("beeCode.checkpoint.restore", () => deps.restoreCheckpoint());

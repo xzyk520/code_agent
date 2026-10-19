@@ -20,12 +20,14 @@ import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
 import { toWorkspaceRelative } from "./paths";
+import { SessionStore, type SessionSnapshot, type TurnStatus } from "./sessionStore";
 import type {
   Attachment,
   ChatSendParams,
   InitializeParams,
   LogParams,
   Mode,
+  ChatMessage,
   ProposalChangedParams,
   ProposalDto,
   UiDeltaParams,
@@ -66,6 +68,10 @@ class Shell {
   private starting: Promise<CoreApi> | undefined;
   private readonly sessionId = newSessionId();
   private readonly proposals: ProposalAdapter;
+  private readonly sessions: SessionStore;
+  /** 上一轮停在哪个阶段（持久化到磁盘，重载后可判断能否继续） */
+  private turn: TurnStatus = "idle";
+  private turnDetail: string | undefined;
   private readonly edit: ReturnType<typeof createEditAdapter>;
   private busy = false;
   private usage = "";
@@ -89,6 +95,7 @@ class Shell {
     // 写入通道与提案暂存：提案被「接受」时才真正调用 this.edit 落盘
     this.edit = createEditAdapter(this.log);
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
+    this.sessions = new SessionStore(context.globalStorageUri.fsPath, this.log);
 
     this.panel = new ChatViewProvider(context.extensionUri, {
       onSend: (text, mode, attachments) => void this.send(text, mode, attachments),
@@ -110,8 +117,10 @@ class Shell {
   async start(): Promise<void> {
     this.log.info(`激活：${describeConfig(this.config)}`);
 
+    await this.restoreSession();
+
     // 所有"可释放资源"只有一个所有者：context.subscriptions。
-    // VS Code 会在 deactivate() 返回后统一 dispose，避免我们与它双重释放。
+    // VS Code 会在 deactivate() 后统一 dispose，避免我们与它双重释放。
     this.context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, this.panel, {
         webviewOptions: { retainContextWhenHidden: false },
@@ -126,6 +135,8 @@ class Shell {
       restoreCheckpoint: () => this.restoreCheckpoint(),
       acceptAll: () => this.acceptAllProposals(),
       rejectAll: () => this.rejectAllProposals(),
+      continueTurn: () => this.continueTurn(),
+      regenerateProposal: () => this.regenerateProposal(),
       pickFiles: () => this.pickFiles(),
       exportDiagnostics: () => this.exportDiagnostics(),
     });
@@ -142,7 +153,7 @@ class Shell {
       }),
     );
 
-    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals);
+    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
   }
@@ -160,6 +171,9 @@ class Shell {
     if (this.disposed) return;
     this.disposed = true;
 
+    // 先把最后几条消息落盘，再停内核
+    await this.sessions.flushNow(this.buildSnapshot()).catch(() => undefined);
+
     const core = this.core;
     this.core = undefined;
     if (core) {
@@ -169,6 +183,86 @@ class Shell {
     this.log.info("已停用");
   }
 
+  // ───────────────────────── 会话持久化 ─────────────────────────
+
+  /**
+   * 重载后恢复：聊天记录 + 「上一轮停在哪」。
+   *
+   * 三种中断情况的处理（用户要求的行为）：
+   *   - 停在**模型思考/输出** → 这一轮直接作废，只用一条 system 消息告知
+   *   - 停在**工具调用** → 提示可以发「继续上次的操作」让 agent 接着做
+   *   - 停在**用户决策**（待审提案）→ 提案已随内存丢失，提示可以「重新生成」
+   */
+  private async restoreSession(): Promise<void> {
+    const snapshot = await this.sessions.load(this.sessionId);
+    if (!snapshot) return;
+
+    this.panel.restore(
+      snapshot.messages.map((m) => ({ id: m.id, role: m.role, text: m.text })),
+      snapshot.mode,
+    );
+    this.turn = snapshot.status ?? "idle";
+    this.turnDetail = snapshot.statusDetail;
+    this.log.info(`会话已恢复：${snapshot.messages.length} 条消息，上一轮状态=${this.turn}`);
+
+    if (this.turn !== "idle") {
+      this.panel.addMessage({
+        id: `sys_${Date.now()}`,
+        role: "system",
+        text: this.interruptionNote(this.turn, this.turnDetail),
+      });
+      this.panel.setHint(
+        this.turn === "tool"
+          ? "上一轮停在工具调用：发「继续上次的操作」即可接着做。"
+          : this.turn === "awaiting-decision"
+            ? "上次的提案已失效：发「重新生成提案」可以让 agent 再给一次。"
+            : "上一轮生成被中断，已作废。",
+      );
+      this.turn = "idle";
+      this.turnDetail = undefined;
+      this.persistSession();
+    }
+    this.panel.pushState();
+  }
+
+  private interruptionNote(status: TurnStatus, detail?: string): string {
+    switch (status) {
+      case "thinking":
+        return "上一轮在模型生成过程中被重载中断，已作废（不会自动续写）。";
+      case "tool":
+        return `上一轮停在工具调用${detail ? `（${detail}）` : ""}后中断。想接着做，请发送「继续上次的操作」。`;
+      case "awaiting-decision":
+        return "上次的待审提案没有保留（重载会清空未决提案）。需要的话发送「重新生成提案」。";
+      default:
+        return "";
+    }
+  }
+
+  private buildSnapshot(): SessionSnapshot {
+    return {
+      version: 1,
+      sessionId: this.sessionId,
+      mode: this.panel.getMode(),
+      messages: this.panel.getMessages().map((m) => ({ id: m.id, role: m.role, text: m.text })),
+      status: this.turn,
+      statusDetail: this.turnDetail,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private persistSession(): void {
+    this.sessions.save(this.buildSnapshot());
+  }
+
+  /** 「继续上次的操作」：把历史带上，让内核接着上下文做 */
+  private async continueTurn(): Promise<void> {
+    await this.send("继续上次未完成的操作（上一次停在工具调用阶段）。", this.panel.getMode(), []);
+  }
+
+  /** 「重新生成提案」：上一次的虚拟文件已随内存丢失，让内核重新产出 */
+  private async regenerateProposal(): Promise<void> {
+    await this.send("请重新生成上一次的改动提案。", this.panel.getMode(), []);
+  }
   // ───────────────────────── 内核生命周期 ─────────────────────────
 
   private async ensureCore(): Promise<CoreApi> {
@@ -293,6 +387,9 @@ class Shell {
 
     this.panel.addMessage({ id: `u_${Date.now()}`, role: "user", text: trimmed || defaultInstruction(mode) });
     this.setBusy(true);
+    this.turn = "thinking";
+    this.turnDetail = undefined;
+    this.persistSession();
 
     try {
       const core = await this.ensureCore();
@@ -301,6 +398,8 @@ class Shell {
         mode,
         text: trimmed,
         attachments: attachments.map(toAttachment),
+        // 把之前的对话一并带上：重载后「继续上次的操作」才有上下文
+        history: this.historyBeforeLast(),
       };
       await core.chatSend(params);
     } catch (err) {
@@ -311,8 +410,19 @@ class Shell {
       });
     } finally {
       this.setBusy(false);
+      this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
+      this.persistSession();
       this.panel.pushState();
     }
+  }
+
+  /** 最近 50 条历史（不含刚加入的那条用户消息） */
+  private historyBeforeLast(): ChatMessage[] {
+    return this.panel
+      .getMessages()
+      .slice(0, -1)
+      .slice(-50)
+      .map((m) => ({ role: m.role, text: m.text }));
   }
 
   /** 接受一个或多个提案：逐个 拉正文 → 写盘 → 通知内核 */
@@ -543,6 +653,12 @@ class Shell {
         return;
       }
       case "ui.tool": {
+        const tool = params as UiToolParams;
+        if (tool.status === "start") {
+          this.turn = "tool";
+          this.turnDetail = tool.name;
+          this.persistSession();
+        }
         const p = params as UiToolParams;
         this.panel.setHint(`${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`);
         return;
@@ -556,6 +672,8 @@ class Shell {
       }
       case "proposal.changed": {
         this.applyProposalChange(params as ProposalChangedParams);
+        this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
+        this.persistSession();
         return;
       }
       case "log": {

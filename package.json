@@ -1,7 +1,7 @@
 {
   "name": "bee-code",
   "displayName": "Bee Code",
-  "description": "BYO-model coding agent: Chat / Builder / Debugger, write-then-review with per-function Keep/Undo.",
+  "description": "BYO-model coding agent: Chat / Builder / Debugger, diff preview with per-file accept.",
   "version": "0.0.1",
   "publisher": "xzyk520",
   "license": "MIT",
@@ -99,6 +99,16 @@
       {
         "command": "beeCode.exportDiagnostics",
         "title": "导出诊断包（已脱敏）",
+        "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.session.continue",
+        "title": "继续上次的操作",
+        "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.session.regenerate",
+        "title": "重新生成上次的提案",
         "category": "Bee Code"
       }
     ],
