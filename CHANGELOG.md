@@ -20,6 +20,8 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **命名与注释清理**：`protocol.ts` 文件头同步（`proposal.changed`、补上 `symbols.search/references`）；
+  面板 HTML/CSS/JS 的 `pending` 旧命名改为 `proposals`（HTML id、CSS 类、JS 元素引用全部一致）
 - **RPC 层修复**：`abort()` 现在会 reject 在飞的 `chat.send`（不再挂 30 分钟、不会出现并发 loop）；
   `stdin` 写入处理背压（`drain`）；错误码映射收敛到 `protocol.rpcCodeFor`（删掉 client/server 两份拷贝）；
   `initialize` 超时 20s → 60s 并区分「启动慢」与「版本不匹配」；重复注册 RPC 方法改为抛错；

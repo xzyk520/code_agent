@@ -20,10 +20,10 @@
 
   const el = {
     messages: must("messages", HTMLElement),
-    pending: must("pending", HTMLElement),
-    pendingList: must("pending-list", HTMLElement),
-  srStatus: must("sr-status", HTMLElement),
-    pendingTitle: must("pending-title", HTMLElement),
+    proposals: must("proposals", HTMLElement),
+    proposalsList: must("proposals-list", HTMLElement),
+    srStatus: must("sr-status", HTMLElement),
+    proposalsTitle: must("proposals-title", HTMLElement),
     attachments: must("attachments", HTMLElement),
     input: must("input", HTMLTextAreaElement),
     hint: must("hint", HTMLElement),
@@ -128,9 +128,9 @@
    * @param {Proposal[]} items
    */
   function renderProposals(items) {
-    el.pending.classList.toggle("hidden", items.length === 0);
-    el.pendingTitle.textContent = "待审提案（" + items.length + " 个文件）";
-    el.pendingList.textContent = "";
+    el.proposals.classList.toggle("hidden", items.length === 0);
+    el.proposalsTitle.textContent = "待审提案（" + items.length + " 个文件）";
+    el.proposalsList.textContent = "";
 
     for (const item of items) {
       const stale = item.status === "stale";
@@ -185,7 +185,7 @@
       reject.addEventListener("click", () => post({ type: "reject", ids: [item.id] }));
       actions.appendChild(reject);
       li.appendChild(actions);
-      el.pendingList.appendChild(li);
+      el.proposalsList.appendChild(li);
     }
   }
 

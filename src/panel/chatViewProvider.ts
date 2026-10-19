@@ -44,7 +44,7 @@ export interface PanelState {
  * 不拼提示词、不解析模型输出、不保存会话状态机 —— 那些都在内核里。
  *
  * 安全：CSP nonce、localResourceRoots 限定到 media/、消息 type 白名单、
- * **不信任**前端传来的路径（面板只能传 pending id）。
+ * **不信任**前端传来的路径（面板只能传提案 id）。
  */
 /** 面板最多保留多少条消息（超出时从最早的丢，避免 DOM 无限增长） */
 const MAX_MESSAGES = 300;
@@ -263,15 +263,15 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   <section id="attachments" class="attachments"></section>
   <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-  <section id="pending" class="pending hidden">
-    <div class="pending-head">
-      <span id="pending-title">待审提案</span>
-      <span class="pending-actions">
+  <section id="proposals" class="proposals hidden">
+    <div class="proposals-head">
+      <span id="proposals-title">待审提案</span>
+      <span class="proposals-actions">
         <button id="acceptAll">全部接受</button>
         <button id="rejectAll">全部拒绝</button>
       </span>
     </div>
-    <ul id="pending-list"></ul>
+    <ul id="proposals-list"></ul>
   </section>
 
   <footer class="composer">

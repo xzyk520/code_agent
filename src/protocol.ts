@@ -5,9 +5,10 @@
  * 方向：
  *   - 壳 → 内核（CoreApi）：initialize / chat.send / proposal.read / proposal.decide / session.abort / model.reload / shutdown
  *   - 内核 → 壳（ShellMethods）：fs.read / fs.list / search.grep / symbols.outline / diagnostics.get /
- *                                edit.apply / checkpoint.create / checkpoint.restore / diff.open /
+ *                                symbols.search / symbols.references / edit.apply /
+ *                                checkpoint.create / checkpoint.restore / diff.open /
  *                                confirm.ask / secrets.get
- *   - 内核 → 壳 通知：ui.delta / ui.tool / ui.usage / pending.changed / log
+ *   - 内核 → 壳 通知：ui.delta / ui.tool / ui.usage / proposal.changed / log
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */

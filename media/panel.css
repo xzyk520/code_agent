@@ -93,16 +93,16 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(12
   white-space: nowrap;
 }
 
-.pending {
+.proposals {
   border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
   max-height: 40vh;
   overflow-y: auto;
   padding: 6px 8px;
 }
 
-.pending.hidden { display: none; }
+.proposals.hidden { display: none; }
 
-.pending-head {
+.proposals-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -111,11 +111,11 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(12
   margin-bottom: 4px;
 }
 
-.pending-actions { display: flex; gap: 4px; }
+.proposals-actions { display: flex; gap: 4px; }
 
-.pending ul { list-style: none; margin: 0; padding: 0; }
+.proposals ul { list-style: none; margin: 0; padding: 0; }
 
-.pending li {
+.proposals li {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -124,9 +124,9 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(12
   border-bottom: 1px dashed rgba(128, 128, 128, 0.2);
 }
 
-.pending .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pending .stat { opacity: 0.75; font-variant-numeric: tabular-nums; }
-.pending .risk-high { color: var(--vscode-errorForeground); }
+.proposals .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proposals .stat { opacity: 0.75; font-variant-numeric: tabular-nums; }
+.proposals .risk-high { color: var(--vscode-errorForeground); }
 
 .composer {
   border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
