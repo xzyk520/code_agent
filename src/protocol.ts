@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -368,6 +368,8 @@ export interface InitializeResult {
 }
 
 export interface Attachment {
+  /** 未保存的临时文档（untitled:）：`path` 只是显示名，不能用来 fs.read */
+  untitled?: boolean;
   path: string;
   startLine?: number;
   endLine?: number;

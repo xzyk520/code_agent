@@ -10,7 +10,7 @@ import { ProposalAdapter } from "./adapters/proposalAdapter";
 import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
-import { registerCommands } from "./commands/register";
+import { registerCommands, undeclaredCommands } from "./commands/register";
 import { defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi } from "./coreApi";
@@ -139,7 +139,7 @@ class Shell {
       }),
     );
 
-    registerCommands(this.context, {
+    const registeredCommands = registerCommands(this.context, {
       panel: this.panel,
       log: this.log,
       configureModel: () => this.configureModel(),
@@ -159,6 +159,7 @@ class Shell {
       pickFiles: () => this.pickFiles(),
       exportDiagnostics: () => this.exportDiagnostics(),
     });
+    this.verifyCommands(registeredCommands);
 
     this.context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
@@ -824,6 +825,19 @@ class Shell {
     this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
 
     this.verifyProtocolContract();
+  }
+
+  /**
+   * 命令对账：已注册 ↔ package.json 声明。两边不一致时命令面板会静默缺项 / 点击报错。
+   */
+  private verifyCommands(registered: string[]): void {
+    const problems = undeclaredCommands(this.context, registered);
+    if (problems.length === 0) {
+      this.log.info(`命令对账通过（${registered.length} 个）`);
+      return;
+    }
+    for (const problem of problems) this.log.error(`命令对账：${problem}`);
+    void vscode.window.showWarningMessage(`Bee Code: 命令声明与注册不一致（${problems.length} 处），详见输出面板。`);
   }
 
   /**

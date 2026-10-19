@@ -10,6 +10,8 @@ export interface ChatMessageView {
 
 export interface AttachedContext {
   path: string;
+  /** 未保存文档（untitled:）没有真实路径，内核不应拿它去 fs.read */
+  untitled?: boolean;
   startLine?: number;
   endLine?: number;
   text?: string;

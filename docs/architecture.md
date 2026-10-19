@@ -760,7 +760,9 @@ interface ContextBudget {
 ### 9.2 实现要点
 
 1. **声明**：`contributes.menus.editor/context` + `contributes.keybindings`，两者都用 `when: "editorHasSelection"` 控制（无选区时菜单隐藏）；`group: "beeCode@n"` 保证排序在同一组内。
-2. **采集**：`vscode.window.activeTextEditor` → `selection`（支持多选区：逐个取，合并去重）→ `document.getText(range)`；同时记录 `uri`、`range.start.line/end.line`、语言 ID。
+   **命令 id 与 `package.json` 在启动时对账**（`undeclaredCommands()`）：声明了没注册 → 点击报 `command not found`；注册了没声明 → 命令面板看不到。
+2. **采集**：`vscode.window.activeTextEditor` → `selection`（支持多选区：逐个取，**按 `路径:起行:止行` 去重**）→ `document.getText(range)`。
+   路径一律转成**工作区相对路径**（绝对路径会把用户名带进 prompt）；`untitled:` 文档没有真实路径，用 `untitled: true` 标记，内核不会拿它去 `fs.read`。
 3. **上下文扩展**：用 `vscode.executeDocumentSymbolProvider` 拿到光标/选区所属的符号，向上扩到函数边界（避免只给半截 `if` 块）；再补「文件头 40 行（imports）+ 相邻 20 行」作为最小可理解单元。
 4. **投递**：命令里 `await vscode.commands.executeCommand('beeCode.chatView.focus')` 后 `postMessage({ type: 'attachSelection', payload })`；面板渲染成 chip，用户可删、可再选。
 5. **大选区策略**：> 200 行时只附 `file_outline` + 选区首尾各 40 行，并在 chip 上标注「已折叠（共 800 行）」，模型需要时再用 `read_file` 精读。

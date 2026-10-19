@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ChatViewProvider } from "../panel/chatViewProvider";
 import type { Logger } from "../log";
+import { toWorkspaceRelative } from "../paths";
 
 /** 命令只依赖这个接口，不依赖 extension.ts 的内部实现（避免循环依赖） */
 export interface CommandDeps {
@@ -33,14 +34,25 @@ export interface CommandDeps {
  * 每个命令都是薄薄一层：拿上下文 → 调 panel/deps。
  * `context.subscriptions` 统一兜底释放，避免扩展重载时残留监听。
  */
-export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): void {
+export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): string[] {
+  const ids: string[] = [];
   const register = (id: string, handler: (...args: unknown[]) => unknown): void => {
+    ids.push(id);
     context.subscriptions.push(
       vscode.commands.registerCommand(id, async (...args: unknown[]) => {
+        const startedAt = Date.now();
         try {
           await handler(...args);
+          // 成功也留痕：用户说"点了没反应"时，这条 debug 是唯一线索
+          deps.log.debug(`命令 ${id} 完成（${Date.now() - startedAt}ms）`);
         } catch (err) {
+          const name = err instanceof Error ? err.name : "";
           const message = err instanceof Error ? err.message : String(err);
+          if (name === "CancelledError") {
+            // 用户主动取消不该弹红框
+            deps.log.debug(`命令 ${id} 被取消`);
+            return;
+          }
           deps.log.error(`命令 ${id} 失败: ${message}`);
           void vscode.window.showErrorMessage(`Bee Code: ${message}`);
         }
@@ -70,6 +82,31 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.core.restart", () => deps.restartCore());
   register("beeCode.core.showOutput", () => deps.log.show());
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
+
+  return ids;
+}
+
+/**
+ * 命令对账：已注册的 id ↔ `package.json` 里 `contributes.commands` 声明的 id。
+ *
+ * 两边不一致的后果很隐蔽：
+ *   - 注册了但没声明 → 命令面板里看不到（只能靠快捷键/编程调用）
+ *   - 声明了但没注册 → 用户点了报 `command not found`
+ * 和协议契约（contract.json）一样，这类"两份清单"必须自动对账。
+ */
+export function undeclaredCommands(context: vscode.ExtensionContext, registered: string[]): string[] {
+  const contributes = (context.extension?.packageJSON as { contributes?: { commands?: Array<{ command?: string }> } })
+    ?.contributes;
+  const declared = (contributes?.commands ?? [])
+    .map((c) => c.command)
+    .filter((id): id is string => typeof id === "string");
+
+  const declaredSet = new Set(declared);
+  const registeredSet = new Set(registered);
+  const problems: string[] = [];
+  for (const id of registeredSet) if (!declaredSet.has(id)) problems.push(`已注册但 package.json 未声明：${id}`);
+  for (const id of declaredSet) if (!registeredSet.has(id)) problems.push(`package.json 已声明但未注册：${id}`);
+  return problems;
 }
 
 async function attachSelection(
@@ -97,21 +134,34 @@ async function attachSelection(
   }
 
   const doc = editor.document;
+  // 协议里路径一律工作区相对：绝对路径会把用户名/目录结构带进 prompt
+  const untitled = doc.uri.scheme === "untitled";
+  const relPath = untitled ? doc.uri.path.replace(/^\//, "") : toWorkspaceRelative(doc.uri.fsPath);
+
+  const seen = new Set<string>();
+  let added = 0;
   for (const selection of selections) {
     // 稍微扩一点上下文：只给半截 if 块，模型很难判断
     const startLine = Math.max(0, selection.start.line - 2);
     const endLine = Math.min(doc.lineCount - 1, selection.end.line + 2);
+    const key = `${relPath}:${startLine}:${endLine}`;
+    if (seen.has(key)) continue;   // 多光标重叠时别重复附加
+    seen.add(key);
+
     const range = new vscode.Range(startLine, 0, endLine, doc.lineAt(endLine).text.length);
     deps.panel.addAttachment({
-      path: doc.uri.fsPath,
+      path: relPath,
       startLine: startLine + 1,
       endLine: endLine + 1,
       text: doc.getText(range),
       kind: "selection",
+      // 未保存文档没有真实路径：标出来，内核就不会拿它去 fs.read
+      untitled: untitled || undefined,
     });
+    added += 1;
   }
 
   deps.panel.setMode(mode);
   deps.panel.reveal();
-  deps.panel.setHint(`已附加 ${selections.length} 段选区 · ${mode}`);
+  deps.panel.setHint(`已附加 ${added} 段选区 · ${mode}`);
 }

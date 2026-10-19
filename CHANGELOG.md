@@ -20,6 +20,9 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **命令层修复（协议 v11）**：附件路径改为工作区相对（不再泄露绝对路径）；`untitled:` 文档标记 `untitled: true`
+  （内核不会拿假路径去 `fs.read`）；多选区按范围去重；`CancelledError` 不再弹红框；命令成功也记 debug 耗时；
+  新增启动自检 `undeclaredCommands()`——命令注册表与 `package.json` 声明对账
 - **符号服务修复（协议 v10）**：`outline`/`search` 返回 `selection`（标识符精确行列），`references` 用它定位
   （之前用 `range.startLine` 会落在前导注释里，导致引用查询经常返回空）；LSP 搜索结果过滤工作区外与依赖目录；
   回退路径先按名字粗筛（不再用"函数定义"正则，避免漏掉 `foo() {}` 这类方法）、并跳过忽略路径；
