@@ -261,7 +261,8 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   </header>
 
   <section id="attachments" class="attachments"></section>
-  <section id="messages" class="messages" aria-live="polite" aria-label="对话记录"></section>
+  <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
+  <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="pending" class="pending hidden">
     <div class="pending-head">
       <span id="pending-title">待审提案</span>

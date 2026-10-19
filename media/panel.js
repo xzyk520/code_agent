@@ -22,6 +22,7 @@
     messages: must("messages", HTMLElement),
     pending: must("pending", HTMLElement),
     pendingList: must("pending-list", HTMLElement),
+  srStatus: must("sr-status", HTMLElement),
     pendingTitle: must("pending-title", HTMLElement),
     attachments: must("attachments", HTMLElement),
     input: must("input", HTMLTextAreaElement),
@@ -53,6 +54,27 @@
 
   function clearStreaming() {
     streamingNode = null;
+  }
+
+  /**
+   * 屏幕阅读器播报（仅辅助技术可见，视觉上隐藏）。
+   *
+   * 为什么需要：消息区是 aria-live 区域，流式时每个分片都可能触发播报，非常吵。
+   * 所以流式期间用 aria-busy 让 AT「先别念」，结束时再播报一次结果。
+   */
+  /** @param {string} text */
+  function announce(text) {
+    // 同样的文本连续设置不会重复播报：先清空再在下一个 tick 写入
+    el.srStatus.textContent = "";
+    setTimeout(() => {
+      el.srStatus.textContent = text;
+    }, 30);
+  }
+
+  /** 流式期间把消息区标记为 busy —— 只影响播报时机，不影响视觉渲染 */
+  /** @param {boolean} busy */
+  function setMessagesBusy(busy) {
+    el.messages.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
   /**
@@ -218,6 +240,7 @@
         // 轻量状态：绝不重渲染消息列表（否则流式中的回复会被清掉）
         state.mode = /** @type {Mode} */ (msg.mode);
         state.busy = Boolean(msg.busy);
+        if (!state.busy) setMessagesBusy(false);   // 兜底：本轮结束一定要解除 busy
         renderMode();
         renderBusy();
         el.hint.textContent = String(msg.hint ?? "");
@@ -229,15 +252,22 @@
           // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
           streamingNode.textContent = message.text;
           clearStreaming();
+          setMessagesBusy(false);   // 流式结束：现在可以播报了
+          announce("助手回复完成，共 " + message.text.length + " 字");
           break;
         }
         if (message.role === "user") clearStreaming();
         addMessage(message.role, message.text);
+        if (message.role === "system") announce("系统消息：" + message.text);
         break;
       }
       case "delta": {
         const text = String(msg.text ?? "");
-        if (!streamingNode) streamingNode = addMessage("assistant", "");
+        if (!streamingNode) {
+          streamingNode = addMessage("assistant", "");
+          setMessagesBusy(true);   // 开始流式：先不自动播报
+          announce("助手开始回复");
+        }
         streamingNode.textContent += text;
         el.messages.scrollTop = el.messages.scrollHeight;
         break;
@@ -249,7 +279,9 @@
         break;
       }
       case "proposals": {
-        renderProposals(/** @type {Proposal[]} */ (msg.items) || []);
+        const items = /** @type {Proposal[]} */ (msg.items) || [];
+        renderProposals(items);
+        if (items.length > 0) announce("待审提案 " + items.length + " 个");
         break;
       }
       case "hint": {

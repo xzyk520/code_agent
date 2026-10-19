@@ -1142,6 +1142,22 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 | **消息列表上限 300 条** | Webview 的 DOM 不该随会话无限增长；裁剪后强制重发一次快照，保证 DOM 与 state 一致 |
 
 流式细节：`delta` 只发增量；回合结束时壳再把「权威全文」作为一条 assistant 消息发过去，前端用它**覆盖**流式节点（而不是追加），避免重复。
+
+**无障碍（流式场景的标准做法）**：
+
+```html
+<section id="messages" aria-live="polite" aria-busy="false">…</section>
+<div id="sr-status" class="sr-only" aria-live="polite"></div>   <!-- 视觉隐藏，仅屏幕阅读器可见 -->
+```
+
+| 时机 | 动作 |
+| --- | --- |
+| 第一条 `delta` | `aria-busy="true"`（先别自动播报）+ 播报「助手开始回复」 |
+| 定稿 assistant 消息 | `aria-busy="false"` + 播报「助手回复完成，共 N 字」 |
+| `status.busy=false` | 兜底复位 `aria-busy` |
+| 待审提案变化 | 播报「待审提案 N 个」 |
+
+`aria-busy` **只影响播报时机，不影响渲染**：视觉上文字照旧逐字出现，屏幕阅读器不会在每个 40ms 分片上念一遍。
 - 没有"逐函数"这一层：一个文件一次决定（保留扩展点，见 §11.4）。
 
 ### 11.3 四个容易踩的边界
