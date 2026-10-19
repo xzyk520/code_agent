@@ -7,6 +7,11 @@
 
 ### Changed
 
+- **改动落地改为「提案 + 逐文件审批」（协议 v4）**：内核产出修正后的完整文件内容，作为**虚拟文件**预览
+  （左=磁盘现状，右=提案），用户逐文件 `接受`/`拒绝`，或一键全部；**接受前源文件一字不改**。
+  协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
+  新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
+
 - **协议 v3**：`diagnostics.get` 支持 `minSeverity` / `maxItems` / `includeIgnored`，返回 `{items, total, truncated}`；
   每条诊断新增 `code`（`TS2322` 等）与 1-based 列号
 - **诊断默认过滤噪声**：`node_modules` / `.git` / 构建产物 / `.gitignore` 里的文件不再进入结果
@@ -49,6 +54,7 @@
 - 工程化：双 tsconfig（扩展无 DOM / 面板有 DOM）、esbuild 打包（44 KB）、vsce 打包脚本、`.vscodeignore` 清理
 
 ### Changed
+
 
 - **改动落地范式**：从「内存 Overlay 先审后写」改为工业主流的「写入 + 待审（Keep/Undo）」，理由见 `docs/architecture.md` §14.10
 - **技术栈**：Python 内核 + TypeScript 薄壳（README 早期版本是全 TS）

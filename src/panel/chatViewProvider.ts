@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { ProposalDto } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -17,17 +18,18 @@ export interface AttachedContext {
 
 export interface PanelHandlers {
   onSend(text: string, mode: "chat" | "builder" | "debugger", attachments: AttachedContext[]): void;
-  onKeep(ids: string[]): void;
-  onUndo(ids: string[]): void;
-  onKeepAll(): void;
-  onUndoAll(): void;
+  onAccept(ids: string[]): void;
+  onReject(ids: string[]): void;
+  onAcceptAll(): void;
+  onRejectAll(): void;
+  onShowProposal(id: string): void;
   onAbort(): void;
 }
 
 export interface PanelState {
   mode: "chat" | "builder" | "debugger";
   busy: boolean;
-  pending: Array<{ id: string; path: string; symbolPath?: string; additions?: number; deletions?: number; risk?: string; status: string }>;
+  proposals: ProposalDto[];
   messages: ChatMessageView[];
   attachments: AttachedContext[];
   hint?: string;
@@ -49,7 +51,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private state: PanelState = {
     mode: "chat",
     busy: false,
-    pending: [],
+    proposals: [],
     messages: [],
     attachments: [],
   };
@@ -107,9 +109,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "delta", text });
   }
 
-  setPending(items: PanelState["pending"]): void {
-    this.state.pending = items;
-    this.post({ type: "pending", items });
+  setProposals(items: ProposalDto[]): void {
+    this.state.proposals = items;
+    this.post({ type: "proposals", items });
   }
 
   addAttachment(attachment: AttachedContext): void {
@@ -132,7 +134,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** 前端消息必须过白名单；只接受 id / 纯文本，不接受路径 */
   private onMessage(raw: unknown): void {
-    const msg = raw as { type?: unknown; text?: unknown; ids?: unknown; mode?: unknown };
+    const msg = raw as { type?: unknown; text?: unknown; ids?: unknown; mode?: unknown; id?: unknown };
     const type = typeof msg.type === "string" ? msg.type : "";
 
     switch (type) {
@@ -149,18 +151,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.handlers.onSend(text, mode, attachments);
         return;
       }
-      case "keep":
-        this.handlers.onKeep(toIds(msg.ids));
+      case "accept":
+        this.handlers.onAccept(toIds(msg.ids));
         return;
-      case "undo":
-        this.handlers.onUndo(toIds(msg.ids));
+      case "reject":
+        this.handlers.onReject(toIds(msg.ids));
         return;
-      case "keepAll":
-        this.handlers.onKeepAll();
+      case "acceptAll":
+        this.handlers.onAcceptAll();
         return;
-      case "undoAll":
-        this.handlers.onUndoAll();
+      case "rejectAll":
+        this.handlers.onRejectAll();
         return;
+      case "proposal.diff": {
+        const id = typeof msg.id === "string" ? msg.id : "";
+        if (id) this.handlers.onShowProposal(id);
+        return;
+      }
       case "stop":
         this.handlers.onAbort();
         return;
@@ -216,10 +223,10 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   <section id="messages" class="messages"></section>
   <section id="pending" class="pending hidden">
     <div class="pending-head">
-      <span id="pending-title">待审改动</span>
+      <span id="pending-title">待审提案</span>
       <span class="pending-actions">
-        <button id="keepAll">全部 Keep</button>
-        <button id="undoAll">全部 Undo</button>
+        <button id="keepAll">全部接受</button>
+        <button id="undoAll">全部拒绝</button>
       </span>
     </div>
     <ul id="pending-list"></ul>

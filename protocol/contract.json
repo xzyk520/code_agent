@@ -1,6 +1,6 @@
 {
-  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 3）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
-  "version": 3,
+  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 4）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
+  "version": 4,
   "shellMethods": {
     "fs.read": { "required": ["path"], "optional": ["startLine", "endLine"], "result": ["text", "version", "totalLines"] },
     "fs.list": { "required": [], "optional": ["glob", "exclude", "maxResults"], "result": ["paths"] },
@@ -17,13 +17,11 @@
   "coreMethods": [
     "initialize",
     "chat.send",
-    "review.keep",
-    "review.undo",
-    "review.keepAll",
-    "review.undoAll",
+    "proposal.read",
+    "proposal.decide",
     "session.abort",
     "model.reload",
     "shutdown"
   ],
-  "notifications": ["ui.delta", "ui.tool", "ui.usage", "pending.changed", "log"]
+  "notifications": ["ui.delta", "ui.tool", "ui.usage", "proposal.changed", "log"]
 }

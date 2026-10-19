@@ -3,7 +3,7 @@
  *
  * 传输：子进程 stdin/stdout 上的 NDJSON（一行一个 JSON），JSON-RPC 2.0 风格。
  * 方向：
- *   - 壳 → 内核（CoreApi）：initialize / chat.send / review.* / session.abort / model.reload / shutdown
+ *   - 壳 → 内核（CoreApi）：initialize / chat.send / proposal.read / proposal.decide / session.abort / model.reload / shutdown
  *   - 内核 → 壳（ShellMethods）：fs.read / fs.list / search.grep / symbols.outline / diagnostics.get /
  *                                edit.apply / checkpoint.create / checkpoint.restore / diff.open /
  *                                confirm.ask / secrets.get
@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -282,8 +282,12 @@ export interface ChatSendParams {
   attachments?: Attachment[];
 }
 
-export interface ReviewTargetParams { pendingIds: string[] }
-export interface ReviewAllParams { sessionId?: string }
+/** 提案（虚拟文件）：内核把「修正后的代码」暂存在自己那边，壳按需拉取，用户批准后才真正落盘 */
+export interface ProposalReadParams { id: string }
+export interface ProposalReadResult { text: string }
+export interface ProposalDecideParams { id: string; decision: "accept" | "reject" }
+export interface ProposalDecideResult { ok: boolean }
+
 export interface SessionAbortParams { sessionId: string }
 export interface ModelReloadParams { modelConfig: ModelConfigDto; apiKey?: string }
 
@@ -292,19 +296,22 @@ export interface ModelReloadParams { modelConfig: ModelConfigDto; apiKey?: strin
 export interface UiDeltaParams { sessionId: string; text: string }
 export interface UiToolParams { sessionId: string; name: string; args?: unknown; status: "start" | "end" | "error"; summary?: string }
 export interface UiUsageParams { sessionId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number }
-export interface PendingChangedParams {
-  added?: PendingItemDto[];
-  updated?: PendingItemDto[];
+/** 提案集合变化（只有元数据，正文用 `proposal.read` 按需拉取） */
+export interface ProposalChangedParams {
+  added?: ProposalDto[];
+  updated?: ProposalDto[];
   removed?: string[];
 }
-export interface PendingItemDto {
+export interface ProposalDto {
   id: string;
   path: string;
-  symbolPath?: string;
-  status: "pending" | "kept" | "undone" | "stale";
+  /** 生成提案时读到的 document.version；接受时作为 expectedVersion，防止覆盖用户的新编辑 */
+  baseVersion?: number;
   additions?: number;
   deletions?: number;
-  risk?: "low" | "medium" | "high";
+  status: "pending" | "applied" | "discarded" | "stale";
+  /** 一句话说明这次改了什么（显示在卡片上） */
+  summary?: string;
 }
 export interface LogParams { level: "debug" | "info" | "warn" | "error"; msg: string; fields?: Record<string, unknown> }
 

@@ -6,8 +6,9 @@ import type {
   InitializeParams,
   InitializeResult,
   ModelReloadParams,
-  ReviewAllParams,
-  ReviewTargetParams,
+  ProposalDecideParams,
+  ProposalReadParams,
+  ProposalReadResult,
 } from "../protocol";
 import { PROTOCOL_VERSION } from "../protocol";
 
@@ -28,6 +29,8 @@ export class MockCore implements CoreApi {
   private readonly exitHandlers = new Set<CoreExitHandler>();
   private readonly timers = new Set<NodeJS.Timeout>();
   private cancelled = false;
+  /** 假的"虚拟文件"内容：proposal.read 从这里取 */
+  private readonly proposals = new Map<string, string>();
   private disposed = false;
 
   constructor(private readonly logger: Logger) {}
@@ -56,40 +59,41 @@ export class MockCore implements CoreApi {
       this.notify("ui.delta", { sessionId: params.sessionId, text: chunk });
     }
 
-    this.notify("pending.changed", {
+    // 造一个提案：虚拟文件内容存在这里，用户点「查看」时由 proposal.read 拉走
+    const id = `mock_${Date.now()}`;
+    this.proposals.set(
+      id,
+      [
+        "// [mock] 这是提案内容（左侧是你磁盘上的真实文件）",
+        "export function example(): number {",
+        "  return 42;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    this.notify("proposal.changed", {
       added: [
         {
-          id: `mock_${Date.now()}`,
+          id,
           path: "src/example.ts",
-          symbolPath: "example()",
           status: "pending",
-          additions: 12,
-          deletions: 3,
-          risk: "low",
+          additions: 4,
+          deletions: 1,
+          summary: "mock 的示例改动",
         },
       ],
     });
     this.notify("ui.usage", { sessionId: params.sessionId, inputTokens: 1234, outputTokens: 256 });
   }
 
-  async reviewKeep(params: ReviewTargetParams): Promise<void> {
-    this.logger.info(`[mock] keep ${params.pendingIds.join(",")}`);
-    this.notify("pending.changed", { removed: params.pendingIds });
+  async proposalRead(params: ProposalReadParams): Promise<ProposalReadResult> {
+    return { text: this.proposals.get(params.id) ?? "" };
   }
 
-  async reviewUndo(params: ReviewTargetParams): Promise<void> {
-    this.logger.info(`[mock] undo ${params.pendingIds.join(",")}`);
-    this.notify("pending.changed", { removed: params.pendingIds });
-  }
-
-  async reviewKeepAll(_params: ReviewAllParams): Promise<void> {
-    this.logger.info("[mock] keepAll");
-    this.notify("pending.changed", { removed: ["*"] });
-  }
-
-  async reviewUndoAll(_params: ReviewAllParams): Promise<void> {
-    this.logger.info("[mock] undoAll");
-    this.notify("pending.changed", { removed: ["*"] });
+  async proposalDecide(params: ProposalDecideParams): Promise<void> {
+    this.logger.info(`[mock] proposal ${params.id} → ${params.decision}`);
+    this.proposals.delete(params.id);
+    this.notify("proposal.changed", { removed: [params.id] });
   }
 
   async abort(_sessionId: string): Promise<void> {

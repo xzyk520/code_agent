@@ -67,7 +67,7 @@ def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]
     整轮结束才返回；过程中的流式输出用 peer.notify 推给壳：
       peer.notify("ui.delta", {"sessionId": sid, "text": chunk})
       peer.notify("ui.tool",  {"sessionId": sid, "name": "read_file", "status": "start"})
-      peer.notify("pending.changed", {"added": [ ... PendingItem ... ]})
+      peer.notify("proposal.changed", {"added": [ ... ProposalDto ... ]})
       peer.notify("ui.usage", {"sessionId": sid, "inputTokens": 0, "outputTokens": 0})
 
     要读写文件请用 ShellClient（见 shell.py），不要直接 open()。
@@ -75,13 +75,35 @@ def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]
     raise RpcError(-32603, "chat.send 尚未实现（内核骨架）")
 
 
-def _on_review(action: str):
-    def handler(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-        # TODO(你来实现)：Keep = 只改待审状态；Undo = 反向补丁后经 shell.apply_edit 落盘
-        _log(f"review.{action}: {params}")
-        return {}
+#: 提案："虚拟文件"内容只放在这里，壳按需通过 proposal.read 拉取
+_PROPOSALS: dict[str, dict[str, Any]] = {}
 
-    return handler
+
+def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    """返回提案正文。用户点「查看」或「接受」时才会被调用。"""
+    proposal_id = str(params.get("id", ""))
+    proposal = _PROPOSALS.get(proposal_id)
+    if proposal is None:
+        raise RpcError(-32012, f"提案不存在：{proposal_id}")
+    return {"text": proposal["text"]}
+
+
+def _on_proposal_decide(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    """壳已经落盘（accept）或已丢弃（reject）之后才调用。
+
+    时序约定见 README §10：**壳先写、内核后知**，这里只做状态清理。
+    """
+    proposal_id = str(params.get("id", ""))
+    decision = str(params.get("decision", ""))
+    if decision not in ("accept", "reject"):
+        raise RpcError(-32602, f"未知的 decision：{decision}")
+    existed = _PROPOSALS.pop(proposal_id, None) is not None
+    _log(f"proposal.decide {proposal_id} → {decision}（{'存在' if existed else '已不存在'}）")
+    if existed:
+        peer_ref = _state.get("peer")
+        if peer_ref is not None:
+            peer_ref.notify("proposal.changed", {"removed": [proposal_id]})
+    return {"ok": existed}
 
 
 def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -97,6 +119,7 @@ def _log(message: str) -> None:
 
 async def _serve() -> None:
     peer = JsonRpcPeer()
+    _state["peer"] = peer
     shell = ShellClient(peer)
     _state["shell"] = shell
 
@@ -104,10 +127,8 @@ async def _serve() -> None:
     peer.register("shutdown", _on_shutdown)
     peer.register("model.reload", _on_model_reload)
     peer.register("chat.send", _on_chat_send)
-    peer.register("review.keep", _on_review("keep"))
-    peer.register("review.undo", _on_review("undo"))
-    peer.register("review.keepAll", _on_review("keepAll"))
-    peer.register("review.undoAll", _on_review("undoAll"))
+    peer.register("proposal.read", _on_proposal_read)
+    peer.register("proposal.decide", _on_proposal_decide)
     peer.register("session.abort", _on_abort)
 
     _log(f"beecode {__version__} 已启动，等待壳的 initialize…")

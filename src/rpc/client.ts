@@ -16,8 +16,9 @@ import {
   type JsonRpcId,
   type JsonRpcMessage,
   type ModelReloadParams,
-  type ReviewAllParams,
-  type ReviewTargetParams,
+  type ProposalDecideParams,
+  type ProposalReadParams,
+  type ProposalReadResult,
   type SessionAbortParams,
 } from "../protocol";
 
@@ -128,20 +129,12 @@ export class PythonCore implements CoreApi {
     return this.request("chat.send", params, CHAT_TIMEOUT_MS).then(() => undefined);
   }
 
-  reviewKeep(params: ReviewTargetParams): Promise<void> {
-    return this.request("review.keep", params).then(() => undefined);
+  proposalRead(params: ProposalReadParams): Promise<ProposalReadResult> {
+    return this.request("proposal.read", params).then((r) => r as ProposalReadResult);
   }
 
-  reviewUndo(params: ReviewTargetParams): Promise<void> {
-    return this.request("review.undo", params).then(() => undefined);
-  }
-
-  reviewKeepAll(params: ReviewAllParams): Promise<void> {
-    return this.request("review.keepAll", params).then(() => undefined);
-  }
-
-  reviewUndoAll(params: ReviewAllParams): Promise<void> {
-    return this.request("review.undoAll", params).then(() => undefined);
+  proposalDecide(params: ProposalDecideParams): Promise<void> {
+    return this.request("proposal.decide", params).then(() => undefined);
   }
 
   abort(sessionId: string): Promise<void> {

@@ -5,8 +5,9 @@ import type {
   InitializeResult,
   JsonRpcId,
   ModelReloadParams,
-  ReviewAllParams,
-  ReviewTargetParams,
+  ProposalDecideParams,
+  ProposalReadParams,
+  ProposalReadResult,
 } from "./protocol";
 
 /**
@@ -35,10 +36,21 @@ export interface CoreApi extends vscode.Disposable {
   /** 一轮对话，**整轮结束后才 resolve**；token 增量走 `ui.delta` 通知。超时策略由实现自己决定。 */
   chatSend(params: ChatSendParams): Promise<void>;
 
-  reviewKeep(params: ReviewTargetParams): Promise<void>;
-  reviewUndo(params: ReviewTargetParams): Promise<void>;
-  reviewKeepAll(params: ReviewAllParams): Promise<void>;
-  reviewUndoAll(params: ReviewAllParams): Promise<void>;
+  /**
+   * 拉取提案正文（虚拟文件内容）。
+   *
+   * 为什么用"拉"而不是"推"：通知里只放元数据，正文可能几百 KB，
+   * 只有用户真的要看 diff 或接受时才需要它。
+   */
+  proposalRead(params: ProposalReadParams): Promise<ProposalReadResult>;
+
+  /**
+   * 告知内核用户对某个提案的决定。
+   *
+   * 时序约定：**壳先落盘（成功）再调用本方法**。内核据此清理/记录提案，
+   * 不允许反过来（内核先删提案、壳写盘失败 = 改动凭空消失）。
+   */
+  proposalDecide(params: ProposalDecideParams): Promise<void>;
 
   /** 取消当前会话（中断在飞请求 + 在飞工具），不是停止内核。 */
   abort(sessionId: string): Promise<void>;

@@ -72,13 +72,13 @@
         "category": "Bee Code"
       },
       {
-        "command": "beeCode.review.keepAll",
-        "title": "全部 Keep",
+        "command": "beeCode.proposal.acceptAll",
+        "title": "接受全部提案",
         "category": "Bee Code"
       },
       {
-        "command": "beeCode.review.undoAll",
-        "title": "全部 Undo",
+        "command": "beeCode.proposal.rejectAll",
+        "title": "拒绝全部提案",
         "category": "Bee Code"
       },
       {

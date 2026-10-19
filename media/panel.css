@@ -155,3 +155,11 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 }
 
 .hint { font-size: 10px; opacity: 0.65; }
+
+/* ── 提案卡片（逐文件审批） ── */
+.proposal { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; margin-bottom: 8px; }
+.proposal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.proposal-head .path { font-weight: 600; word-break: break-all; }
+.proposal-note { font-size: 0.9em; opacity: 0.8; }
+.proposal-actions { display: flex; gap: 6px; }
+.proposal-actions button.primary { font-weight: 600; }

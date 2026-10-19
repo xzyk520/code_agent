@@ -83,6 +83,46 @@ export class DiffAdapter implements vscode.Disposable {
   }
 
   /**
+   * 预览一个**提案**：左侧 = 真实文件（当前），右侧 = 虚拟的"修正后"版本。
+   *
+   * 与 `open()` 方向相反：那里左边是"改之前"，这里左边是"现在磁盘上的"，
+   * 右边是内核给的候选内容。用户看到的绿色就是"接受后会写进去的东西"。
+   */
+  async openProposal(params: { path: string; text: string; title?: string }): Promise<DiffOpenResult> {
+    let target: vscode.Uri;
+    try {
+      target = resolveTarget(params.path);
+    } catch (err) {
+      this.logger.warn(`diff.openProposal 拒绝 ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
+      return { opened: false };
+    }
+
+    const key = `proposed:${target.fsPath}`;
+    let id = this.latestIdByPath.get(key);
+    const reusing = id !== undefined && this.isDocumentOpen(id);
+    if (id === undefined || !reusing) {
+      id = randomUUID();
+      this.latestIdByPath.set(key, id);
+    }
+
+    this.remember(id, params.text, key);
+    const proposed = this.virtualUri(target, id);
+    if (reusing) this.onDidChangeEmitter.fire(proposed);
+
+    const title = params.title ?? `${path.basename(target.fsPath)} — 提案预览`;
+    try {
+      await vscode.commands.executeCommand("vscode.diff", target, proposed, title, {
+        preview: true,
+        preserveFocus: false,
+      } as vscode.TextDocumentShowOptions);
+      return { opened: true };
+    } catch (err) {
+      this.logger.warn(`打开提案 diff 失败: ${err instanceof Error ? err.message : String(err)}`);
+      return { opened: false };
+    }
+  }
+
+  /**
    * 多文件总览：用公开的 `vscode.changes`（内部命令 `_workbench.openMultiDiffEditor` 不稳定）。
    *
    * 右侧一律用**真实文件**，所以不需要 `newText` 参数 —— 传了也不会用。

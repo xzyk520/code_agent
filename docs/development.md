@@ -26,6 +26,7 @@ bee-code/
 │  ├─ config.ts                  # ✅ 设置读取（带类型/范围校验）、${workspaceFolder} 解析、会话 id
 │  ├─ coreLocator.ts             # ✅ 内核定位：工作区 → 扩展目录，注入 PYTHONPATH / 编码变量
 │  ├─ diagnostics.ts             # ✅ 导出脱敏诊断包（落 globalStorage，可另存）
+│  ├─ proposalAdapter.ts         # ✅ 提案暂存：接受才落盘、拒绝零副作用
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
 │  ├─ workspaceIgnore.ts         # ✅ 统一忽略规则（噪声目录 + .gitignore，fs/search/diagnostics 共用）
 │  ├─ log.ts                     # ✅ 双 LogOutputChannel（自动落盘）+ 脱敏 + 500 行缓冲
@@ -52,7 +53,7 @@ bee-code/
 │  ├─ vscode-webview.d.ts        #    acquireVsCodeApi 声明（DOM lib 里没有）
 │  └─ icon.svg
 ├─ beecode/                      # ★ Python 内核（骨架已就位，业务待实现）
-│  ├─ __main__.py                # ✅ 入口 + 方法注册；⬜ chat.send / review.* / abort
+│  ├─ __main__.py                # ✅ 入口 + 方法注册 + proposal.read/decide；⬜ chat.send / abort
 │  ├─ ipc.py                     # ✅ JSON-RPC 对端：分发、超时、$·cancelRequest、BOM 容错
 │  ├─ contract.py                # ✅ 读 protocol/contract.json，发 RPC 前校验方法名与参数
 │  ├─ shell.py                   # ✅ ShellClient：fs/search/edit/checkpoint/diff/confirm 的类型化封装
@@ -83,13 +84,13 @@ bee-code/
 | **M0 双进程骨架** | TS 壳（命令 / 面板 / SecretStorage）+ Python 子进程 + RPC 握手 + 模型配置向导 + 单轮对话 | 填 DeepSeek/Ollama 端点后能流式一问一答；协议版本不匹配时有可读报错 |
 | **M0.5 可分发** | `bootstrap.py`（uv / venv 自举）+ PyInstaller sidecar + 三平台 vsix | 干净机器装上 vsix 即可用，不需要用户手工装 Python |
 | **M1 只读 Agent** | Agent Loop、只读工具（经 RPC 读盘）、文件清单、检索、Chat 模式、选区快捷键 | Chat 模式能自主读 3~5 个文件后准确回答带行号的解释 |
-| **M2 写入与待审** | `apply_patch` + `WorkspaceEdit` 写入、`PendingEdit` 记录、影子 git 检查点、QuickDiff 红绿、逐函数 Keep/Undo | Builder 改 3 个文件后能逐函数 Keep/Undo；全部 Keep 后 typecheck 通过；`Restore` 能整轮回到改前 |
+| **M2 提案与审批** | 提案生成（虚拟文件）、逐文件 `Accept`/`Reject`、`WorkspaceEdit` 落盘、影子 git 检查点、逐函数 Keep/Undo | Builder 改 3 个文件后能逐函数 Keep/Undo；全部 Keep 后 typecheck 通过；`Restore` 能整轮回到改前 |
 | **M3 Debugger** | 诊断接入、Debugger 提示词、验证回路（可选 run_test） | 给一个真 bug，能定位到正确函数并给出最小补丁 |
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
 | **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension bee-code-x.y.z.vsix` 可用 |
 
 > **当前进度（v0.0.1）**：M0 的**壳侧已完成**（`tsc --noEmit` 通过、`dist/extension.js` 构建成功、11 个 RPC 方法注册完毕、面板/命令/检查点/QuickDiff 预埋都在）。
-> 内核侧只有协议骨架：`initialize` / `shutdown` / `model.reload` 可用，`chat.send` 与 `review.*` 待实现 —— 也就是接下来 AI 逻辑的入口。
+> 内核侧只有协议骨架：`initialize` / `shutdown` / `model.reload` 可用，`chat.send` 待实现 —— 也就是接下来 AI 逻辑的入口。
 
 ---
 
@@ -185,8 +186,8 @@ npx @vscode/vsce package                   # 生成 .vsix
       { "command": "beeCode.selection.debug","title": "Bee Code: 排查选中代码" },
       { "command": "beeCode.files.pick",     "title": "Bee Code: 选择要阅读的文件" },
       { "command": "beeCode.model.configure","title": "Bee Code: 配置模型（base_url / key / model）" },
-      { "command": "beeCode.review.keepAll",  "title": "Bee Code: 全部 Keep" },
-      { "command": "beeCode.review.undoAll",  "title": "Bee Code: 全部 Undo" },
+      { "command": "beeCode.proposal.acceptAll", "title": "Bee Code: 接受全部提案" },
+      { "command": "beeCode.proposal.rejectAll", "title": "Bee Code: 拒绝全部提案" },
       { "command": "beeCode.checkpoint.restore","title": "Bee Code: 恢复到检查点…" }
     ],
     "keybindings": [

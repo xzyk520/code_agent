@@ -1,6 +1,6 @@
 # Bee Code
 
-> **自带模型的代码智能体 VS Code 扩展。** Chat / Builder / Debugger 三模式，统一 OpenAI 兼容协议，改动写盘即标记待审，逐函数 Keep / Undo，随时整轮 Restore。
+> **自带模型的代码智能体 VS Code 扩展。** Chat / Builder / Debugger 三模式，统一 OpenAI 兼容协议，改动先以**虚拟文件提案**逐文件预览，接受才落盘，随时整轮 Restore。
 
 **状态**：`v0.0.1` · 壳可用、内核开发中 · MIT
 
@@ -12,7 +12,7 @@
 | --- | --- |
 | 只能用厂商绑定的模型/订阅 | 自己填 `model` / `api_key` / `base_url`，任意 OpenAI 兼容端点：OpenAI、DeepSeek、Qwen、Kimi、GLM、OpenRouter、Ollama、vLLM、one-api 网关… |
 | 一套提示词打天下，解释/生成/修 bug 都不极致 | 三个模式各有独立提示词、独立工具集、独立的「允许做什么」约束 |
-| AI 改完文件才发现改坏了 | 改动**立即写入**并登记为「待审」：影子 git 检查点兜底，逐函数 `Keep`/`Undo`，可整轮 `Restore` |
+| AI 改完文件才发现改坏了 | 改动先做成**提案**：源文件在接受前一字不改，逐文件 `Accept`/`Reject`；影子 git 检查点兜底，可整轮 `Restore` |
 | AI 看不到「跟这个问题相关」的代码 | 文件清单索引 + 关键词/符号检索 + 工具驱动的按需精读 |
 | 想改一段代码要先复制粘贴到聊天框 | 选中即问：`Ctrl+Alt+K/B/D` 直接进 Chat / Builder / Debugger |
 

@@ -6,6 +6,7 @@ import { createDiagnosticsAdapter } from "./adapters/diagnosticsAdapter";
 import { CheckpointAdapter } from "./adapters/checkpointAdapter";
 import { DiffAdapter } from "./adapters/diffAdapter";
 import { createEditAdapter } from "./adapters/editAdapter";
+import { ProposalAdapter } from "./adapters/proposalAdapter";
 import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
@@ -25,8 +26,8 @@ import type {
   InitializeParams,
   LogParams,
   Mode,
-  PendingItemDto,
-  PendingChangedParams,
+  ProposalChangedParams,
+  ProposalDto,
   UiDeltaParams,
   UiToolParams,
   UiUsageParams,
@@ -64,7 +65,8 @@ class Shell {
   private core: CoreApi | undefined;
   private starting: Promise<CoreApi> | undefined;
   private readonly sessionId = newSessionId();
-  private readonly pending = new Map<string, PendingItemDto>();
+  private readonly proposals: ProposalAdapter;
+  private readonly edit: ReturnType<typeof createEditAdapter>;
   private busy = false;
   private usage = "";
   /** 停用标志：保证 dispose 幂等，且停用后不再拉起内核/发请求 */
@@ -84,12 +86,17 @@ class Shell {
       this.config.checkpointRetention,
     );
 
+    // 写入通道与提案暂存：提案被「接受」时才真正调用 this.edit 落盘
+    this.edit = createEditAdapter(this.log);
+    this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
+
     this.panel = new ChatViewProvider(context.extensionUri, {
       onSend: (text, mode, attachments) => void this.send(text, mode, attachments),
-      onKeep: (ids) => void this.review("keep", ids),
-      onUndo: (ids) => void this.review("undo", ids),
-      onKeepAll: () => void this.reviewAll("keep"),
-      onUndoAll: () => void this.reviewAll("undo"),
+      onAccept: (ids) => void this.acceptProposals(ids),
+      onReject: (ids) => void this.rejectProposals(ids),
+      onAcceptAll: () => void this.acceptAllProposals(),
+      onRejectAll: () => void this.rejectAllProposals(),
+      onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
     });
 
@@ -117,8 +124,8 @@ class Shell {
       configureModel: () => this.configureModel(),
       restartCore: () => this.restartCore(),
       restoreCheckpoint: () => this.restoreCheckpoint(),
-      keepAll: () => this.reviewAll("keep"),
-      undoAll: () => this.reviewAll("undo"),
+      acceptAll: () => this.acceptAllProposals(),
+      rejectAll: () => this.rejectAllProposals(),
       pickFiles: () => this.pickFiles(),
       exportDiagnostics: () => this.exportDiagnostics(),
     });
@@ -135,7 +142,7 @@ class Shell {
       }),
     );
 
-    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint);
+    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
   }
@@ -308,34 +315,81 @@ class Shell {
     }
   }
 
-  private async review(action: "keep" | "undo", ids: string[]): Promise<void> {
+  /** 接受一个或多个提案：逐个 拉正文 → 写盘 → 通知内核 */
+  private async acceptProposals(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    try {
-      const core = await this.ensureCore();
-      if (action === "keep") await core.reviewKeep({ pendingIds: ids });
-      else await core.reviewUndo({ pendingIds: ids });
-
-      for (const id of ids) {
-        const item = this.pending.get(id);
-        if (item) item.status = action === "keep" ? "kept" : "undone";
-        this.pending.delete(id);
-      }
-      this.refreshPending();
-    } catch (err) {
-      this.log.error(`${action} 失败`, err instanceof Error ? err.message : String(err));
+    const failed: string[] = [];
+    for (const id of ids) {
+      const result = await this.acceptOne(id);
+      if (!result) failed.push(id);
+    }
+    this.refreshProposals();
+    if (failed.length > 0) {
+      void vscode.window.showWarningMessage(`Bee Code: ${failed.length} 个提案没能应用（详见输出面板）。`);
     }
   }
 
-  private async reviewAll(action: "keep" | "undo"): Promise<void> {
+  private async acceptOne(id: string): Promise<boolean> {
+    let core: CoreApi;
     try {
-      const core = await this.ensureCore();
-      if (action === "keep") await core.reviewKeepAll({ sessionId: this.sessionId });
-      else await core.reviewUndoAll({ sessionId: this.sessionId });
-      this.pending.clear();
-      this.refreshPending();
+      core = await this.ensureCore();
     } catch (err) {
-      this.log.error(`${action}All 失败`, err instanceof Error ? err.message : String(err));
+      this.log.error("接受提案失败：内核不可用", err instanceof Error ? err.message : String(err));
+      return false;
     }
+
+    const result = await this.proposals.accept(
+      id,
+      async (proposalId) => (await core.proposalRead({ id: proposalId })).text,
+      (proposalId, decision) => core.proposalDecide({ id: proposalId, decision }),
+    );
+
+    if (result.applied) {
+      this.log.info(`提案已应用 ${id}`);
+      return true;
+    }
+    const dto = this.proposals.get(id);
+    this.log.warn(`提案未应用 ${id}（${dto?.path ?? "?"}）：${result.message ?? "未知原因"}`);
+    if (result.conflict) {
+      this.proposals.markStale(id);
+      void vscode.window.showWarningMessage(
+        `Bee Code: ${dto?.path ?? "文件"} 已被修改，提案未应用。请让 agent 重新生成。`,
+      );
+    }
+    return false;
+  }
+
+  private async rejectProposals(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const core = await this.ensureCore().catch(() => undefined);
+    for (const id of ids) {
+      await this.proposals.reject(id, async (proposalId, decision) => {
+        if (core) await core.proposalDecide({ id: proposalId, decision });
+      });
+    }
+    this.refreshProposals();
+  }
+
+  private async acceptAllProposals(): Promise<void> {
+    const ids = this.proposals.pending().map((p) => p.id);
+    if (ids.length === 0) {
+      this.panel.setHint("没有待处理的提案。");
+      return;
+    }
+    await this.acceptProposals(ids);
+  }
+
+  private async rejectAllProposals(): Promise<void> {
+    const ids = this.proposals.pending().map((p) => p.id);
+    await this.rejectProposals(ids);
+  }
+
+  /** 打开某个提案的 diff：左=磁盘现状，右=提案内容 */
+  private async showProposal(id: string): Promise<void> {
+    const core = await this.ensureCore().catch(() => undefined);
+    if (!core) return;
+    const opened = await this.proposals.show(id, async (proposalId) => (await core.proposalRead({ id: proposalId })).text);
+    if (!opened) void vscode.window.showWarningMessage("Bee Code: 无法打开提案预览。");
   }
 
   private async pickFiles(): Promise<void> {
@@ -500,8 +554,8 @@ class Shell {
         this.updateStatus();
         return;
       }
-      case "pending.changed": {
-        this.applyPendingChange(params as PendingChangedParams);
+      case "proposal.changed": {
+        this.applyProposalChange(params as ProposalChangedParams);
         return;
       }
       case "log": {
@@ -515,30 +569,19 @@ class Shell {
     }
   }
 
-  private applyPendingChange(change: PendingChangedParams): void {
+  private applyProposalChange(change: ProposalChangedParams): void {
     if (change.removed?.includes("*")) {
-      this.pending.clear();
+      this.proposals.clear();
     } else {
-      for (const id of change.removed ?? []) this.pending.delete(id);
+      for (const id of change.removed ?? []) this.proposals.remove(id);
     }
-    for (const item of change.added ?? []) this.pending.set(item.id, item);
-    for (const item of change.updated ?? []) this.pending.set(item.id, item);
-    this.refreshPending();
+    for (const dto of change.added ?? []) this.proposals.upsert(dto);
+    for (const dto of change.updated ?? []) this.proposals.upsert(dto);
+    this.refreshProposals();
   }
 
-  private refreshPending(): void {
-    const items = [...this.pending.values()].sort((a, b) => a.path.localeCompare(b.path));
-    this.panel.setPending(
-      items.map((item) => ({
-        id: item.id,
-        path: item.path,
-        symbolPath: item.symbolPath,
-        additions: item.additions,
-        deletions: item.deletions,
-        risk: item.risk,
-        status: item.status,
-      })),
-    );
+  private refreshProposals(): void {
+    this.panel.setProposals(this.proposals.pending());
     this.updateStatus();
   }
 
@@ -549,7 +592,6 @@ class Shell {
     const search = createSearchAdapter(this.log);
     const symbols = createSymbolsAdapter(this.log);
     const diagnostics = createDiagnosticsAdapter(this.log);
-    const edit = createEditAdapter(this.log);
     const secrets = createSecretAdapter(this.context, this.log);
     const confirm = createConfirmAdapter(this.log);
 
@@ -559,7 +601,7 @@ class Shell {
     this.server.register("search.grep", (params, ctx) => search.grep(params, ctx));
     this.server.register("symbols.outline", (params, ctx) => symbols.outline(params, ctx));
     this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params, ctx));
-    this.server.register("edit.apply", (params, ctx) => edit.apply(params, ctx));
+    this.server.register("edit.apply", (params, ctx) => this.edit.apply(params, ctx));
     this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));
@@ -609,7 +651,7 @@ class Shell {
   }
 
   private updateStatus(): void {
-    const pendingCount = this.pending.size;
+    const pendingCount = this.proposals.count();
     const parts = [`$(bee) Bee Code`];
     if (this.busy) parts.push("$(sync~spin)");
     if (pendingCount > 0) parts.push(`待审 ${pendingCount}`);

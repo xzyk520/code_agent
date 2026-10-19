@@ -37,9 +37,9 @@
 
   /** @typedef {"chat" | "builder" | "debugger"} Mode */
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string }} ChatMessage */
-  /** @typedef {{ id: string, path: string, symbolPath?: string, additions?: number, deletions?: number, risk?: string, status: string }} PendingItem */
+  /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], pending?: PendingItem[], attachments?: Attachment[], hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -100,43 +100,65 @@
     }
   }
 
-  /** @param {PendingItem[]} items */
-  function renderPending(items) {
+  /**
+   * 提案卡片：每个文件一张，三个动作（看 diff / 接受 / 拒绝）。
+   * 接受之前磁盘一字不动 —— 这正是"先预览、后落实"的模型。
+   * @param {Proposal[]} items
+   */
+  function renderProposals(items) {
     el.pending.classList.toggle("hidden", items.length === 0);
-    el.pendingTitle.textContent = "待审改动（" + items.length + "）";
+    el.pendingTitle.textContent = "待审提案（" + items.length + " 个文件）";
     el.pendingList.textContent = "";
 
     for (const item of items) {
       const li = document.createElement("li");
+      li.className = "proposal";
+
+      const head = document.createElement("div");
+      head.className = "proposal-head";
 
       const pathNode = document.createElement("span");
       pathNode.className = "path";
-      pathNode.textContent = item.symbolPath ? item.path + " › " + item.symbolPath : item.path;
-      pathNode.title = item.path;
+      pathNode.textContent = item.path;
+      pathNode.title = item.summary || item.path;
 
       const stat = document.createElement("span");
       stat.className = "stat";
       stat.textContent = "+" + (item.additions || 0) + " −" + (item.deletions || 0);
 
-      const keep = document.createElement("button");
-      keep.textContent = "Keep";
-      keep.addEventListener("click", () => post({ type: "keep", ids: [item.id] }));
+      head.appendChild(pathNode);
+      head.appendChild(stat);
 
-      const undo = document.createElement("button");
-      undo.textContent = "Undo";
-      undo.addEventListener("click", () => post({ type: "undo", ids: [item.id] }));
-
-      li.appendChild(pathNode);
-      li.appendChild(stat);
-      if (item.risk === "high") {
-        const risk = document.createElement("span");
-        risk.className = "risk-high";
-        risk.textContent = "⚠";
-        risk.title = "高风险改动";
-        li.appendChild(risk);
+      if (item.summary) {
+        const note = document.createElement("div");
+        note.className = "proposal-note";
+        note.textContent = item.summary;
+        li.appendChild(head);
+        li.appendChild(note);
+      } else {
+        li.appendChild(head);
       }
-      li.appendChild(keep);
-      li.appendChild(undo);
+
+      const actions = document.createElement("div");
+      actions.className = "proposal-actions";
+
+      const view = document.createElement("button");
+      view.textContent = "查看改动";
+      view.addEventListener("click", () => post({ type: "proposal.diff", id: item.id }));
+
+      const accept = document.createElement("button");
+      accept.className = "primary";
+      accept.textContent = "接受";
+      accept.addEventListener("click", () => post({ type: "accept", ids: [item.id] }));
+
+      const reject = document.createElement("button");
+      reject.textContent = "拒绝";
+      reject.addEventListener("click", () => post({ type: "reject", ids: [item.id] }));
+
+      actions.appendChild(view);
+      actions.appendChild(accept);
+      actions.appendChild(reject);
+      li.appendChild(actions);
       el.pendingList.appendChild(li);
     }
   }
@@ -150,8 +172,8 @@
 
   el.send.addEventListener("click", send);
   el.stop.addEventListener("click", () => post({ type: "stop" }));
-  el.keepAll.addEventListener("click", () => post({ type: "keepAll" }));
-  el.undoAll.addEventListener("click", () => post({ type: "undoAll" }));
+  el.keepAll.addEventListener("click", () => post({ type: "acceptAll" }));
+  el.undoAll.addEventListener("click", () => post({ type: "rejectAll" }));
 
   for (const button of modeButtons) {
     button.addEventListener("click", () => {
@@ -184,7 +206,7 @@
         renderMode();
         renderBusy();
         renderAttachments(next.attachments || []);
-        renderPending(next.pending || []);
+        renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
         break;
       }
@@ -214,8 +236,8 @@
         renderAttachments(/** @type {Attachment[]} */ (msg.items) || []);
         break;
       }
-      case "pending": {
-        renderPending(/** @type {PendingItem[]} */ (msg.items) || []);
+      case "proposals": {
+        renderProposals(/** @type {Proposal[]} */ (msg.items) || []);
         break;
       }
       case "hint": {
