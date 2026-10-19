@@ -25,6 +25,17 @@
 - **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
   密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
 
+### Added
+
+- **权限系统（P1–P3）**：
+  - 规则引擎 `src/permissions.ts`：`Read()/Edit()/Run()` 规则，求值顺序 **deny → ask → allow → 模式默认**
+  - 五种模式：`plan` / `manual` / `acceptEdits` / `auto` / `bypass`（默认 manual）
+  - 工作区信任：首次打开询问一次并记录（`globalState`），不受信任时禁写、禁命令；命令「信任/取消信任此工作区」
+  - `run` RPC：cwd 限制、env 清洗、超时 + 进程树 kill、输出 64KB 限幅、非交互、权限门闸
+  - docker 沙箱（`sandbox: docker|auto`）：`--network none --read-only --cap-drop ALL`，无 docker 时按配置报错或回退
+  - 写入门闸接线：提案接受前校验规则 + 敏感路径二次确认；**接受前自动建检查点**
+  - `package.json` 声明 `capabilities.untrustedWorkspaces: "limited"` 与 `virtualWorkspaces: false`
+
 ### Security
 
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
@@ -129,6 +140,17 @@
 
 - **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
   密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
+
+### Added
+
+- **权限系统（P1–P3）**：
+  - 规则引擎 `src/permissions.ts`：`Read()/Edit()/Run()` 规则，求值顺序 **deny → ask → allow → 模式默认**
+  - 五种模式：`plan` / `manual` / `acceptEdits` / `auto` / `bypass`（默认 manual）
+  - 工作区信任：首次打开询问一次并记录（`globalState`），不受信任时禁写、禁命令；命令「信任/取消信任此工作区」
+  - `run` RPC：cwd 限制、env 清洗、超时 + 进程树 kill、输出 64KB 限幅、非交互、权限门闸
+  - docker 沙箱（`sandbox: docker|auto`）：`--network none --read-only --cap-drop ALL`，无 docker 时按配置报错或回退
+  - 写入门闸接线：提案接受前校验规则 + 敏感路径二次确认；**接受前自动建检查点**
+  - `package.json` 声明 `capabilities.untrustedWorkspaces: "limited"` 与 `virtualWorkspaces: false`
 
 ### Security
 

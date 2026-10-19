@@ -32,12 +32,15 @@ bee-code/
 │  ├─ sessionStore.ts            # ✅ 会话仓库（JSONL 全量历史 + index.json），重载/切换会话
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
 │  ├─ workspaceIgnore.ts         # ✅ 统一忽略规则（噪声目录 + .gitignore，fs/search/diagnostics 共用）
+│  ├─ permissions.ts             # ✅ 权限规则引擎（deny>ask>allow>模式默认，纯函数）
+│  ├─ trust.ts                   # ✅ 工作区信任（首次询问 + globalState 记录）
 │  ├─ log.ts                     # ✅ 双 LogOutputChannel（自动落盘）+ 脱敏 + 500 行缓冲
 │  ├─ rpc/
 │  │  ├─ client.ts               # ✅ 起子进程、握手、请求/响应、取消、崩溃处理
 │  │  └─ server.ts               # ✅ 内核 → 壳的方法路由（11 个）
 │  ├─ adapters/
-│  │  ├─ fsAdapter.ts            # ✅ fs.read / fs.list（.gitignore 合并、大小上限）
+│  │  ├─ runAdapter.ts              # ✅ 命令执行（L1 六条约束 + 可选 docker 沙箱）
+│  ├─ fsAdapter.ts            # ✅ fs.read / fs.list（.gitignore 合并、大小上限）
 │  │  ├─ searchAdapter.ts        # ✅ search.grep（公开 API 实现，见下方说明）
 │  │  ├─ symbolsAdapter.ts       # ✅ symbols.outline（DocumentSymbol / SymbolInformation 双兼容）
 │  │  ├─ diagnosticsAdapter.ts   # ✅ diagnostics.get

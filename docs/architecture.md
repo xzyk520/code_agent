@@ -1066,7 +1066,7 @@ turn-61  id e45d3a05 存在: false   ← 连最新的也变了
 
 | 门闸 | 默认 | 说明 |
 | --- | --- | --- |
-| 敏感路径写前确认 | 开 | `.env*`、`*.pem`、`*.key`、`id_rsa*`、`.git/**`、`.github/workflows/**`、`package.json` 的 `dependencies` 段（可配 `beeCode.review.gateGlobs`） |
+| 敏感路径写前确认 | 开（**已实现**：`assertWriteAllowed` 对 `.env*`/`*.pem`/`.git/**`/CI 配置等再加确认） | `.env*`、`*.pem`、`*.key`、`id_rsa*`、`.git/**`、`.github/workflows/**`、`package.json` 的 `dependencies` 段（可配 `beeCode.review.gateGlobs`） |
 | 大批量写前确认 | 开 | 单次 > 5 个文件 或 +/− 合计 > 300 行 → 「将改动 8 个文件 +420 −130，继续？」 |
 | 删除文件 | 开 | 删除类改动单独确认，且强制先落检查点 |
 | 自动 Keep | 关 | 可设延时（对标 `chat.editing.autoAcceptDelay`），倒计时内可撤销 |
@@ -1251,11 +1251,86 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - 读取大文件：> 512KB 走流式按行读（不再整体拒绝）；单次返回上限 256KB / 2000 行，超出标 `truncated`。
 - 忽略规则三层合并：内置默认 → `.gitignore` → 用户 `beeCode.files.exclude`。
 
-### 12.4 命令执行
+### 12.4 命令执行（已实现，默认拒绝）
 
-- v1 默认 **不启用**。
-- 启用后：命令 allowlist（`npm test`、`pytest`、`go build`…）+ 每次执行前弹确认（显示完整命令行、cwd、超时）+ 输出截断回填。
-- 🧪 执行沙箱方案见 [§14.3](#143-沙箱四个层级越往下越真隔离) 与 [§10.8](#108-仍然不执行代码)——宿主机隔离（容器 / OS 沙箱）是「真隔离」与「假隔离」的分水岭。
+`run` RPC 已落地，默认**不可用**——`permissions.mode: manual` 下每条命令都要确认，`plan` 模式直接拒绝。
+
+六条硬约束（缺一不可）：
+
+| 约束 | 实现 |
+| --- | --- |
+| cwd 必须在工作区内 | `resolveCwd` + `isInside` |
+| 环境变量清洗 | 剔除 `*KEY*`/`*TOKEN*`/`*SECRET*`/`*PASSWORD*`/`*AUTH*`（防止把密钥递给子进程） |
+| 超时 + 整棵进程树 | Windows `taskkill /T /F`；POSIX `kill(-pid, SIGKILL)` |
+| 输出限幅 | stdout/stderr 各 64KB，超出标 `truncated` |
+| 非交互 | stdin 立即关闭（否则 git 之类会卡住等输入） |
+| 权限判定 | deny → ask → allow → 模式默认；`ask` 时弹确认（可"记住这条命令"） |
+
+沙箱见 [§12.5](#125-权限规则信任与沙箱已实现)。宿主机隔离（容器 / OS 沙箱）是「真隔离」与「假隔离」的分水岭。
+
+### 12.5 权限规则、信任与沙箱（已实现）
+
+```
+权限模式（plan/manual/acceptEdits/auto/bypass）
+   └─ 规则（allow / ask / deny，按工具 + 参数匹配）
+        └─ 工作区信任（不受信任 → 禁写、禁命令）
+             └─ 沙箱（off / docker；命令执行的隔离级别）
+```
+
+#### 12.5.1 规则语法与求值顺序
+
+```
+Read(src/**)        读：路径 glob
+Edit(src/**)        写/删：路径 glob（`Write` 是别名）
+Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
+```
+
+求值顺序固定：**deny → ask → allow → 模式默认**。deny 永远优先，allow 不能从 deny 里挖例外。
+
+实现是纯函数（`src/permissions.ts`），**壳侧求值**；内核只读规则用于提示模型，不参与判定。
+
+#### 12.5.2 权限模式
+
+| 模式 | 读 | 写 | 命令 |
+| --- | --- | --- | --- |
+| `plan` | ✅ | ❌ | ❌ |
+| `manual`（默认） | ✅ | 需要确认 | 需要确认 |
+| `acceptEdits` | ✅ | ✅（提案仍需用户点接受） | 需要确认 |
+| `auto` | ✅ | ✅ | 需要确认（暂无可靠的"低风险"判定） |
+| `bypass` | ✅ | ✅ | ✅（只应在容器/VM 里用） |
+
+`allow` 规则可突破模式默认（例如 plan 模式下允许 `Run(npm test *)`）。
+
+#### 12.5.3 工作区信任
+
+- VS Code 的 `workspace.isTrusted` 是硬前提；
+- 另外**自己记一份**（`globalState`），首次打开问一次「信任 / 只读」；
+- 不受信任时：**只允许读**，写与命令一律 `DENIED(-32013)`，与规则无关；
+- 命令「信任/取消信任此工作区」可随时切换。
+
+#### 12.5.4 沙箱三档
+
+| 档 | 做法 | 强度 | 状态 |
+| --- | --- | --- | --- |
+| **L1 策略** | §12.4 的六条 | 弱（防手滑，不防恶意） | ✅ |
+| **L2 进程** | L1 + 无网 + 资源限制 + 只读系统目录 | 中 | ⬜ 平台 API 各自实现，暂缓 |
+| **L3 容器** | `docker run --network none --read-only --cap-drop ALL --memory 2g --pids-limit 256 --security-opt no-new-privileges` | 强 | ✅（`sandbox: docker/auto`） |
+
+**没有 L3 时不要把命令执行交给 `auto`/`bypass`**。
+
+#### 12.5.5 子代理与"沙箱内验证"（设计已定，待工具循环）
+
+```
+主 agent ── spawn_subagent(task, tools:[read], budget) ──▶ 子 agent（独立上下文，只读）
+                                                              │
+                                                         需要执行 → run（沙箱内）
+                                                              ▼
+                                                  结论 + path:line 引用（不回传原始上下文）
+```
+
+三个前提：① 工具循环（M2，未做）；② 权限引擎已能按动作判定（子代理可直接 deny write/run）；③ 沙箱执行器已就绪（主/子代理共用 `run`）。
+
+`run` 返回的 `exitCode/stdout/stderr` 就是"沙箱内验证回路"的原料：测试/构建结果回灌模型，由它决定下一步。
 
 ---
 

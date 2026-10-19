@@ -7,12 +7,12 @@
  *   - 内核 → 壳（ShellMethods）：fs.read / fs.list / search.grep / symbols.outline / diagnostics.get /
  *                                symbols.search / symbols.references / edit.apply /
  *                                checkpoint.create / checkpoint.restore / diff.open /
- *                                confirm.ask / secrets.get
+ *                                confirm.ask / secrets.get / run
  *   - 内核 → 壳 通知：ui.delta / ui.tool / ui.usage / proposal.changed / log
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -320,6 +320,24 @@ export interface ConfirmAskParams {
 }
 export interface ConfirmAskResult { choice: string | null }
 
+export interface RunParams {
+  command: string;
+  /** 工作区相对目录；省略 = 工作区根 */
+  cwd?: string;
+  timeoutMs?: number;
+}
+export interface RunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** 输出超过上限被截断 */
+  truncated: boolean;
+  durationMs: number;
+  sandbox: "none" | "docker";
+  /** 超时被杀（exitCode 通常为 124） */
+  killed: boolean;
+}
+
 export interface SecretsGetParams { key: string }
 export interface SecretsGetResult { value: string | null }
 
@@ -337,6 +355,7 @@ export interface ShellMethodParams {
   "diff.open": DiffOpenParams;
   "confirm.ask": ConfirmAskParams;
   "secrets.get": SecretsGetParams;
+  "run": RunParams;
 }
 
 export interface ShellMethodResults {
@@ -353,6 +372,7 @@ export interface ShellMethodResults {
   "diff.open": DiffOpenResult;
   "confirm.ask": ConfirmAskResult;
   "secrets.get": SecretsGetResult;
+  "run": RunResult;
 }
 
 export type ShellMethod = keyof ShellMethodParams;

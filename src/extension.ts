@@ -13,13 +13,16 @@ import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands, undeclaredCommands } from "./commands/register";
 import { API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
-import type { CoreApi } from "./coreApi";
+import type { CoreApi, InboundRequestContext } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
 import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
 import { toWorkspaceRelative } from "./paths";
+import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
+import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
+import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
 import { buildContext } from "./contextBuilder";
 import { SessionStore, type TurnStatus } from "./sessionStore";
 import { PROTOCOL_VERSION } from "./protocol";
@@ -32,6 +35,8 @@ import type {
   ChatMessage,
   ProposalChangedParams,
   ProposalDto,
+  RunParams,
+  RunResult,
   UiDeltaParams,
   UiToolParams,
   UiUsageParams,
@@ -80,6 +85,11 @@ class Shell {
   private acceptAllCancelled = false;
   private acceptAllToken = 0;
   private readonly proposals: ProposalAdapter;
+  private readonly confirm: ReturnType<typeof createConfirmAdapter>;
+  private readonly runner: ReturnType<typeof createRunAdapter>;
+  private rules: RuleSet = buildRuleSet({});
+  private trusted = false;
+  private dockerAvailable = false;
   private readonly sessions: SessionStore;
   /** 上一轮停在哪个阶段（持久化到磁盘，重载后可判断能否继续） */
   private turn: TurnStatus = "idle";
@@ -106,7 +116,16 @@ class Shell {
 
     // 写入通道与提案暂存：提案被「接受」时才真正调用 this.edit 落盘
     this.edit = createEditAdapter(this.log);
+    this.confirm = createConfirmAdapter(context, this.log);
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
+    this.runner = createRunAdapter({
+      logger: this.log,
+      policy: () => ({
+        sandbox: this.config.permissions.sandbox,
+        dockerImage: this.config.permissions.dockerImage,
+      }),
+      dockerAvailable: () => this.dockerAvailable,
+    });
     this.sessions = new SessionStore(path.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.sessionId = context.globalState.get<string>(SESSION_KEY) ?? newSessionId();
 
@@ -153,6 +172,10 @@ class Shell {
       cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
       testModel: () => this.testModel(),
+      toggleTrust: async () => {
+        await toggleWorkspaceTrust(this.context, this.log);
+        await this.refreshPermissions();
+      },
       clearModelKey: () => this.clearModelKey(),
       crashMock: () => {
         if (this.core instanceof MockCore) this.core.simulateCrash("用户通过命令触发");
@@ -552,6 +575,25 @@ class Shell {
       return false;
     }
 
+    const dto = this.proposals.get(id);
+    if (!dto) return false;
+
+    // ① 权限门闸（用户已点"接受"，但没有 deny 规则 / 未受信任时仍然拒绝）
+    try {
+      await this.assertWriteAllowed(dto.path, localContext(), { userApproved: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn(`提案 ${id} 被权限拒绝：${message}`);
+      void vscode.window.showWarningMessage(`Bee Code: ${message}`);
+      return false;
+    }
+
+    // ② 写入前自动快照：不再依赖内核"记得调 checkpoint"
+    if (this.config.checkpointEnabled) {
+      const checkpoint = await this.checkpoint.create({ label: `accept ${dto.path}` }).catch(() => undefined);
+      if (checkpoint?.id) this.log.debug(`自动检查点 ${checkpoint.id.slice(0, 8)}（${dto.path}）`);
+    }
+
     const result = await this.proposals.accept(
       id,
       async (proposalId) => (await core.proposalRead({ id: proposalId })).text,
@@ -562,12 +604,11 @@ class Shell {
       this.log.info(`提案已应用 ${id}`);
       return true;
     }
-    const dto = this.proposals.get(id);
-    this.log.warn(`提案未应用 ${id}（${dto?.path ?? "?"}）：${result.message ?? "未知原因"}`);
+    this.log.warn(`提案未应用 ${id}（${dto.path}）：${result.message ?? "未知原因"}`);
     if (result.conflict) {
       this.proposals.markStale(id);
       void vscode.window.showWarningMessage(
-        `Bee Code: ${dto?.path ?? "文件"} 已被修改，提案未应用。请让 agent 重新生成。`,
+        `Bee Code: ${dto.path} 已被修改，提案未应用。请让 agent 重新生成。`,
       );
     }
     return false;
@@ -628,6 +669,94 @@ class Shell {
     const found = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,py,md}", "**/node_modules/**", 1);
     const uri = found[0];
     return uri ? toWorkspaceRelative(uri.fsPath) : undefined;
+  }
+
+  // ───────────────────────── 权限 ─────────────────────────
+
+  /** 重新读取权限规则与信任状态（启动 + 配置变更时调用） */
+  private async refreshPermissions(): Promise<void> {
+    this.rules = buildRuleSet(this.config.permissions);
+    this.trusted = this.config.permissions.requireTrust
+      ? await ensureWorkspaceTrust(this.context, this.log)
+      : vscode.workspace.isTrusted;
+    this.log.info(
+      `权限：mode=${this.config.permissions.mode} trusted=${this.trusted} ` +
+        `rules(allow=${this.rules.allow.length} ask=${this.rules.ask.length} deny=${this.rules.deny.length})`,
+    );
+  }
+
+  private describePermission(action: "read" | "write" | "run", target: string): Evaluation {
+    return evaluate({
+      mode: this.config.permissions.mode,
+      rules: this.rules,
+      action,
+      target,
+      trusted: this.trusted,
+    });
+  }
+
+  /**
+   * 写入门闸。
+   *
+   * `userApproved` = 用户刚在提案里点了「接受」。区分它，是为了避免"点一次接受又问一次"：
+   *   - deny → 拒绝（无论如何）
+   *   - 显式 ask 规则 → 永远确认（用户明确要求每写必问）
+   *   - 模式默认 ask → 提案路径视为已确认；内核直接调 edit.apply 时仍要确认
+   *   - 敏感路径 + 模式放行 → 确认一次（模式放行 ≠ 用户知情）
+   */
+  private async assertWriteAllowed(
+    path: string,
+    ctx: InboundRequestContext,
+    opts: { userApproved: boolean },
+  ): Promise<void> {
+    const evaluation = this.describePermission("write", path);
+    if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
+
+    const needsConfirm =
+      (evaluation.decision === "ask" && (evaluation.source === "rule" || !opts.userApproved)) ||
+      (evaluation.decision === "allow" &&
+        evaluation.source === "mode" &&
+        isSensitiveWrite(path) &&
+        !opts.userApproved);
+
+    if (!needsConfirm) return;
+
+    const answer = await this.confirm.ask(
+      {
+        question: `允许修改 ${path}？`,
+        detail: `${evaluation.reason}\n\n路径：${path}`,
+        options: [
+          { id: "yes", label: "允许" },
+          { id: "no", label: "拒绝" },
+        ],
+        rememberKey: `write:${path}`,
+      },
+      ctx,
+    );
+    if (answer.choice !== "yes") throw deniedError("用户拒绝写入");
+  }
+
+  /** 命令执行：先过权限，再交给 runAdapter（内部可走 docker 沙箱） */
+  private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
+    const evaluation = this.describePermission("run", params.command);
+    if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
+
+    if (evaluation.decision === "ask") {
+      const answer = await this.confirm.ask(
+        {
+          question: "执行这条命令？",
+          detail: `${evaluation.reason}\n\n${params.command}\n\n沙箱：${this.config.permissions.sandbox}`,
+          options: [
+            { id: "yes", label: "执行" },
+            { id: "no", label: "取消" },
+          ],
+          rememberKey: `run:${params.command}`,
+        },
+        ctx,
+      );
+      if (answer.choice !== "yes") throw deniedError("用户取消执行");
+    }
+    return this.runner.run(params, ctx);
   }
 
   private async pickFiles(): Promise<void> {
@@ -940,7 +1069,6 @@ class Shell {
     const symbols = createSymbolsAdapter(this.log);
     const diagnostics = createDiagnosticsAdapter(this.log);
     const secrets = createSecretAdapter(this.context, this.log);
-    const confirm = createConfirmAdapter(this.context, this.log);
 
     // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
     this.server.register("fs.read", (params, ctx) => fs.read(params, ctx));
@@ -950,12 +1078,16 @@ class Shell {
     this.server.register("symbols.search", (params, ctx) => symbols.search(params, ctx));
     this.server.register("symbols.references", (params, ctx) => symbols.references(params, ctx));
     this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params, ctx));
-    this.server.register("edit.apply", (params, ctx) => this.edit.apply(params, ctx));
+    this.server.register("edit.apply", async (params, ctx) => {
+      await this.assertWriteAllowed(params.path, ctx, { userApproved: false });
+      return this.edit.apply(params, ctx);
+    });
+    this.server.register("run", (params, ctx) => this.runCommand(params, ctx));
     this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));
     this.server.register("secrets.get", (params) => secrets.get(params));
-    this.server.register("confirm.ask", (params, ctx) => confirm.ask(params, ctx));
+    this.server.register("confirm.ask", (params, ctx) => this.confirm.ask(params, ctx));
 
     // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
     this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
@@ -1072,4 +1204,22 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
     return history.slice(0, -1);
   }
   return history;
+}
+
+/** 权限拒绝：用 PathPolicyError 这个 name，让壳的 rpcCodeFor 映射成 DENIED(-32013) */
+function deniedError(reason: string): Error {
+  const err = new Error(reason);
+  err.name = "PathPolicyError";
+  return err;
+}
+
+/** 本地动作（非 RPC 触发）用的上下文：不可取消 */
+function localContext(): InboundRequestContext {
+  return {
+    id: "local",
+    signal: new AbortController().signal,
+    throwIfCancelled() {
+      /* 本地动作不可取消 */
+    },
+  };
 }

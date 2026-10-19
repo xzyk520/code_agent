@@ -28,6 +28,8 @@ export interface CommandDeps {
   crashMock(): void;
   /** 测试模型端点连通性（GET /models） */
   testModel(): Promise<void>;
+  /** 切换当前工作区信任状态（信任 ⇄ 只读） */
+  toggleTrust(): Promise<void>;
   /** 清除凭据库里保存的 API Key */
   clearModelKey(): Promise<void>;
   pickFiles(): Promise<void>;
@@ -90,6 +92,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
   register("beeCode.dev.crashMock", () => deps.crashMock());
   register("beeCode.model.test", () => deps.testModel());
+  register("beeCode.workspace.trust", () => deps.toggleTrust());
   register("beeCode.model.clearKey", () => deps.clearModelKey());
 
   return ids;

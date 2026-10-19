@@ -30,6 +30,16 @@
     "mcp"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "不受信任的工作区只能读取与对话；写文件与执行命令会被拒绝。"
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "依赖真实文件系统与 git（影子检查点），不支持虚拟工作区。"
+    }
+  },
   "activationEvents": [],
   "scripts": {
     "build": "node esbuild.mjs",
@@ -119,6 +129,11 @@
       {
         "command": "beeCode.session.pick",
         "title": "历史会话…",
+        "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.workspace.trust",
+        "title": "信任/取消信任此工作区",
         "category": "Bee Code"
       },
       {
@@ -273,7 +288,68 @@
           "default": true,
           "markdownDescription": "端点是否支持原生 function calling；关掉后内核走 JSON 模式降级。"
         },
-        "beeCode.review.granularity": {
+        "beeCode.permissions.mode": {
+          "type": "string",
+          "scope": "window",
+          "order": 20,
+          "enum": ["plan", "manual", "acceptEdits", "auto", "bypass"],
+          "enumDescriptions": [
+            "只读：不允许改文件、不允许执行命令",
+            "手动：写文件与执行命令都要确认（默认）",
+            "自动接受编辑：写文件不再逐次确认，执行命令仍要确认",
+            "自动：低风险操作自动放行（写文件放行，命令仍需确认）",
+            "全放行：不做任何确认，只应在容器/虚拟机里使用"
+          ],
+          "default": "manual",
+          "markdownDescription": "权限模式。规则（allow/ask/deny）优先于模式。"
+        },
+        "beeCode.permissions.allow": {
+          "type": "array",
+          "scope": "window",
+          "order": 21,
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "允许规则，例如 `Read(src/**)`、`Run(npm test *)`。优先级：deny > ask > allow。"
+        },
+        "beeCode.permissions.ask": {
+          "type": "array",
+          "scope": "window",
+          "order": 22,
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "必须确认的规则，例如 `Edit(.github/**)`。"
+        },
+        "beeCode.permissions.deny": {
+          "type": "array",
+          "scope": "window",
+          "order": 23,
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "禁止规则，例如 `Run(git push *)`、`Edit(.env*)`。**deny 永远优先**，allow 不能挖例外。"
+        },
+        "beeCode.permissions.sandbox": {
+          "type": "string",
+          "scope": "window",
+          "order": 24,
+          "enum": ["off", "docker", "auto"],
+          "enumDescriptions": ["直接在宿主执行（仅策略约束）", "强制在 docker 容器内执行", "有 docker 就用，没有则直连"],
+          "default": "off",
+          "markdownDescription": "命令执行的隔离级别。docker 模式会以 `--network none --read-only` 运行，见文档 §12.4。"
+        },
+        "beeCode.permissions.dockerImage": {
+          "type": "string",
+          "scope": "window",
+          "order": 25,
+          "default": "node:22-alpine",
+          "markdownDescription": "沙箱镜像（需要包含你要执行的运行时，例如 node/python）。"
+        },
+        "beeCode.permissions.requireTrust": {
+          "type": "boolean",
+          "scope": "window",
+          "order": 26,
+          "default": true,
+          "markdownDescription": "是否要求工作区被显式信任（不受信任时禁写、禁命令）。"
+        },        "beeCode.review.granularity": {
           "type": "string",
           "enum": [
             "function",

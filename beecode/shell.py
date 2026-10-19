@@ -63,6 +63,21 @@ class Symbol:
 
 
 @dataclass(slots=True)
+class RunResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+    truncated: bool
+    duration_ms: int
+    sandbox: str
+    killed: bool
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0 and not self.killed
+
+
+@dataclass(slots=True)
 class Diagnostic:
     path: str
     severity: str
@@ -117,6 +132,7 @@ class ShellClient:
             "diff.open",
             "confirm.ask",
             "secrets.get",
+            "run",
         }
     )
 
@@ -423,6 +439,27 @@ class ShellClient:
         result = await self._call("diff.open", {"path": path, "baseText": base_text, "title": title or ""})
         return bool(result.get("opened"))
 
+    async def run(self, command: str, *, cwd: str | None = None, timeout_ms: int | None = None) -> RunResult:
+        """在工作区内执行命令（沙箱与否由壳的 `beeCode.permissions.sandbox` 决定）。
+
+        ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
+        需要确认时会弹窗。不要用它做只读探测——读文件用 `read_file`。
+        """
+        payload: dict[str, Any] = {"command": command}
+        if cwd:
+            payload["cwd"] = cwd
+        if timeout_ms is not None:
+            payload["timeoutMs"] = timeout_ms
+        result = await self._call("run", payload, timeout=600.0)
+        return RunResult(
+            exit_code=int(result.get("exitCode", -1)),
+            stdout=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+            truncated=bool(result.get("truncated", False)),
+            duration_ms=int(result.get("durationMs", 0)),
+            sandbox=str(result.get("sandbox", "none")),
+            killed=bool(result.get("killed", False)),
+        )
     async def confirm(self, question: str, options: list[dict[str, str]], detail: str | None = None) -> str | None:
         result = await self._call(
             "confirm.ask",

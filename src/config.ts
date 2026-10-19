@@ -36,6 +36,18 @@ export interface ShellConfig {
   granularity: "function" | "change" | "file";
   checkpointEnabled: boolean;
   checkpointRetention: number;
+  permissions: PermissionsConfig;
+}
+
+/** 权限相关配置（规则原文由 permissions.ts 解析） */
+export interface PermissionsConfig {
+  mode: "plan" | "manual" | "acceptEdits" | "auto" | "bypass";
+  allow: string[];
+  ask: string[];
+  deny: string[];
+  sandbox: "off" | "docker" | "auto";
+  dockerImage: string;
+  requireTrust: boolean;
 }
 
 export interface ConfigReadResult {
@@ -68,6 +80,15 @@ export function readConfig(): ConfigReadResult {
     granularity: reader.oneOf("review.granularity", "function", ["function", "change", "file"] as const),
     checkpointEnabled: reader.bool("checkpoint.enabled", true),
     checkpointRetention: reader.num("checkpoint.retention", 50, 1, 1_000),
+    permissions: {
+      mode: reader.oneOf("permissions.mode", "manual", ["plan", "manual", "acceptEdits", "auto", "bypass"] as const),
+      allow: reader.strArray("permissions.allow", []),
+      ask: reader.strArray("permissions.ask", []),
+      deny: reader.strArray("permissions.deny", []),
+      sandbox: reader.oneOf("permissions.sandbox", "off", ["off", "docker", "auto"] as const),
+      dockerImage: reader.str("permissions.dockerImage", "node:22-alpine"),
+      requireTrust: reader.bool("permissions.requireTrust", true),
+    },
   };
 
   return { config, problems: reader.problems };
