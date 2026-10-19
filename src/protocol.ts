@@ -291,6 +291,8 @@ export interface ChatSendParams {
    * 内核可以据此重建上下文；不传就是全新会话。
    */
   history?: ChatMessage[];
+  /** 早前轮次的压缩摘要（contextBuilder 产出；内核可选消费） */
+  summary?: string;
 }
 
 /** 提案（虚拟文件）：内核把「修正后的代码」暂存在自己那边，壳按需拉取，用户批准后才真正落盘 */

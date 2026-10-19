@@ -102,6 +102,16 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.session.new",
+        "title": "新建会话",
+        "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.session.pick",
+        "title": "历史会话…",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.session.continue",
         "title": "继续上次的操作",
         "category": "Bee Code"

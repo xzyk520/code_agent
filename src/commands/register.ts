@@ -15,6 +15,10 @@ export interface CommandDeps {
   continueTurn(): Promise<void>;
   /** 重载中断后：让 agent 重新生成提案 */
   regenerateProposal(): Promise<void>;
+  /** 新建会话（当前会话的完整记录仍留在磁盘） */
+  newSession(): Promise<void>;
+  /** 从历史会话里挑一个继续 */
+  pickSession(): Promise<void>;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -50,6 +54,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
   register("beeCode.files.pick", () => deps.pickFiles());
   register("beeCode.model.configure", () => deps.configureModel());
+  register("beeCode.session.new", () => deps.newSession());
+  register("beeCode.session.pick", () => deps.pickSession());
   register("beeCode.session.continue", () => deps.continueTurn());
   register("beeCode.session.regenerate", () => deps.regenerateProposal());
   register("beeCode.proposal.acceptAll", () => deps.acceptAll());
