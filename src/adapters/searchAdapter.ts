@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { InboundRequestContext } from "../coreApi";
 import type { Logger } from "../log";
 import { toWorkspaceRelative } from "../paths";
-import type { GrepHit, SearchGrepParams, SearchGrepResult } from "../protocol";
+import type { GrepFileHit, GrepHit, SearchGrepParams, SearchGrepResult } from "../protocol";
 import { isIgnored } from "../workspaceIgnore";
 
 const MAX_FILE_BYTES = 256 * 1024;
@@ -27,6 +27,8 @@ export function createSearchAdapter(logger: Logger) {
 
       const limit = Math.min(params.maxResults ?? 200, 2_000);
       const contextLines = Math.max(0, Math.min(params.contextLines ?? 0, 5));
+      // 召回模式：只回「哪些文件命中、各几次」，不返回行文本
+      const filesOnly = params.filesOnly === true;
 
       const re = params.regex ? safeRegex(query) : new RegExp(escapeRegExp(query), "i");
       const files = await vscode.workspace.findFiles(
@@ -36,11 +38,16 @@ export function createSearchAdapter(logger: Logger) {
       );
 
       const hits: GrepHit[] = [];
+      const fileHits: GrepFileHit[] = [];
       let truncated = files.length >= MAX_FILES_SCANNED;
 
       for (const uri of files) {
         ctx.throwIfCancelled();
-        if (hits.length >= limit) {
+        if (!filesOnly && hits.length >= limit) {
+          truncated = true;
+          break;
+        }
+        if (filesOnly && fileHits.length >= limit) {
           truncated = true;
           break;
         }
@@ -60,10 +67,13 @@ export function createSearchAdapter(logger: Logger) {
         }
 
         const lines = text.split(/\r?\n/);
+        let perFile = 0;
         for (let i = 0; i < lines.length; i += 1) {
           const line = lines[i] ?? "";
           const match = re.exec(line);
           if (!match) continue;
+          perFile += 1;
+          if (filesOnly) continue;   // 召回模式不收集行文本
           hits.push({
             path: toWorkspaceRelative(uri.fsPath),
             line: i + 1,
@@ -75,9 +85,16 @@ export function createSearchAdapter(logger: Logger) {
             break;
           }
         }
+        if (filesOnly && perFile > 0) {
+          fileHits.push({ path: toWorkspaceRelative(uri.fsPath), matches: perFile });
+        }
       }
 
       ctx.throwIfCancelled();
+      if (filesOnly) {
+        logger.debug(`search.grep "${query}"（filesOnly）→ ${fileHits.length} 个文件（扫描 ${files.length} 个）`);
+        return { hits: [], files: fileHits, truncated };
+      }
       logger.debug(`search.grep "${query}" → ${hits.length} 条（扫描 ${files.length} 个文件）`);
       return { hits, truncated };
     },

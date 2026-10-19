@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -128,13 +128,50 @@ export interface SearchGrepParams {
   glob?: string;
   contextLines?: number;
   maxResults?: number;
+  /** 只返回「哪些文件命中、各几次」，不返回行文本（召回阶段用，token 省一个数量级） */
+  filesOnly?: boolean;
 }
 export interface GrepHit { path: string; line: number; col: number; text: string }
-export interface SearchGrepResult { hits: GrepHit[]; truncated: boolean }
+export interface GrepFileHit { path: string; matches: number }
+export interface SearchGrepResult {
+  hits: GrepHit[];
+  /** `filesOnly: true` 时返回：文件 + 命中次数（不含行文本，省 token） */
+  files?: GrepFileHit[];
+  truncated: boolean;
+}
 
 export interface SymbolsOutlineParams { path: string }
 export interface SymbolDto { name: string; kind: string; container?: string; range: TextRangeDto }
 export interface SymbolsOutlineResult { symbols: SymbolDto[]; source: "lsp" | "none" }
+
+export interface SymbolHitDto {
+  path: string;
+  name: string;
+  kind: string;
+  container?: string;
+  range: TextRangeDto;
+}
+export interface SymbolsSearchParams {
+  query: string;
+  maxResults?: number;
+}
+export interface SymbolsSearchResult {
+  symbols: SymbolHitDto[];
+  /** lsp = 语言服务的 workspace/symbol；fallback = grep + outline 扫描；none = 都没结果 */
+  source: "lsp" | "fallback" | "none";
+  truncated: boolean;
+}
+
+export interface SymbolsReferencesParams {
+  path: string;
+  /** 1-based 行；用 outline 拿到的 range.startLine 即可 */
+  line: number;
+  /** 1-based 列，默认 1 */
+  column?: number;
+  maxResults?: number;
+}
+export interface ReferenceHitDto { path: string; line: number; col: number; text?: string }
+export interface SymbolsReferencesResult { locations: ReferenceHitDto[]; truncated: boolean }
 
 export interface DiagnosticsGetParams {
   /** 只看这个文件；省略 = 全量（只包含已被语言服务分析过的文件） */
@@ -230,6 +267,8 @@ export interface ShellMethodParams {
   "fs.list": FsListParams;
   "search.grep": SearchGrepParams;
   "symbols.outline": SymbolsOutlineParams;
+  "symbols.search": SymbolsSearchParams;
+  "symbols.references": SymbolsReferencesParams;
   "diagnostics.get": DiagnosticsGetParams;
   "edit.apply": EditApplyParams;
   "checkpoint.create": CheckpointCreateParams;
@@ -244,6 +283,8 @@ export interface ShellMethodResults {
   "fs.list": FsListResult;
   "search.grep": SearchGrepResult;
   "symbols.outline": SymbolsOutlineResult;
+  "symbols.search": SymbolsSearchResult;
+  "symbols.references": SymbolsReferencesResult;
   "diagnostics.get": DiagnosticsGetResult;
   "edit.apply": EditApplyResult;
   "checkpoint.create": CheckpointCreateResult;

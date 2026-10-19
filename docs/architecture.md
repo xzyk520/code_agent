@@ -212,8 +212,10 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | --- | --- | --- | --- |
 | `fs.read` | `path, startLine?, endLine?` | `{ text, version?, totalLines?, startLine, endLine, truncated }` | 优先用编辑器里的**未保存**内容 |
 | `fs.list` | `glob, exclude?, maxResults?` | `{ paths[], truncated }` | 先多取再过滤（避免被忽略文件吃满配额）；壳合并 `files.exclude` + `.gitignore` |
-| `search.grep` | `query, regex?, glob?, contextLines?` | `{ hits[{path,line,col,text}] }` | 壳内跑 ripgrep |
-| `symbols.outline` | `path` | `{ symbols[] }` | `executeDocumentSymbolProvider` |
+| `search.grep` | `query, regex?, glob?, contextLines?, maxResults?, filesOnly?` | `{ hits[], files?, truncated }` | 壳内逐文件正则；`filesOnly` 只回文件+计数（召回阶段省 token） |
+| `symbols.outline` | `path` | `{ symbols[], source }` | `executeDocumentSymbolProvider` |
+| `symbols.search` | `query, maxResults?` | `{ symbols[], source: lsp\|fallback\|none, truncated }` | `executeWorkspaceSymbolProvider`；无 provider 时「grep 找文件 + outline」兜底 |
+| `symbols.references` | `path, line, column?, maxResults?` | `{ locations[], truncated }` | `executeReferenceProvider`：回答"谁在用它" |
 | `diagnostics.get` | `path?` / `minSeverity?` / `maxItems?`（默认 200，上限 2000）/ `includeIgnored?` | `{ items[], total, truncated }`；每条含 `code`（`TS2322` 等）与 1-based 行列 | `languages.getDiagnostics`，按严重度排序、默认过滤 `node_modules`/`.git`/`.gitignore` |
 | `edit.apply` | `path` / `newText` / `op?`（`write`\|`delete`）/ `expectedVersion?` / `reason?` | `{ applied, version?, conflict?, message? }` | **唯一写入通道**：单次 `WorkspaceEdit`（新建走 `createFile` + `insert`，换行符跟随目标文件） |
 | `checkpoint.create` | `label?` / `paths?` | `{ id, files, skipped?, reason? }` | 影子 git 快照（`paths` 为轻量模式） |
@@ -620,6 +622,28 @@ UI 有三处：
 - **不做**默认的向量索引：全量 embedding 有索引成本、陈旧问题和「把私钥/密钥文件也塞进向量库」的隐私风险。业界两种主流替代是 **agentic search**（Claude Code / Codex CLI / Cline：只给检索工具，让模型自己决定读什么）和 **结构化 repo map**（Aider：只把符号与引用图压成骨架，不整库向量化）。本项目优先走 agentic search 为主、repo map 为辅。🧪 向量检索作为可选增强（本地 embedding 模型），默认关闭，见 [§14](#14-工业界参考) 的对比。
 - Aider 的 **repo map** 思路（tree-sitter 抽取符号 + 引用图 + 图排序压到预算内）值得借鉴：它把「整个仓库的结构」压成 1~4k token 的骨架，对「跨文件改一处」类任务性价比很高。🔬 M2 之后作为 `file_outline` 的批量版本引入。
 
+#### 8.2.0 三个检索工具怎么选
+
+| 问法 | 工具 | 返回 |
+| --- | --- | --- |
+| "哪些文件里出现过 X" | `search.grep(filesOnly: true)` | 文件 + 命中次数（不含行文本，~200 token） |
+| "X 在第几行、上下文是什么" | `search.grep` | 命中行（带上下文） |
+| "**哪里定义**了 X" | `symbols.search` | 符号 + 路径 + 行范围（定义级，最准） |
+| "X **在哪些地方被用到**" | `symbols.references`（用 outline 拿到的行做入参） | 引用位置列表 |
+| "这个文件里有哪些函数" | `symbols.outline` | 函数/类清单 + 行范围 |
+
+典型流水线（"找出所有处理上传的函数"）：
+
+```
+grep(filesOnly) 或 symbols.search  → 候选文件 / 候选符号
+  → symbols.outline（非 LSP 语言兜底）
+  → read_symbol 只读命中的函数体
+  → 汇总并声明覆盖率（检索词、是否截断、未覆盖目录）
+```
+
+`symbols.search` 的 `source` 字段很重要：`lsp` 表示走了语言服务索引（可信），
+`fallback` 表示退化成"grep + outline"扫描（**可能不全**，最多扫 40 个候选文件）。
+调用方（内核提示词）应据此决定措辞："没找到" 还是 "搜索受限，可能有遗漏"。
 ### 8.2.1 读文件：按「这次读多少」限流，而不是按「文件多大」拒绝
 
 v0.4 起把闸门从"文件大小"挪到了"单次返回量"，因为用户的目标往往是**读大文件里的某几行/某个函数**：

@@ -20,6 +20,10 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **新增三个检索工具（协议 v7）**：
+  `symbols.search`（全工作区按名字找定义，优先 workspace/symbol，无 provider 时 grep+outline 兜底并标注 `source: fallback`）、
+  `symbols.references`（executeReferenceProvider，"谁在用它"）、
+  `search.grep` 的 `filesOnly` 模式（只回文件+命中次数，召回阶段省一个数量级 token）
 - **读文件改为按"返回量"限流**：文件 >512KB 不再整体拒绝，改流式按行读（只读到 `endLine`，内存与文件大小无关）；
   单次返回上限 256KB / 2000 行，超出标 `truncated`；返回 `startLine/endLine`；二进制（前 8KB 含 NUL）直接拒绝；
   `version` 改为可选（磁盘读取不再返回误导性的 0）

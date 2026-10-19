@@ -97,6 +97,8 @@ class ShellClient:
             "fs.list",
             "search.grep",
             "symbols.outline",
+            "symbols.search",
+            "symbols.references",
             "diagnostics.get",
             "edit.apply",
             "checkpoint.create",
@@ -191,6 +193,28 @@ class ShellClient:
         result = await self._call("search.grep", payload)
         return [GrepHit(**hit) for hit in result.get("hits", [])]
 
+    async def grep_files(
+        self,
+        query: str,
+        *,
+        regex: bool = False,
+        glob: str | None = None,
+        max_results: int = 200,
+    ) -> dict[str, Any]:
+        """召回模式：只返回「哪些文件命中、各几次」`{files, truncated}`。
+
+        用在"先找候选文件、再精读"的两步流程里——比 `grep()` 省一个数量级的 token。
+        """
+        payload: dict[str, Any] = {
+            "query": query,
+            "regex": regex,
+            "maxResults": max_results,
+            "filesOnly": True,
+        }
+        if glob:
+            payload["glob"] = glob
+        return dict(await self._call("search.grep", payload))
+
     async def outline(self, path: str) -> list[Symbol]:
         result = await self._call("symbols.outline", {"path": path})
         symbols: list[Symbol] = []
@@ -207,6 +231,27 @@ class ShellClient:
             )
         return symbols
 
+    async def symbols_search(self, query: str, *, max_results: int = 100) -> dict[str, Any]:
+        """全工作区按名字找定义：`{symbols, source, truncated}`。
+
+        `source` 三种取值：
+          - `"lsp"`：语言服务的 workspace/symbol 索引（最准、最快）
+          - `"fallback"`：没有 provider 时用「grep 找文件 + 逐个 outline」兜底，**可能不全**
+          - `"none"`：什么都没找到
+
+        每个符号带 `path` 与 `range`，可以直接喂给 `read_symbol` 精确阅读。
+        """
+        return dict(await self._call("symbols.search", {"query": query, "maxResults": max_results}))
+
+    async def symbols_references(
+        self, path: str, line: int, *, column: int = 1, max_results: int = 200
+    ) -> dict[str, Any]:
+        """某个位置（通常是符号名那一行）的所有引用：`{locations, truncated}`。
+
+        `line` 用 `outline()` 拿到的 `start_line` 即可。
+        """
+        payload = {"path": path, "line": line, "column": column, "maxResults": max_results}
+        return dict(await self._call("symbols.references", payload))
     async def diagnostics(
         self,
         path: str | None = None,

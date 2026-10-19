@@ -786,6 +786,8 @@ class Shell {
     this.server.register("fs.list", (params, ctx) => fs.list(params, ctx));
     this.server.register("search.grep", (params, ctx) => search.grep(params, ctx));
     this.server.register("symbols.outline", (params, ctx) => symbols.outline(params, ctx));
+    this.server.register("symbols.search", (params, ctx) => symbols.search(params, ctx));
+    this.server.register("symbols.references", (params, ctx) => symbols.references(params, ctx));
     this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params, ctx));
     this.server.register("edit.apply", (params, ctx) => this.edit.apply(params, ctx));
     this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
