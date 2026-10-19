@@ -2,7 +2,7 @@
   "name": "bee-code",
   "displayName": "Bee Code",
   "description": "BYO-model coding agent: Chat / Builder / Debugger, diff preview with per-file accept.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "xzyk520",
   "license": "MIT",
   "repository": {

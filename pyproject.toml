@@ -1,6 +1,6 @@
 [project]
 name = "beecode"
-version = "0.0.1"
+version = "0.1.0"
 description = "Bee Code 内核：agent loop、上下文、工具、补丁（Python 侧）"
 requires-python = ">=3.11"
 dependencies = [
