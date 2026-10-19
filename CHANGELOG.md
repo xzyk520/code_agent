@@ -14,6 +14,8 @@
 - 忽略规则抽成 `src/workspaceIgnore.ts`，由 fs / search / diagnostics 三个适配器共用（之前是两份拷贝，规则容易漂移）
 - **diff 预览**：路径改走 `resolveTarget`（不再能借预览读工作区外文件）；虚拟文档内容表加 LRU 上限（50 条 / 20 MB）；
   同一文件重新提案时原地刷新；`openChanges` 统一返回 `{opened}` 并处理失败；scheme 改为 `beecode-xzyk520-base`
+- **写入通道**：修好「新建文件」整条路径（`createFile` + `insert` + 自动建父目录）；换行符跟随目标文件（CRLF 不再被写成 LF）；
+  有未保存修改的文件拒绝删除；删除后不再返回陈旧 `version`；单次写入上限 2 MB
 
 ### Planned
 

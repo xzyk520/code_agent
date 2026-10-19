@@ -215,9 +215,9 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | `search.grep` | `query, regex?, glob?, contextLines?` | `{ hits[{path,line,col,text}] }` | 壳内跑 ripgrep |
 | `symbols.outline` | `path` | `{ symbols[] }` | `executeDocumentSymbolProvider` |
 | `diagnostics.get` | `path?` / `minSeverity?` / `maxItems?`（默认 200，上限 2000）/ `includeIgnored?` | `{ items[], total, truncated }`；每条含 `code`（`TS2322` 等）与 1-based 行列 | `languages.getDiagnostics`，按严重度排序、默认过滤 `node_modules`/`.git`/`.gitignore` |
-| `edit.apply` | `path, expectedVersion, newText, reason` | `{ applied, version }` | **唯一写入通道**：单次 `WorkspaceEdit` |
-| `checkpoint.create` | `label` | `{ id }` | 影子 git 快照 |
-| `checkpoint.restore` | `id, scope: files\|task\|both` | `{ restored[] }` | 三档恢复 |
+| `edit.apply` | `path` / `newText` / `op?`（`write`\|`delete`）/ `expectedVersion?` / `reason?` | `{ applied, version?, conflict?, message? }` | **唯一写入通道**：单次 `WorkspaceEdit`（新建走 `createFile` + `insert`，换行符跟随目标文件） |
+| `checkpoint.create` | `label?` / `paths?` | `{ id, files, skipped?, reason? }` | 影子 git 快照（`paths` 为轻量模式） |
+| `checkpoint.restore` | `id` | `{ restored[] }` | 只恢复文件；任务/会话状态由内核合成 |
 | `diff.open` | `path, baseText` | `{}` | 打开 `vscode.diff` 对照 |
 | `confirm.ask` | `question, detail?, options[]` | `{ choice }` | 写入门闸用它问人 |
 | `secrets.get` | `key` | `{ value }` | 只在会话启动时取一次，不进日志 |
@@ -718,6 +718,17 @@ const ok = await vscode.workspace.applyEdit(edit); // 单次调用 = 单个 undo
 2. **同一文件的多处改动合并成一个 `WorkspaceEdit`**：否则用户要按 N 次 `Ctrl+Z`。跨文件同理，一次 `applyEdit` 搞定（但注意 [§11.5](#115-与-git-及工作区状态的关系) 的原子性说明）。
 3. **写入前必须已存在检查点**（[§10.5](#105-检查点checkpoint回滚的地基)），写入后立刻登记 `PendingEdit`。
 4. **先算后写**：`applyUnifiedPatch` 是纯函数，算不出结果就报错返回模型，磁盘不动。
+
+#### 10.2.1 适配器层的六个细节（都在 `editAdapter.ts` 里）
+
+| 细节 | 不这么做会怎样 |
+| --- | --- |
+| **新建文件走 `createFile` + `insert`**，而不是 `replace` | `replace` 对不存在的文件无效，`openTextDocument` 会直接抛错——"创建新文件"整条路径不可用 |
+| **新建前先 `createDirectory` 父目录** | `createFile` 不会自动建目录，写 `src/deep/x.ts` 时失败 |
+| **换行符跟随目标文件**（`doc.eol`；新文件跟随 `files.eol`） | CRLF 项目被写成 LF，`git diff` 显示整个文件都被改了，`.gitattributes` 规则被绕过 |
+| **删除前检查 `doc.isDirty`** | 用户未保存的编辑会被静默丢掉 |
+| **删除后不返回 `version`** | 返回的是删除前的旧值，调用方会拿一个已经不存在的版本号继续操作 |
+| **单次写入上限 2 MB** | 模型抽风生成几 MB 文本时，整份内容会进 undo 栈，编辑器直接卡死 |
 
 ### 10.3 待审记录（PendingEdit）
 
