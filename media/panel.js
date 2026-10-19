@@ -30,13 +30,14 @@
     send: must("send", HTMLButtonElement),
     stop: must("stop", HTMLButtonElement),
     acceptAll: must("acceptAll", HTMLButtonElement),
+    autoBadge: must("auto-badge", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
   };
 
   /** @type {NodeListOf<HTMLButtonElement>} */
   const modeButtons = /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".mode"));
 
-  /** @typedef {"chat" | "builder" | "debugger"} Mode */
+  /** @typedef {"auto" | "chat" | "builder" | "debugger"} Mode */
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
@@ -258,7 +259,64 @@
         ? "描述要实现的改动…（Ctrl+Enter 发送）"
         : state.mode === "debugger"
           ? "描述报错/异常现象…（Ctrl+Enter 发送）"
-          : "问点什么…（Ctrl+Enter 发送）";
+          : state.mode === "auto"
+            ? "直接说你想做什么，会自动判断模式…（Ctrl+Enter 发送）"
+            : "问点什么…（Ctrl+Enter 发送）";
+
+    // 只有 auto 模式才显示"自动：X"角标
+    if (state.mode !== "auto") el.autoBadge.hidden = true;
+  }
+
+  /** @param {{ mode?: string, auto?: boolean, reason?: string }} p */
+  function renderModeBadge(p) {
+    if (state.mode !== "auto" || !p.auto) {
+      el.autoBadge.hidden = true;
+      return;
+    }
+    const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
+    el.autoBadge.hidden = false;
+    el.autoBadge.textContent = "自动：" + label;
+    el.autoBadge.title = String(p.reason || "");
+  }
+
+  /**
+   * 计划清单：同一轮内反复 update_plan 时复用同一个节点。
+   * @type {HTMLElement | null}
+   */
+  let planNode = null;
+
+  /** @param {Array<{ text?: unknown, status?: unknown }>} steps */
+  function renderPlan(steps) {
+    if (!Array.isArray(steps) || steps.length === 0) return;
+    if (!planNode) {
+      planNode = document.createElement("div");
+      planNode.className = "msg plan";
+      const title = document.createElement("div");
+      title.className = "plan-title";
+      title.textContent = "计划";
+      const list = document.createElement("ol");
+      list.className = "plan-steps";
+      planNode.append(title, list);
+      el.messages.appendChild(planNode);
+    }
+    const list = planNode.querySelector(".plan-steps");
+    if (!list) return;
+    list.textContent = "";
+    for (const step of steps) {
+      const text = typeof step.text === "string" ? step.text : "";
+      if (!text) continue;
+      const status = typeof step.status === "string" ? step.status : "pending";
+      const li = document.createElement("li");
+      li.className = "plan-step " + (status === "done" ? "done" : status === "doing" ? "doing" : "pending");
+      const icon = document.createElement("span");
+      icon.className = "plan-icon";
+      icon.textContent = status === "done" ? "✓" : status === "doing" ? "▶" : "○";
+      const body = document.createElement("span");
+      body.textContent = text;
+      li.append(icon, body);
+      list.appendChild(li);
+    }
+    el.messages.scrollTop = el.messages.scrollHeight;
   }
 
   function renderBusy() {
@@ -387,6 +445,7 @@
         }
         clearStreaming();
         subagents.clear();
+        planNode = null;
         renderMode();
         renderBusy();
         renderAttachments(next.attachments || []);
@@ -411,6 +470,7 @@
           streamingNode.textContent = message.text;
           clearStreaming();
         subagents.clear();
+        planNode = null;
           setMessagesBusy(false);   // 流式结束：现在可以播报了
           announce("助手回复完成，共 " + message.text.length + " 字");
           break;
@@ -441,6 +501,14 @@
         const items = /** @type {Proposal[]} */ (msg.items) || [];
         renderProposals(items);
         if (items.length > 0) announce("待审提案 " + items.length + " 个");
+        break;
+      }
+      case "mode": {
+        renderModeBadge(/** @type {{ mode?: string, auto?: boolean, reason?: string }} */ (msg));
+        break;
+      }
+      case "plan": {
+        renderPlan(/** @type {Array<{ text?: unknown, status?: unknown }>} */ (msg.steps));
         break;
       }
       case "subagent": {

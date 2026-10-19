@@ -34,6 +34,8 @@ class ToolContext:
     log: Callable[[str], None]
     #: 派生子代理：task, max_steps → 结论（None = 当前 agent 不允许派生子代理）
     spawn: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
+    #: 更新计划（渲染到面板）
+    plan: Callable[[list[dict[str, str]]], None] | None = None
 
 
 ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -61,7 +63,7 @@ def _bool(description: str) -> dict[str, Any]:
     return {"type": "boolean", "description": description}
 
 
-#: 子代理只能用的只读工具（没有 propose_edit，也没有 spawn_subagent）
+#: 子代理只能用的只读工具（没有 propose_edit / spawn_subagent / update_plan）
 READ_ONLY_TOOLS = (
     "read_file",
     "list_files",
@@ -150,6 +152,26 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
             ),
         ),
         ToolSpec(
+            "update_plan",
+            "更新任务计划（大任务先列 3-6 步，之后逐项更新状态）。面板会显示成清单。",
+            _obj(
+                {
+                    "steps": {
+                        "type": "array",
+                        "description": "完整步骤列表（每次传全量，用来覆盖状态）",
+                        "items": _obj(
+                            {
+                                "text": _str("步骤描述"),
+                                "status": {"type": "string", "enum": ["pending", "doing", "done"]},
+                            },
+                            ["text"],
+                        ),
+                    }
+                },
+                ["steps"],
+            ),
+        ),
+        ToolSpec(
             "spawn_subagent",
             "派一个只读子代理去探索代码（独立上下文，只回传结论）。适合大范围搜索/阅读，"
             "避免污染主对话。子代理不能改文件、不能派孙代理。",
@@ -186,6 +208,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         "propose_edit": builtin.propose_edit,
         "run_command": builtin.run_command,
         "spawn_subagent": builtin.spawn_subagent,
+        "update_plan": builtin.update_plan,
     }
 
     names = [spec.name for spec in specs] if role == "main" else [n for n in READ_ONLY_TOOLS]

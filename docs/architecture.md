@@ -605,6 +605,42 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 
 > 设计要点：守卫要「先提醒、再停止」。直接硬停会让用户觉得模型「卡住了」；先插入一条系统提示纠正策略，往往能自愈。
 
+### 7.4 auto 模式：意图识别与共享记忆（已实现）
+
+三种模式**共享同一会话记忆**：历史与摘要在壳侧按 `sessionId` 存储，与模式无关；
+模式只决定"这一轮怎么干"（系统提示词侧重、守卫语气），不决定"记得什么"。
+
+```
+用户输入（mode = auto）
+      │
+      ▼
+router.classify(text, 最近 4 条历史)
+      │  → mode ∈ {chat, builder, debugger}
+      │  → scale ∈ {small, large}
+      ▼
+ui.mode {mode, reason, scale}  ← 面板显示「自动：Builder」
+      │
+      ├─ large + 非 chat → 追加 system 指令：先 update_plan 列 3-6 步
+      ▼
+system_prompt(effective_mode) → loop 照常跑
+```
+
+识别规则（`beecode/router.py`，纯启发式）：
+
+| 信号 | 判定 |
+| --- | --- |
+| 报错/异常/崩溃关键词（且无解释意图） | `debugger` |
+| 实现/新增/重构/修改/删除… | `builder` |
+| 解释/为什么/区别/原理… | `chat` |
+| 都没有 | `chat`（保守，不主动进入"改代码"语气） |
+
+规模判定（`large` 才建议计划）：描述 ≥240 字、提到 ≥3 个文件名、出现"整个/重构/迁移/所有/架构"、或 ≥8 行。
+
+为什么不用模型分类：多一次调用 = 延迟与成本翻倍，而分类错误代价很小（工具集相同，
+只是提示词侧重不同）。拿不准时归 `chat` 是安全的。
+
+手动覆盖：面板点 Chat/Builder/Debugger 即进入对应模式，`chat.send.mode` 不再是 `auto`。
+
 ---
 
 ## 8. 工作区感知与上下文工程

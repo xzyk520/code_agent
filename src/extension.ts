@@ -40,6 +40,8 @@ import type {
   RunParams,
   RunResult,
   UiDeltaParams,
+  UiModeParams,
+  UiPlanParams,
   UiSubagentParams,
   UiToolParams,
   UiUsageParams,
@@ -242,6 +244,7 @@ class Shell {
       }),
     );
 
+    this.panel.setMode(this.config.modeDefault);
     this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
@@ -1322,6 +1325,17 @@ class Shell {
         }
         const p = params as UiToolParams;
         this.panel.setHint(`${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`);
+        return;
+      }
+      case "ui.mode": {
+        const p = params as UiModeParams;
+        this.panel.modeEvent(p);
+        const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
+        this.panel.setHint(`自动模式：${label}${p.scale === "large" ? "（大任务，建议先计划）" : ""}`);
+        return;
+      }
+      case "ui.plan": {
+        this.panel.planEvent(params as UiPlanParams);
         return;
       }
       case "ui.subagent": {

@@ -40,6 +40,8 @@ export interface ShellConfig {
   checkpointRetention: number;
   permissions: PermissionsConfig;
   subagent: SubagentConfig;
+  /** 面板初始模式（auto = 自动判断） */
+  modeDefault: "auto" | "chat" | "builder" | "debugger";
 }
 
 /** 子代理配置：空字符串 = 沿用主代理 */
@@ -106,6 +108,7 @@ export function readConfig(): ConfigReadResult {
       requireTrust: reader.bool("permissions.requireTrust", true),
       fullAccess: reader.bool("permissions.fullAccess", false),
     },
+    modeDefault: reader.oneOf("mode.default", "auto", ["auto", "chat", "builder", "debugger"] as const),
     subagent: {
       enabled: reader.bool("subagent.enabled", true),
       baseUrl: reader.str("subagent.baseUrl", ""),

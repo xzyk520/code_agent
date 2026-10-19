@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ProposalDto, UiSubagentParams } from "../protocol";
+import type { Mode, ProposalDto, UiModeParams, UiPlanParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -19,7 +19,7 @@ export interface AttachedContext {
 }
 
 export interface PanelHandlers {
-  onSend(text: string, mode: "chat" | "builder" | "debugger", attachments: AttachedContext[]): void;
+  onSend(text: string, mode: Mode, attachments: AttachedContext[]): void;
   onAccept(ids: string[]): void;
   onReject(ids: string[]): void;
   onAcceptAll(): void;
@@ -29,7 +29,7 @@ export interface PanelHandlers {
 }
 
 export interface PanelState {
-  mode: "chat" | "builder" | "debugger";
+  mode: Mode;
   busy: boolean;
   proposals: ProposalDto[];
   messages: ChatMessageView[];
@@ -105,7 +105,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return [...this.state.messages];
   }
 
-  getMode(): PanelState["mode"] {
+  getMode(): Mode {
     return this.state.mode;
   }
 
@@ -143,6 +143,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** 子代理进度：前端按 id 聚合成可折叠卡片 */
   subagentEvent(params: UiSubagentParams): void {
     this.post({ type: "subagent", ...params });
+  }
+
+  /** auto 模式的选择结果（面板显示"自动：Builder"） */
+  modeEvent(params: UiModeParams): void {
+    this.post({ type: "mode", ...params });
+  }
+
+  /** 计划清单（大任务时由 update_plan 产生） */
+  planEvent(params: UiPlanParams): void {
+    this.post({ type: "plan", ...params });
   }
 
   setProposals(items: ProposalDto[]): void {
@@ -258,9 +268,11 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
 <body>
   <header class="bar">
     <div class="modes" role="tablist">
+      <button data-mode="auto" class="mode">Auto</button>
       <button data-mode="chat" class="mode">Chat</button>
       <button data-mode="builder" class="mode">Builder</button>
       <button data-mode="debugger" class="mode">Debugger</button>
+      <span id="auto-badge" class="mode-badge" hidden></span>
     </div>
     <button id="stop" class="stop" title="停止">■</button>
   </header>

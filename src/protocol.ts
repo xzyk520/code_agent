@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -385,7 +385,7 @@ export type ShellMethod = keyof ShellMethodParams;
 
 // ────────────────────── 壳 → 内核（内核实现） ──────────────────────
 
-export type Mode = "chat" | "builder" | "debugger";
+export type Mode = "chat" | "builder" | "debugger" | "auto";
 
 export interface ModelConfigDto {
   /** 视觉能力：auto=按模型名猜；on/off=用户显式声明 */
@@ -490,6 +490,26 @@ export interface UiSubagentParams {
   /** status=end 时有效：结论（已截断） */
   findings?: string;
   error?: string;
+}
+
+/** auto 模式下内核选择了哪个模式（面板显示"自动：Builder"） */
+export interface UiModeParams {
+  sessionId: string;
+  mode: "chat" | "builder" | "debugger";
+  auto: boolean;
+  reason?: string;
+  scale?: "small" | "large";
+}
+
+/** 计划（大任务时由 update_plan 工具产出） */
+export interface PlanStep {
+  text: string;
+  status: "pending" | "doing" | "done";
+}
+
+export interface UiPlanParams {
+  sessionId: string;
+  steps: PlanStep[];
 }
 
 export interface UiUsageParams { sessionId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number }

@@ -30,6 +30,7 @@ from typing import Any
 from ..llm import ChatDelta, ModelError, OpenAIClient, ToolCall, estimate_tokens
 from ..llm.vision import supports_vision
 from ..prompts import system_prompt
+from ..router import Intent, classify
 from ..session import Session
 from ..shell import ShellClient
 from ..tools import Tool, ToolContext, build_tools, tool_schemas
@@ -125,8 +126,28 @@ class AgentLoop:
         )
         self._log(f"视觉模型：{'是' if vision else '否'}（{session.model_config.get('model', '')}）")
 
+        # 统一会话记忆：模式只影响"这轮怎么干"，不影响历史。
+        # auto 模式下先做意图/规模识别，再选提示词与守卫策略。
+        requested_mode = str(session.mode)
+        intent: Intent | None = None
+        effective_mode = requested_mode
+        if requested_mode == "auto":
+            intent = classify(text, history)
+            effective_mode = intent.mode
+            self._notify(
+                "ui.mode",
+                {
+                    "sessionId": session.id,
+                    "mode": effective_mode,
+                    "auto": True,
+                    "reason": intent.reason,
+                    "scale": intent.scale,
+                },
+            )
+            self._log(f"auto 模式：{effective_mode}（{intent.reason}，规模 {intent.scale}）")
+
         messages = session.build_request_messages(
-            system_override or system_prompt(session.mode),
+            system_override or system_prompt(effective_mode),
             history=history,
             summary=summary,
             user_text=text,
@@ -139,13 +160,26 @@ class AgentLoop:
             propose=self._propose or _no_propose,
             log=self._log,
             spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._spawn_enabled else None,
+            plan=(lambda steps: self._emit_plan(session, steps)),
         )
 
         stats = TurnStats()
         repeat: Counter[str] = Counter()
         recent_results: deque[str] = deque(maxlen=3)
         nudges = 0
-        wants_edit = session.mode in ("builder", "debugger") and bool(_EDIT_INTENT_PATTERN.search(text))
+        wants_edit = effective_mode in ("builder", "debugger") and bool(_EDIT_INTENT_PATTERN.search(text))
+
+        # 大任务：在用户消息后追加"先制定计划"的指令（模型仍可自行判断要不要用）
+        if intent is not None and intent.should_plan and effective_mode != "chat":
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "这是一项较大的任务。开始动手前先调用 update_plan 列出 3-6 个步骤，"
+                        "之后每完成一步更新状态；步骤要具体到文件或动作。"
+                    ),
+                }
+            )
         final_text = ""
 
         self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "start"})
@@ -154,7 +188,7 @@ class AgentLoop:
                 stats.steps += 1
                 answer, calls, usage = await self._stream_once(client, messages, session, stats)
                 if not calls:
-                    nudged = self._maybe_nudge(answer, session, nudges)
+                    nudged = self._maybe_nudge(answer, session, effective_mode, nudges)
                     if nudged is not None:
                         nudges += 1
                         messages.append(nudged)
@@ -313,6 +347,7 @@ class AgentLoop:
         self,
         answer: str,
         session: Session,
+        effective_mode: str,
         nudges: int,
     ) -> dict[str, Any] | None:
         """决定是否"催一下"。返回要追加的消息，或 None 表示可以结束。"""
@@ -326,7 +361,7 @@ class AgentLoop:
             })
             return {"role": "user", "content": "你刚才没有输出任何内容。请继续完成任务；如果缺少信息，请明确问我。"}
 
-        if session.mode != "chat" and _PROMISE_PATTERN.search(answer) and not answer.rstrip().endswith(("？", "?")):
+        if effective_mode != "chat" and _PROMISE_PATTERN.search(answer) and not answer.rstrip().endswith(("？", "?")):
             self._emit("ui.tool", {
                 "sessionId": session.id, "name": "guard", "status": "error",
                 "summary": "模型只描述计划、未调用工具",
@@ -355,6 +390,9 @@ class AgentLoop:
         })
         answer, _calls, _usage = await self._stream_once(client, messages, session, stats)
         return answer
+
+    def _emit_plan(self, session: Session, steps: list[dict[str, str]]) -> None:
+        self._notify("ui.plan", {"sessionId": session.id, "steps": steps})
 
     # ───────────────────────── 子代理 ─────────────────────────
 

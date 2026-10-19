@@ -7,6 +7,14 @@
 
 ### Added
 
+- **auto 模式与共享记忆（协议 v18）**：
+  - 面板新增 `Auto` 模式（默认）：内核按提问意图自动选择 chat / builder / debugger，并推送 `ui.mode`
+  - 意图识别为纯启发式（`beecode/router.py`），不额外调用模型；拿不准归 `chat`
+  - 任务规模判定：大任务（长描述/多文件/重构迁移）会提示模型先调用 `update_plan`
+  - 新增 `update_plan` 工具 + `ui.plan` 通知；面板渲染可更新的计划清单
+  - 三种模式共享同一会话历史（壳按 sessionId 存储），切换模式不丢上下文
+  - 设置 `beeCode.mode.default`（auto/chat/builder/debugger）
+
 - **会话仓库**：完整对话按 JSONL 全量落盘（`<globalStorage>/sessions/<id>.jsonl` + `index.json`），
   支持「新建会话」「历史会话…」；重载后自动续上同一个会话，并按「上一轮停在哪」分流：
   模型生成 → 作废并提示；工具调用 → 可「继续上次的操作」；待审提案 → 可「重新生成提案」

@@ -153,6 +153,26 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
     )
 
 
+async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """把计划推给面板（模型每次传全量步骤，覆盖上一次的状态）。"""
+    if ctx.plan is None:
+        raise RuntimeError("当前 agent 不支持计划")
+    raw = params.get("steps")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("steps 不能为空：请传 3-6 个具体步骤")
+    steps: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            steps.append({"text": item.strip(), "status": "pending"})
+        elif isinstance(item, dict) and str(item.get("text") or "").strip():
+            status = item.get("status") if item.get("status") in ("pending", "doing", "done") else "pending"
+            steps.append({"text": str(item["text"]).strip(), "status": str(status)})
+    if not steps:
+        raise ValueError("steps 里没有有效步骤")
+    ctx.plan(steps)
+    return {"ok": True, "steps": len(steps)}
+
+
 async def spawn_subagent(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     """派一个只读子代理。结果只回传结论，不回传它的上下文。"""
     if ctx.spawn is None:

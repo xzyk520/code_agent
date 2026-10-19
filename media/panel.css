@@ -309,3 +309,60 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.1));
   border-radius: 4px;
 }
+/* ───────────── Auto 模式角标 ───────────── */
+.mode-badge {
+  align-self: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 0.75em;
+  color: var(--vscode-textLink-foreground);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+/* ───────────── 计划清单 ───────────── */
+.plan {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06));
+}
+
+.plan-title {
+  font-size: 0.82em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+
+.plan-steps {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 0.9em;
+}
+
+.plan-step {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  color: var(--vscode-foreground);
+}
+
+.plan-step.pending {
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-step.doing .plan-icon {
+  color: var(--vscode-textLink-foreground);
+}
+
+.plan-step.done {
+  color: var(--vscode-descriptionForeground);
+  text-decoration: line-through;
+}
+
+.plan-icon {
+  flex: none;
+  width: 1em;
+}
