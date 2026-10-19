@@ -18,6 +18,7 @@ const SCHEME = "beecode-base";
 export class DiffAdapter implements vscode.Disposable {
   private readonly store = new Map<string, string>();
   private readonly registration: vscode.Disposable;
+  private disposed = false;
 
   constructor(private readonly logger: Logger) {
     this.registration = vscode.workspace.registerTextDocumentContentProvider(SCHEME, {
@@ -61,7 +62,10 @@ export class DiffAdapter implements vscode.Disposable {
     await vscode.commands.executeCommand("vscode.changes", "Bee Code 改动", resources);
   }
 
+  /** 幂等：重复调用不会二次注销 provider */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.registration.dispose();
     this.store.clear();
   }

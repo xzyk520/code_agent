@@ -60,7 +60,6 @@ class Shell {
   private readonly checkpoint: CheckpointAdapter;
   private readonly panel: ChatViewProvider;
   private readonly status: vscode.StatusBarItem;
-  private readonly disposables: vscode.Disposable[] = [];
 
   private core: CoreApi | undefined;
   private starting: Promise<CoreApi> | undefined;
@@ -68,6 +67,8 @@ class Shell {
   private readonly pending = new Map<string, PendingItemDto>();
   private busy = false;
   private usage = "";
+  /** 停用标志：保证 dispose 幂等，且停用后不再拉起内核/发请求 */
+  private disposed = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.log = new Logger();
@@ -102,7 +103,9 @@ class Shell {
   async start(): Promise<void> {
     this.log.info(`激活：${describeConfig(this.config)}`);
 
-    this.disposables.push(
+    // 所有"可释放资源"只有一个所有者：context.subscriptions。
+    // VS Code 会在 deactivate() 返回后统一 dispose，避免我们与它双重释放。
+    this.context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, this.panel, {
         webviewOptions: { retainContextWhenHidden: false },
       }),
@@ -120,7 +123,7 @@ class Shell {
       exportDiagnostics: () => this.exportDiagnostics(),
     });
 
-    this.disposables.push(
+    this.context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (!event.affectsConfiguration("beeCode")) return;
         const read = readConfig();
@@ -132,26 +135,31 @@ class Shell {
       }),
     );
 
-    this.context.subscriptions.push(...this.disposables, this.status, this.log, this.diff, this.checkpoint);
+    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
   }
 
+  /**
+   * 停用时的**有序**清理。
+   *
+   * 只做 subscriptions 覆盖不到的那件事：**按顺序停内核**（它是子进程 + 可能正在跑工具），
+   * 其余资源（面板、命令、监听、状态栏、日志、适配器）都登记在 `context.subscriptions`，
+   * 由 VS Code 在 `deactivate()` 返回后统一释放 —— 单一所有者，不会双重 dispose。
+   *
+   * 幂等：`disposed` 标志保证重复调用只生效一次。
+   */
   async dispose(): Promise<void> {
-    for (const disposable of this.disposables.splice(0)) {
-      try {
-        disposable.dispose();
-      } catch {
-        /* 忽略释放期异常 */
-      }
+    if (this.disposed) return;
+    this.disposed = true;
+
+    const core = this.core;
+    this.core = undefined;
+    if (core) {
+      await core.shutdown().catch(() => undefined);
+      core.dispose();
     }
-    if (this.core) {
-      await this.core.shutdown().catch(() => undefined);
-      this.core.dispose();
-      this.core = undefined;
-    }
-    this.status.dispose();
-    this.log.dispose();
+    this.log.info("已停用");
   }
 
   // ───────────────────────── 内核生命周期 ─────────────────────────
@@ -159,6 +167,8 @@ class Shell {
   private async ensureCore(): Promise<CoreApi> {
     if (this.core?.alive) return this.core;
     if (this.starting) return this.starting;
+    // 停用后（含 deactivate 之后 VS Code 仍在回收 subscriptions 的窗口）绝不再拉起内核
+    if (this.disposed) throw new Error("Bee Code 已停用");
 
     this.starting = (async () => {
       let core: CoreApi;
@@ -234,6 +244,7 @@ class Shell {
   }
 
   private async restartCore(): Promise<void> {
+    if (this.disposed) return;   // 停用中不再拉起新进程
     if (this.core) {
       await this.core.shutdown().catch(() => undefined);
       this.core.dispose();
@@ -258,6 +269,7 @@ class Shell {
   // ───────────────────────── 用户动作 ─────────────────────────
 
   private async send(text: string, mode: Mode, attachments: AttachedContext[]): Promise<void> {
+    if (this.disposed) return;
     if (this.busy) {
       this.panel.setHint("上一轮还没结束（可点 ■ 停止）");
       return;

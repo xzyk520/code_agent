@@ -64,6 +64,7 @@ export class Logger implements vscode.Disposable {
   private readonly recentStderr: string[] = [];
   /** stderr 是流式 chunk（可能是半行），攒到换行再作为一条日志写出 */
   private stderrPending = "";
+  private disposed = false;
 
   constructor(name = "Bee Code") {
     // `{ log: true }` → LogOutputChannel：自动落盘 + 级别可调 + 统一格式
@@ -113,7 +114,10 @@ export class Logger implements vscode.Disposable {
     return [...this.recentStderr];
   }
 
+  /** 幂等：重复 dispose 不会二次关 channel，也不会把残余行写两遍 */
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     // 收尾：把没有换行结尾的最后半行也落下去
     if (this.stderrPending.length > 0) {
       this.emitStderrLine(this.stderrPending);
