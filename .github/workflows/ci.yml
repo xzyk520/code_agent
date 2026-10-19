@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install (壳)
+        run: npm ci
+
+      - name: Typecheck（扩展 + 面板两个 tsconfig）
+        run: npm run typecheck
+
+      - name: Build（esbuild → dist/extension.js）
+        run: npm run build
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install (内核)
+        run: pip install -e ".[dev]"
+
+      - name: Test（契约对账）
+        run: pytest -q
+
+      - name: Package（vsix）
+        run: npm run package
+
+      - name: Upload vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: bee-code-vsix
+          path: "*.vsix"
+          if-no-files-found: error

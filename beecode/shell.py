@@ -60,6 +60,18 @@ class Diagnostic:
     source: str | None = None
 
 
+def turn_label(turn: int, note: str = "") -> str:
+    """统一的检查点标签格式：`turn-3` / `turn-3: 应用 parseConfig 改动`。
+
+    为什么需要：影子仓库超过 retention 会压缩历史（重写父链），压缩保留 commit message，
+    所以只要标签本身可读，压缩后 `list()` 里依然是 `turn-3` 而不是一串哈希。
+
+    用法：
+        await shell.checkpoint(turn_label(turn=3, note="应用 parseConfig 改动"))
+    """
+    return f"turn-{turn}: {note}" if note else f"turn-{turn}"
+
+
 class ShellClient:
     """所有 `shell.*` RPC 的薄封装。方法名与 README §4.5.1 一一对应。
 

@@ -8,6 +8,9 @@ import type { CheckpointCreateParams, CheckpointCreateResult, CheckpointRestoreP
 
 const exec = promisify(execFile);
 
+/** 压缩滞后量：攒到 retention + 这个数才压缩，避免每次 create 都重写历史 */
+const COMPACT_SLACK = 10;
+
 export interface CheckpointRecord {
   id: string;
   label: string;
@@ -142,14 +145,23 @@ export class CheckpointAdapter implements vscode.Disposable {
    * 单纯 `gc` 删不掉旧 commit —— 它们在 HEAD 的父链上，永远是 reachable。
    * 所以要**重写父链**：把最近 N 个 tree 用 `commit-tree` 重新串起来，
    * 让更早的祖先变成 unreachable，再 `gc --prune=now` 真正回收对象。
+   *
+   * ⚠️ 滞后阈值（hysteresis）：如果一到 retention 就压，之后**每次 create 都会**
+   * 重写 N 个 commit 再 gc —— 编辑密集的会话每轮卡几秒。所以等攒到
+   * `retention + COMPACT_SLACK` 再一次性压回 `retention`，把摊销成本降到 1/10。
    */
   private async compactIfNeeded(): Promise<void> {
     if (this.retention <= 0) return;
-    const lines = (await this.git(["log", "--format=%H%x09%s", "-n", String(this.retention + 1)]))
+    const threshold = this.retention + COMPACT_SLACK;
+
+    const count = Number((await this.git(["rev-list", "--count", "HEAD"])).trim() || "0");
+    if (!Number.isFinite(count) || count <= threshold) return;
+
+    const lines = (await this.git(["log", "--format=%H%x09%s", "-n", String(this.retention)]))
       .split("\n")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    if (lines.length <= this.retention) return;
+    if (lines.length < 2) return;
 
     // 保留原来每个快照的 message，这样压缩后 list() 里的 label 不会变成 "compacted xxxx"
     const keep = lines.slice(0, this.retention).reverse().map((line) => {
