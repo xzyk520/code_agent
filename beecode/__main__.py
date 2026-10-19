@@ -47,6 +47,8 @@ _state: dict[str, Any] = {
     "api_key": None,
     "max_steps": 12,
     "tool_timeout_ms": 60_000,
+    "subagent_config": {},
+    "subagent_api_key": None,
 }
 
 #: 会话表：sessionId → Session（内存态，不持久化——历史由壳负责）
@@ -83,6 +85,8 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["api_key"] = params.get("apiKey")
     _state["max_steps"] = int(params.get("maxSteps") or 12)
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
+    _state["subagent_config"] = dict(params.get("subagentConfig") or {})
+    _state["subagent_api_key"] = params.get("subagentApiKey")
 
     _log(f"initialize: roots={len(_state['workspace_roots'])} model={_state['model_config'].get('model', '')}")
     return {"protocolVersion": PROTOCOL_VERSION, "coreVersion": __version__}
@@ -102,6 +106,10 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
     _state["model_config"] = dict(params.get("modelConfig", {}))
     if params.get("apiKey"):
         _state["api_key"] = params.get("apiKey")
+    if params.get("subagentConfig") is not None:
+        _state["subagent_config"] = dict(params.get("subagentConfig") or {})
+    if params.get("subagentApiKey"):
+        _state["subagent_api_key"] = params.get("subagentApiKey")
     # 已存在的会话同步新配置（否则旧会话还在用旧 base_url）
     for session in _sessions.values():
         session.model_config = dict(_state["model_config"])
@@ -147,6 +155,10 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
         ),
         propose=_propose,
         log=_log,
+        spawn_enabled=bool(_state["subagent_config"].get("enabled", True)),
+        spawn_config=dict(_state["subagent_config"]),
+        spawn_api_key=_state["subagent_api_key"],
+        spawn_max_steps=int(_state["subagent_config"].get("maxSteps") or 8),
     )
     task = asyncio.create_task(
         loop.run_turn(

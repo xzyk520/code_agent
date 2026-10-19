@@ -19,6 +19,8 @@ import type { ModelConfigDto, Mode } from "./protocol";
  * 优先级低于 SecretStorage（显式配置 > 环境默认）。
  */
 export const API_KEY_ENV = "BEE_CODE_API_KEY";
+/** 子代理密钥的环境变量回退名 */
+export const SUBAGENT_API_KEY_ENV = "BEE_CODE_SUBAGENT_API_KEY";
 
 export interface ShellConfig {
   coreMode: "python" | "mock";
@@ -37,6 +39,17 @@ export interface ShellConfig {
   checkpointEnabled: boolean;
   checkpointRetention: number;
   permissions: PermissionsConfig;
+  subagent: SubagentConfig;
+}
+
+/** 子代理配置：空字符串 = 沿用主代理 */
+export interface SubagentConfig {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  apiKeyId: string;
+  maxSteps: number;
+  supportsVision: "auto" | "on" | "off";
 }
 
 /** 权限相关配置（规则原文由 permissions.ts 解析） */
@@ -92,6 +105,14 @@ export function readConfig(): ConfigReadResult {
       dockerImage: reader.str("permissions.dockerImage", "node:22-alpine"),
       requireTrust: reader.bool("permissions.requireTrust", true),
       fullAccess: reader.bool("permissions.fullAccess", false),
+    },
+    subagent: {
+      enabled: reader.bool("subagent.enabled", true),
+      baseUrl: reader.str("subagent.baseUrl", ""),
+      model: reader.str("subagent.model", ""),
+      apiKeyId: reader.str("subagent.apiKeyId", "beeCode.apiKey.subagent"),
+      maxSteps: reader.num("subagent.maxSteps", 8, 1, 12),
+      supportsVision: reader.oneOf("subagent.supportsVision", "auto", ["auto", "on", "off"] as const),
     },
   };
 

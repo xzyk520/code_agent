@@ -28,6 +28,12 @@ export interface CommandDeps {
   crashMock(): void;
   /** 测试模型端点连通性（GET /models） */
   testModel(): Promise<void>;
+  /** 配置子代理（端点/模型/密钥，留空 = 沿用主代理） */
+  configureSubagent(): Promise<void>;
+  /** 测试子代理端点连通性 */
+  testSubagent(): Promise<void>;
+  /** 清除子代理密钥 */
+  clearSubagentKey(): Promise<void>;
   /** 切换当前工作区信任状态（信任 ⇄ 只读） */
   toggleTrust(): Promise<void>;
   /** 重新检测 docker 沙箱（装好 Docker 后不必重启窗口） */
@@ -94,6 +100,9 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
   register("beeCode.dev.crashMock", () => deps.crashMock());
   register("beeCode.model.test", () => deps.testModel());
+  register("beeCode.subagent.configure", () => deps.configureSubagent());
+  register("beeCode.subagent.test", () => deps.testSubagent());
+  register("beeCode.subagent.clearKey", () => deps.clearSubagentKey());
   register("beeCode.workspace.trust", () => deps.toggleTrust());
   register("beeCode.docker.redetect", () => deps.redetectSandbox());
   register("beeCode.model.clearKey", () => deps.clearModelKey());

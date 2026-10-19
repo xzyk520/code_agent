@@ -11,7 +11,7 @@ import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands, undeclaredCommands } from "./commands/register";
-import { API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
+import { API_KEY_ENV, SUBAGENT_API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi, InboundRequestContext } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
@@ -176,7 +176,10 @@ class Shell {
       regenerateProposal: () => this.regenerateProposal(),
       cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
-      testModel: () => this.testModel(),
+      testModel: () => this.testModel("main"),
+      configureSubagent: () => this.configureSubagent(),
+      testSubagent: () => this.testModel("subagent"),
+      clearSubagentKey: () => this.clearSubagentKey(),
       redetectSandbox: () => this.redetectSandbox(),
       toggleTrust: async () => {
         await toggleWorkspaceTrust(this.context, this.log);
@@ -206,15 +209,30 @@ class Shell {
         this.log.info(`配置已更新：${describeConfig(this.config)}`);
 
         // 分流：只改模型相关 → 热更新（不重启进程）；其余（core/pythonPath/checkpoint…）→ 重启
-        if (event.affectsConfiguration("beeCode.model") && this.core) {
+        if ((event.affectsConfiguration("beeCode.model") || event.affectsConfiguration("beeCode.subagent")) && this.core) {
           void this.resolveApiKey().then((resolved) => {
             if (!this.core) return undefined;
-            return this.core
-              .modelReload({
-                modelConfig: this.config.model,
-                ...(resolved.key ? { apiKey: resolved.key } : {}),
-              })
-              .catch((err: unknown) => this.log.warn(`model.reload 失败: ${err instanceof Error ? err.message : String(err)}`));
+            const subagent = this.effectiveSubagent();
+            return this.resolveSubagentKey().then((subagentKey) =>
+              this.core
+                ? this.core
+                    .modelReload({
+                      modelConfig: this.config.model,
+                      ...(resolved.key ? { apiKey: resolved.key } : {}),
+                      subagentConfig: {
+                        enabled: subagent.enabled,
+                        baseUrl: subagent.baseUrl,
+                        model: subagent.model,
+                        maxSteps: subagent.maxSteps,
+                        supportsVision: subagent.supportsVision,
+                      },
+                      ...(subagentKey.key ? { subagentApiKey: subagentKey.key } : {}),
+                    })
+                    .catch((err: unknown) =>
+                      this.log.warn(`model.reload 失败: ${err instanceof Error ? err.message : String(err)}`),
+                    )
+                : undefined,
+            );
           });
           this.updateStatus();
           return;
@@ -427,6 +445,8 @@ class Shell {
       });
 
       const resolvedKey = await this.resolveApiKey();
+      const subagent = this.effectiveSubagent();
+      const subagentKey = await this.resolveSubagentKey();
       const params: InitializeParams = {
         protocolVersion: PROTOCOL_VERSION,
         workspaceRoots: workspaceRoots(),
@@ -435,6 +455,14 @@ class Shell {
         toolTimeoutMs: this.config.toolTimeoutMs,
         checkpointEnabled: this.config.checkpointEnabled,
         ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),
+        subagentConfig: {
+          enabled: subagent.enabled,
+          baseUrl: subagent.baseUrl,
+          model: subagent.model,
+          maxSteps: subagent.maxSteps,
+          supportsVision: subagent.supportsVision,
+        },
+        ...(subagentKey.key ? { subagentApiKey: subagentKey.key } : {}),
       };
 
       await core.initialize(params);
@@ -945,6 +973,32 @@ class Shell {
     return { source: "none" };
   }
 
+  /**
+   * 解析子代理密钥：SecretStorage（`beeCode.subagent.apiKeyId`）→ 环境变量 → **主代理密钥**。
+   *
+   * 绝大多数情况用户只想"子代理用便宜模型，但仍用同一个 key"，所以最后一级回退到主代理是合理的。
+   */
+  private async resolveSubagentKey(): Promise<{ key?: string; source: "secret" | "env" | "main" | "none" }> {
+    const fromSecret = await this.context.secrets.get(this.config.subagent.apiKeyId);
+    if (fromSecret) return { key: fromSecret, source: "secret" };
+    const fromEnv = process.env[SUBAGENT_API_KEY_ENV]?.trim();
+    if (fromEnv) return { key: fromEnv, source: "env" };
+    const main = await this.resolveApiKey();
+    if (main.key) return { key: main.key, source: "main" };
+    return { source: "none" };
+  }
+
+  /** 子代理实际生效的端点/模型（空 = 沿用主代理） */
+  private effectiveSubagent(): { baseUrl: string; model: string; maxSteps: number; supportsVision: "auto" | "on" | "off"; enabled: boolean } {
+    return {
+      enabled: this.config.subagent.enabled,
+      baseUrl: this.config.subagent.baseUrl.trim() || this.config.model.baseUrl,
+      model: this.config.subagent.model.trim() || this.config.model.model,
+      maxSteps: this.config.subagent.maxSteps,
+      supportsVision: this.config.subagent.supportsVision,
+    };
+  }
+
   /** 把 base_url 归一化成 `.../models`（用于连通性自检） */
   private modelsUrl(baseUrl: string): string | undefined {
     const base = baseUrl.trim().replace(/\/+$/, "");
@@ -954,19 +1008,24 @@ class Shell {
     return `${base}/models`;
   }
 
-  /** 测试连接：GET {base}/models，把 HTTP 状态翻译成人话 */
-  private async testModel(): Promise<void> {
-    const base = this.config.model.baseUrl;
-    const url = this.modelsUrl(base);
+  /** 测试连接：GET {base}/models，把 HTTP 状态翻译成人话（main / subagent 共用） */
+  private async testModel(which: "main" | "subagent" = "main"): Promise<void> {
+    const label = which === "subagent" ? "子代理" : "主代理";
+    const subagent = this.effectiveSubagent();
+    const baseUrl = which === "subagent" ? subagent.baseUrl : this.config.model.baseUrl;
+    const modelName = which === "subagent" ? subagent.model : this.config.model.model;
+    const url = this.modelsUrl(baseUrl);
     if (!url) {
-      void vscode.window.showWarningMessage("Bee Code: 请先配置 base_url。");
+      void vscode.window.showWarningMessage(`Bee Code: ${label}还没有配置 base_url。`);
       return;
     }
-    const { key, source } = await this.resolveApiKey();
-    if (!key) {
-      void vscode.window.showWarningMessage("Bee Code: 还没有 API Key（命令「配置模型」或环境变量 BEE_CODE_API_KEY）。");
+    const keyInfo = which === "subagent" ? await this.resolveSubagentKey() : await this.resolveApiKey();
+    if (!keyInfo.key) {
+      void vscode.window.showWarningMessage(`Bee Code: ${label}还没有 API Key。`);
       return;
     }
+    const key = keyInfo.key;
+    const source = keyInfo.source;
 
     const started = Date.now();
     try {
@@ -977,22 +1036,118 @@ class Shell {
       const elapsed = Date.now() - started;
       if (!response.ok) {
         const body = (await response.text()).slice(0, 200);
-        this.log.warn(`模型自检失败：HTTP ${response.status} ${url}（key 来源 ${source}）`);
-        void vscode.window.showWarningMessage(`Bee Code: 连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`);
+        this.log.warn(`${label}自检失败：HTTP ${response.status} ${url}（key 来源 ${source}）`);
+        void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`);
         return;
       }
       const data = (await response.json()) as { data?: Array<{ id?: string }> };
       const count = Array.isArray(data.data) ? data.data.length : 0;
-      const hasModel = Array.isArray(data.data) && data.data.some((m) => m.id === this.config.model.model);
-      this.log.info(`模型自检通过：${url}（${count} 个模型，key 来源 ${source}）`);
+      const hasModel = Array.isArray(data.data) && data.data.some((m) => m.id === modelName);
+      const sourceText =
+        source === "env" ? "环境变量" : source === "main" ? "沿用主代理" : "凭据库";
+      this.log.info(`${label}自检通过：${url}（${count} 个模型，key 来源 ${source}）`);
       void vscode.window.showInformationMessage(
-        `Bee Code: 连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${this.config.model.model}` : ""}；key 来源：${source === "env" ? "环境变量" : "凭据库"}）`,
+        `Bee Code: ${label}连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${modelName}` : ""}；key 来源：${sourceText}）`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log.warn(`模型自检异常：${message}`);
-      void vscode.window.showWarningMessage(`Bee Code: 连接失败：${message}`);
+      this.log.warn(`${label}自检异常：${message}`);
+      void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败：${message}`);
     }
+  }
+
+  /** 配置子代理：终端可留空（= 沿用主代理），密钥可留空（= 沿用主代理密钥） */
+  private async configureSubagent(): Promise<void> {
+    const main = this.config.model;
+    const current = this.config.subagent;
+
+    const baseUrl = await vscode.window.showInputBox({
+      title: "Bee Code · 子代理 1/3 端点",
+      prompt: main.baseUrl
+        ? `留空 = 沿用主代理（${main.baseUrl}）`
+        : "OpenAI 兼容 base_url；留空 = 沿用主代理",
+      value: current.baseUrl,
+      ignoreFocusOut: true,
+    });
+    if (baseUrl === undefined) return;
+
+    const model = await vscode.window.showInputBox({
+      title: "Bee Code · 子代理 2/3 模型",
+      prompt: main.model ? `留空 = 沿用主代理（${main.model}）；建议用便宜/快的模型` : "留空 = 沿用主代理",
+      value: current.model,
+      ignoreFocusOut: true,
+    });
+    if (model === undefined) return;
+
+    const existing = await this.resolveSubagentKey();
+    const keyHint =
+      existing.source === "secret"
+        ? "已存在于凭据库：直接回车保持不变"
+        : existing.source === "env"
+          ? `当前使用环境变量 ${SUBAGENT_API_KEY_ENV}：直接回车保持不变`
+          : existing.source === "main"
+            ? "留空 = 沿用主代理密钥"
+            : "留空则回退到主代理密钥";
+
+    const apiKey = await vscode.window.showInputBox({
+      title: "Bee Code · 子代理 3/3 API Key",
+      prompt: keyHint,
+      password: true,
+      ignoreFocusOut: true,
+      placeHolder: existing.source === "none" ? "留空 = 沿用主代理密钥" : "（回车保持不变）",
+      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? "看起来不像有效密钥" : undefined),
+    });
+    if (apiKey === undefined) return;
+
+    const cfg = vscode.workspace.getConfiguration("beeCode");
+    await cfg.update("subagent.baseUrl", baseUrl.trim(), vscode.ConfigurationTarget.Global);
+    await cfg.update("subagent.model", model.trim(), vscode.ConfigurationTarget.Global);
+    if (apiKey.trim().length > 0) {
+      await this.context.secrets.store(this.config.subagent.apiKeyId, apiKey.trim());
+    }
+
+    const read = readConfig();
+    this.config = read.config;
+    this.log.info(
+      `子代理已配置：${this.effectiveSubagent().model} @ ${this.effectiveSubagent().baseUrl}`,
+    );
+    void vscode.window.showInformationMessage("Bee Code: 子代理配置完成。");
+
+    // 只改了密钥时配置监听不会触发，这里主动热更新一次
+    const sub = this.effectiveSubagent();
+    const [mainKey, subKey] = await Promise.all([this.resolveApiKey(), this.resolveSubagentKey()]);
+    await this.core
+      ?.modelReload({
+        modelConfig: this.config.model,
+        ...(mainKey.key ? { apiKey: mainKey.key } : {}),
+        subagentConfig: {
+          enabled: sub.enabled,
+          baseUrl: sub.baseUrl,
+          model: sub.model,
+          maxSteps: sub.maxSteps,
+          supportsVision: sub.supportsVision,
+        },
+        ...(subKey.key ? { subagentApiKey: subKey.key } : {}),
+      })
+      .catch(() => undefined);
+  }
+
+  /** 清除子代理密钥（环境变量与"沿用主代理"不归我们管） */
+  private async clearSubagentKey(): Promise<void> {
+    const existing = await this.context.secrets.get(this.config.subagent.apiKeyId);
+    if (!existing) {
+      void vscode.window.showInformationMessage("Bee Code: 凭据库里没有子代理密钥（可能在环境变量里，或沿用了主代理）。");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      "确定清除子代理的 API Key？清除后将回退到环境变量或主代理密钥。",
+      { modal: true },
+      "清除",
+    );
+    if (confirm !== "清除") return;
+    await this.context.secrets.delete(this.config.subagent.apiKeyId);
+    this.log.info("已清除子代理 API Key");
+    void vscode.window.showInformationMessage("Bee Code: 已清除子代理 API Key。");
   }
 
   /** 清除凭据库里的密钥（环境变量不归我们管） */

@@ -74,7 +74,7 @@ READ_ONLY_TOOLS = (
 )
 
 
-def build_tools(role: str = "main") -> dict[str, Tool]:
+def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, Tool]:
     """按角色注册工具。
 
     - main：全部 10 个（含 `spawn_subagent`）
@@ -189,6 +189,8 @@ def build_tools(role: str = "main") -> dict[str, Tool]:
     }
 
     names = [spec.name for spec in specs] if role == "main" else [n for n in READ_ONLY_TOOLS]
+    if not allow_spawn:
+        names = [n for n in names if n != "spawn_subagent"]
     return {name: Tool(spec=next(s for s in specs if s.name == name), fn=handlers[name]) for name in names}
 
 

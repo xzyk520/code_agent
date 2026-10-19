@@ -61,8 +61,13 @@
     工作区外一律拒绝；无 docker 时禁止写与执行非只读命令
   - 父轮次 abort 会级联取消子代理；默认 8 步、上限 12 步
 
-### Security
+- **子代理独立模型配置**：
+  - 新设置 `beeCode.subagent.{enabled,baseUrl,model,apiKeyId,maxSteps,supportsVision}`
+  - 端点/模型留空 = 沿用主代理；密钥顺序：SecretStorage → `BEE_CODE_SUBAGENT_API_KEY` → 主代理密钥
+  - 新命令：配置子代理模型 / 测试子代理连接 / 清除子代理 API Key
+  - 配置变更热更新到内核（`model.reload` 携带 `subagentConfig` + `subagentApiKey`）
 
+### Security
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
   此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
 
@@ -202,8 +207,13 @@
     工作区外一律拒绝；无 docker 时禁止写与执行非只读命令
   - 父轮次 abort 会级联取消子代理；默认 8 步、上限 12 步
 
-### Security
+- **子代理独立模型配置**：
+  - 新设置 `beeCode.subagent.{enabled,baseUrl,model,apiKeyId,maxSteps,supportsVision}`
+  - 端点/模型留空 = 沿用主代理；密钥顺序：SecretStorage → `BEE_CODE_SUBAGENT_API_KEY` → 主代理密钥
+  - 新命令：配置子代理模型 / 测试子代理连接 / 清除子代理 API Key
+  - 配置变更热更新到内核（`model.reload` 携带 `subagentConfig` + `subagentApiKey`）
 
+### Security
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
   此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
 

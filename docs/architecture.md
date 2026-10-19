@@ -1373,6 +1373,29 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 
 `run` 返回的 `exitCode/stdout/stderr` 就是"沙箱内验证回路"的原料：测试/构建结果回灌模型，由它决定下一步。
 
+#### 12.5.7 子代理的独立模型配置（已实现）
+
+用户可以让子代理用**另一套端点/模型/密钥**（例如主代理用强模型，子代理用便宜的快模型）：
+
+| 设置 | 默认 | 说明 |
+| --- | --- | --- |
+| `beeCode.subagent.enabled` | `true` | 关闭后主代理没有 `spawn_subagent` 工具 |
+| `beeCode.subagent.baseUrl` | 空 = 沿用主代理 | machine 作用域（工作区不能覆盖） |
+| `beeCode.subagent.model` | 空 = 沿用主代理 | 建议填便宜/快的模型 |
+| `beeCode.subagent.apiKeyId` | `beeCode.apiKey.subagent` | SecretStorage 键名 |
+| `beeCode.subagent.maxSteps` | `8` | 上限 12 |
+| `beeCode.subagent.supportsVision` | `auto` | 子代理的视觉能力判定 |
+
+密钥解析顺序：`SecretStorage` → 环境变量 `BEE_CODE_SUBAGENT_API_KEY` → **主代理密钥**。
+
+命令（与主代理同一套交互）：
+
+- `Bee Code: 配置子代理模型`（三步向导；端点/模型留空 = 沿用主代理，密钥留空 = 沿用主代理密钥）
+- `Bee Code: 测试子代理连接`
+- `Bee Code: 清除子代理 API Key`
+
+密钥仍然**只经 stdin 的 `initialize` / `model.reload` 传给内核**，不落 settings、不进日志。
+
 ---
 
 ## 13. Skill 与 MCP 集成

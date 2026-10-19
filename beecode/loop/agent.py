@@ -89,6 +89,10 @@ class AgentLoop:
         client_factory: Callable[[Session], OpenAIClient] | None = None,
         log: Callable[[str], None] | None = None,
         role: str = "main",
+        spawn_enabled: bool = True,
+        spawn_config: dict[str, Any] | None = None,
+        spawn_api_key: str | None = None,
+        spawn_max_steps: int = 8,
     ) -> None:
         self._notify = notify
         self._shell = shell
@@ -97,8 +101,12 @@ class AgentLoop:
         self._client_factory = client_factory or _default_client
         self._log = log or (lambda _msg: None)
         self._role = role
+        self._spawn_enabled = spawn_enabled and role == "main"
+        self._spawn_config = dict(spawn_config or {})
+        self._spawn_api_key = spawn_api_key
+        self._spawn_max_steps = max(1, min(int(spawn_max_steps or 8), 12))
         # 子代理没有 propose_edit，也没有 spawn_subagent（不允许无限嵌套）
-        self._tools: dict[str, Tool] = build_tools(role)
+        self._tools: dict[str, Tool] = build_tools(role, allow_spawn=self._spawn_enabled)
         self._schemas = tool_schemas(self._tools)
 
     async def run_turn(
@@ -130,7 +138,7 @@ class AgentLoop:
             shell=self._shell,
             propose=self._propose or _no_propose,
             log=self._log,
-            spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._role == "main" else None,
+            spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._spawn_enabled else None,
         )
 
         stats = TurnStats()
@@ -359,17 +367,18 @@ class AgentLoop:
           - 壳侧根据 `role: subagent` 收紧命令与写权限
           - 取消随父任务一起传播（同一个 asyncio 任务树）
         """
-        child = Session.create(
-            f"sub_{uuid.uuid4().hex[:8]}",
-            "chat",
-            dict(parent.model_config),
-            parent.api_key,
-        )
+        # 子代理配置：用户显式指定的字段覆盖主代理，其余沿用
+        child_config = dict(parent.model_config)
+        for key, value in self._spawn_config.items():
+            if value is not None and value != "":
+                child_config[key] = value
+        api_key = self._spawn_api_key or parent.api_key
+        child = Session.create(f"sub_{uuid.uuid4().hex[:8]}", "chat", child_config, api_key)
         child_loop = AgentLoop(
             lambda _method, _params: None,  # 子代理不往 UI 推流，避免刷屏
             self._shell.with_role("subagent"),
             config=TurnConfig(
-                max_steps=min(max(1, max_steps), 12),
+                max_steps=min(max(1, max_steps), self._spawn_max_steps),
                 tool_timeout_s=self._config.tool_timeout_s,
                 repeat_limit=self._config.repeat_limit,
                 nudge_limit=1,

@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-PROTOCOL_VERSION = 15
+PROTOCOL_VERSION = 16
 
 # ---------------------------------------------------------------------------
 # 错误码（与 src/protocol.ts 的 RpcError 保持一致）

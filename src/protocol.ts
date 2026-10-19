@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -397,6 +397,16 @@ export interface ModelConfigDto {
   supportsTools?: boolean;
 }
 
+/** 子代理的模型配置（可选；省略则完全沿用主代理） */
+export interface SubagentConfigDto {
+  enabled?: boolean;
+  baseUrl?: string;
+  model?: string;
+  supportsVision?: "auto" | "on" | "off";
+  maxSteps?: number;
+  temperature?: number;
+}
+
 export interface InitializeParams {
   protocolVersion: number;
   workspaceRoots: string[];
@@ -406,6 +416,10 @@ export interface InitializeParams {
   checkpointEnabled?: boolean;
   /** 只在握手时通过 stdin 传入；内核只应放内存，不落盘、不进日志 */
   apiKey?: string;
+  /** 子代理模型配置（不填则沿用主代理） */
+  subagentConfig?: SubagentConfigDto;
+  /** 子代理的密钥（只经 stdin 传递；不填则沿用主代理密钥） */
+  subagentApiKey?: string;
 }
 
 export interface InitializeResult {
@@ -450,7 +464,12 @@ export interface ProposalDecideParams { id: string; decision: "accept" | "reject
 export interface ProposalDecideResult { ok: boolean }
 
 export interface SessionAbortParams { sessionId: string }
-export interface ModelReloadParams { modelConfig: ModelConfigDto; apiKey?: string }
+export interface ModelReloadParams {
+  modelConfig: ModelConfigDto;
+  apiKey?: string;
+  subagentConfig?: SubagentConfigDto;
+  subagentApiKey?: string;
+}
 
 // ────────────────────── 内核 → 壳 通知 ──────────────────────
 
