@@ -156,6 +156,10 @@ function runInDocker(
   timeoutMs: number,
 ): Promise<RawResult> {
   const relative = path.relative(root, cwd).split(path.sep).join("/");
+  if (relative.startsWith("..")) {
+    // docker 只挂载工作区；工作区外的 cwd 无法被沙箱覆盖，不能假装隔离
+    throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
+  }
   const workdir = relative ? `/workspace/${relative}` : "/workspace";
   const args = [
     "run",

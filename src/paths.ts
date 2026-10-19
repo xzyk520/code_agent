@@ -30,6 +30,30 @@ export class PathPolicyError extends Error {
 }
 
 /** 把内核给的相对/绝对路径解析成 Uri，并做边界校验 */
+/**
+ * 被用户显式批准的工作区外根目录（内存态，不持久化）。
+ *
+ * 用途：用户对"工作区外路径"点了允许之后，把它的目录加进来，
+ * 后续同一目录的访问不再反复弹窗。重启即失效（保守）。
+ */
+const approvedRoots = new Set<string>();
+
+export function addApprovedRoot(dir: string): void {
+  approvedRoots.add(path.resolve(dir));
+}
+
+export function clearApprovedRoots(): void {
+  approvedRoots.clear();
+}
+
+export function isApprovedRoot(target: string): boolean {
+  const resolved = path.resolve(target);
+  for (const root of approvedRoots) {
+    if (resolved === root || isInside(root, resolved)) return true;
+  }
+  return false;
+}
+
 export function resolveTarget(rawPath: string): vscode.Uri {
   if (!rawPath || typeof rawPath !== "string") {
     throw new PathPolicyError("path 不能为空");
@@ -45,7 +69,10 @@ export function resolveTarget(rawPath: string): vscode.Uri {
 
   const inside = roots.some((root) => isInside(root, candidate));
   if (!inside) {
-    throw new PathPolicyError(`路径越界（不在工作区内）：${rawPath}`);
+    // 用户显式批准过的目录（工作区外）允许通过；其余仍然拒绝
+    if (!isApprovedRoot(candidate)) {
+      throw new PathPolicyError(`路径越界（不在工作区内）：${rawPath}`);
+    }
   }
 
   const normalized = candidate.split(/[\\/]+/).map((s) => s.toLowerCase());

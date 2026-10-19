@@ -1,6 +1,6 @@
 {
-  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 12）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
-  "version": 12,
+  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 13）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
+  "version": 13,
   "shellMethods": {
     "fs.read": { "required": ["path"], "optional": ["startLine", "endLine"], "result": ["text", "version", "totalLines", "startLine", "endLine", "truncated"] },
     "fs.list": { "required": [], "optional": ["glob", "exclude", "maxResults"], "result": ["paths", "truncated"] },
@@ -9,13 +9,13 @@
     "symbols.search": { "required": ["query"], "optional": ["maxResults"], "result": ["symbols", "source", "truncated"] },
     "symbols.references": { "required": ["path", "line"], "optional": ["column", "maxResults"], "result": ["locations", "truncated"] },
     "diagnostics.get": { "required": [], "optional": ["path", "minSeverity", "maxItems", "includeIgnored"], "result": ["items", "total", "truncated"] },
-    "edit.apply": { "required": ["path", "newText"], "optional": ["op", "expectedVersion", "reason"], "result": ["applied", "version", "conflict", "message"] },
+    "edit.apply": { "required": ["path", "newText"], "optional": ["op", "expectedVersion", "reason", "role"], "result": ["applied", "version", "conflict", "message"] },
     "checkpoint.create": { "required": [], "optional": ["label", "paths"], "result": ["id", "files", "skipped", "reason"] },
     "checkpoint.restore": { "required": ["id"], "optional": [], "result": ["restored"] },
     "diff.open": { "required": ["path", "baseText"], "optional": ["title"], "result": ["opened"] },
     "confirm.ask": { "required": ["question", "options"], "optional": ["detail", "rememberKey"], "result": ["choice"] },
     "secrets.get": { "required": ["key"], "optional": [], "result": ["value"] },
-    "run": { "required": ["command"], "optional": ["cwd", "timeoutMs"], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] }
+    "run": { "required": ["command"], "optional": ["cwd", "timeoutMs", "role"], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] }
   },
   "coreMethods": [
     "initialize",

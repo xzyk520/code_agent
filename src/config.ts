@@ -48,6 +48,8 @@ export interface PermissionsConfig {
   sandbox: "off" | "docker" | "auto";
   dockerImage: string;
   requireTrust: boolean;
+  /** 开放完整权限：免掉审批（但不解除"未信任"和"工作区外"的限制） */
+  fullAccess: boolean;
 }
 
 export interface ConfigReadResult {
@@ -88,6 +90,7 @@ export function readConfig(): ConfigReadResult {
       sandbox: reader.oneOf("permissions.sandbox", "off", ["off", "docker", "auto"] as const),
       dockerImage: reader.str("permissions.dockerImage", "node:22-alpine"),
       requireTrust: reader.bool("permissions.requireTrust", true),
+      fullAccess: reader.bool("permissions.fullAccess", false),
     },
   };
 

@@ -33,6 +33,7 @@ bee-code/
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
 │  ├─ workspaceIgnore.ts         # ✅ 统一忽略规则（噪声目录 + .gitignore，fs/search/diagnostics 共用）
 │  ├─ permissions.ts             # ✅ 权限规则引擎（deny>ask>allow>模式默认，纯函数）
+│  ├─ policy.ts                  # ✅ 有效策略（docker/角色/位置 → allow/ask/deny）+ 只读命令判定
 │  ├─ trust.ts                   # ✅ 工作区信任（首次询问 + globalState 记录）
 │  ├─ log.ts                     # ✅ 双 LogOutputChannel（自动落盘）+ 脱敏 + 500 行缓冲
 │  ├─ rpc/

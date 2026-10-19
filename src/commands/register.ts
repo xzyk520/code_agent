@@ -30,6 +30,8 @@ export interface CommandDeps {
   testModel(): Promise<void>;
   /** 切换当前工作区信任状态（信任 ⇄ 只读） */
   toggleTrust(): Promise<void>;
+  /** 重新检测 docker 沙箱（装好 Docker 后不必重启窗口） */
+  redetectSandbox(): Promise<void>;
   /** 清除凭据库里保存的 API Key */
   clearModelKey(): Promise<void>;
   pickFiles(): Promise<void>;
@@ -93,6 +95,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.dev.crashMock", () => deps.crashMock());
   register("beeCode.model.test", () => deps.testModel());
   register("beeCode.workspace.trust", () => deps.toggleTrust());
+  register("beeCode.docker.redetect", () => deps.redetectSandbox());
   register("beeCode.model.clearKey", () => deps.clearModelKey());
 
   return ids;

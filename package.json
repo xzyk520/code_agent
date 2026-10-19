@@ -132,6 +132,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.docker.redetect",
+        "title": "重新检测 Docker 沙箱",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.workspace.trust",
         "title": "信任/取消信任此工作区",
         "category": "Bee Code"
@@ -342,6 +347,13 @@
           "order": 25,
           "default": "node:22-alpine",
           "markdownDescription": "沙箱镜像（需要包含你要执行的运行时，例如 node/python）。"
+        },
+        "beeCode.permissions.fullAccess": {
+          "type": "boolean",
+          "scope": "window",
+          "order": 27,
+          "default": false,
+          "markdownDescription": "开放完整权限：命令与写文件不再逐次确认（**不**解除「未受信任工作区只读」与「工作区外需确认」）。"
         },
         "beeCode.permissions.requireTrust": {
           "type": "boolean",

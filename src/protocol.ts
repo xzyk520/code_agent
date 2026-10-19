@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -264,6 +264,8 @@ export interface DiagnosticsGetResult {
 
 /** 内核算好新文本，壳负责落盘（唯一写入通道）。 */
 export interface EditApplyParams {
+  /** main = 主代理；subagent = 子代理（默认 main） */
+  role?: "main" | "subagent";
   path: string;
   newText: string;
   /** write = 整文件替换；delete = 删除文件（newText 忽略） */
@@ -322,6 +324,8 @@ export interface ConfirmAskResult { choice: string | null }
 
 export interface RunParams {
   command: string;
+  /** main = 主代理；subagent = 子代理（默认 main） */
+  role?: "main" | "subagent";
   /** 工作区相对目录；省略 = 工作区根 */
   cwd?: string;
   timeoutMs?: number;

@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import * as path from "node:path";
+import * as nodePath from "node:path";
 import * as vscode from "vscode";
 import { clearRememberedChoices, createConfirmAdapter, createSecretAdapter } from "./adapters/interactionAdapter";
 import { createDiagnosticsAdapter } from "./adapters/diagnosticsAdapter";
@@ -23,6 +23,8 @@ import { toWorkspaceRelative } from "./paths";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
+import { decide as decidePolicy, isReadOnlyCommand, type AgentRole, type PolicyDecision } from "./policy";
+import { addApprovedRoot, isInside, resolveTarget } from "./paths";
 import { buildContext } from "./contextBuilder";
 import { SessionStore, type TurnStatus } from "./sessionStore";
 import { PROTOCOL_VERSION } from "./protocol";
@@ -121,12 +123,13 @@ class Shell {
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
-        sandbox: this.config.permissions.sandbox,
+        // 有 docker 就强制沙箱执行：这是策略，不是偏好（用户设 off 也不降级）
+        sandbox: this.dockerAvailable ? "docker" : "off",
         dockerImage: this.config.permissions.dockerImage,
       }),
       dockerAvailable: () => this.dockerAvailable,
     });
-    this.sessions = new SessionStore(path.join(context.globalStorageUri.fsPath, "sessions"), this.log);
+    this.sessions = new SessionStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.sessionId = context.globalState.get<string>(SESSION_KEY) ?? newSessionId();
 
     this.panel = new ChatViewProvider(context.extensionUri, {
@@ -150,6 +153,8 @@ class Shell {
     this.log.info(`激活：${describeConfig(this.config)}`);
 
     await this.ensureSession();
+    await this.refreshPermissions();
+    await this.initSandbox();
 
     // 所有"可释放资源"只有一个所有者：context.subscriptions。
     // VS Code 会在 deactivate() 后统一 dispose，避免我们与它双重释放。
@@ -172,6 +177,7 @@ class Shell {
       cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
       testModel: () => this.testModel(),
+      redetectSandbox: () => this.redetectSandbox(),
       toggleTrust: async () => {
         await toggleWorkspaceTrust(this.context, this.log);
         await this.refreshPermissions();
@@ -674,6 +680,108 @@ class Shell {
   // ───────────────────────── 权限 ─────────────────────────
 
   /** 重新读取权限规则与信任状态（启动 + 配置变更时调用） */
+  // ───────────────────────── 沙箱 ─────────────────────────
+
+  /**
+   * 启动时检测 docker；不可用时**只在第一次 / 配置变化时**询问，
+   * 之后静默按"无沙箱策略"运行（避免每次启动都弹窗）。
+   */
+  private async initSandbox(force = false): Promise<void> {
+    const detected = await detectDocker();
+    this.dockerAvailable = detected;
+    const fingerprint = `${this.config.permissions.sandbox}|${this.config.permissions.dockerImage}`;
+    const recorded = this.context.globalState.get<{ choice?: "yes" | "no"; fingerprint?: string }>("beeCode.docker");
+
+    if (detected) {
+      this.log.info("docker 可用：命令将在沙箱内执行");
+      await this.context.globalState.update("beeCode.docker", { choice: "yes", fingerprint });
+      if (force || recorded?.choice !== "yes") {
+        void vscode.window.showInformationMessage("Bee Code: 已检测到 Docker，命令将在沙箱内执行。");
+      }
+      return;
+    }
+
+    const askedBefore = recorded?.choice !== undefined && recorded.fingerprint === fingerprint;
+    if (askedBefore && !force) {
+      this.log.info("docker 不可用（此前已提示过）：按无沙箱策略运行");
+      return;
+    }
+
+    const choice = await vscode.window.showWarningMessage(
+      "Bee Code: 没有检测到 Docker。\n\n" +
+        "· 有 Docker：命令在隔离容器内执行，子代理也能执行命令。\n" +
+        "· 没有 Docker：每条命令都需要你确认；子代理不能执行命令或写文件。",
+      "我有 Docker（重新检测）",
+      "我没有 Docker",
+      "稍后再说",
+    );
+
+    if (choice === "我有 Docker（重新检测）") {
+      const again = await detectDocker();
+      this.dockerAvailable = again;
+      if (again) {
+        await this.context.globalState.update("beeCode.docker", { choice: "yes", fingerprint });
+        void vscode.window.showInformationMessage("Bee Code: 已检测到 Docker，命令将在沙箱内执行。");
+        return;
+      }
+      void vscode.window.showWarningMessage("Bee Code: 仍然没有检测到 Docker，按无沙箱策略运行。");
+    }
+
+    if (choice !== undefined) {
+      await this.context.globalState.update("beeCode.docker", {
+        choice: choice === "我没有 Docker" ? "no" : undefined,
+        fingerprint,
+      });
+    }
+    this.log.info(`docker 不可用：${this.dockerAvailable ? "?" : "无沙箱策略"}`);
+  }
+
+  private async redetectSandbox(): Promise<void> {
+    await this.initSandbox(true);
+  }
+
+  /** 统一的策略判定（纯函数在 policy.ts，这里只注入上下文） */
+  private policyFor(
+    action: "read" | "write" | "run",
+    opts: { role?: AgentRole; insideWorkspace: boolean; readOnlyCommand?: boolean },
+  ): PolicyDecision {
+    return decidePolicy({
+      trusted: this.trusted,
+      dockerAvailable: this.dockerAvailable,
+      fullAccess: this.config.permissions.fullAccess,
+      role: opts.role ?? "main",
+      action,
+      insideWorkspace: opts.insideWorkspace,
+      readOnlyCommand: opts.readOnlyCommand,
+    });
+  }
+
+  /** 工作区外路径：先确认再放行；批准后把目录记入内存（重启失效） */
+  private async ensurePathAccess(rawPath: string, ctx: InboundRequestContext, role: AgentRole): Promise<void> {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) throw deniedError("未打开工作区");
+    const absolute = nodePath.isAbsolute(rawPath) ? nodePath.resolve(rawPath) : nodePath.resolve(root, rawPath);
+    if (isInside(root, absolute)) return;
+
+    const decision = this.policyFor("read", { role, insideWorkspace: false });
+    if (decision.decision === "deny") throw deniedError(decision.reason);
+
+    const answer = await this.confirm.ask(
+      {
+        question: "允许访问工作区外的路径？",
+        detail: `${absolute}\n\n${decision.reason}`,
+        options: [
+          { id: "yes", label: "允许" },
+          { id: "no", label: "拒绝" },
+        ],
+        rememberKey: `path:${nodePath.dirname(absolute)}`,
+      },
+      ctx,
+    );
+    if (answer.choice !== "yes") throw deniedError("用户拒绝访问工作区外路径");
+    addApprovedRoot(nodePath.dirname(absolute));
+  }
+
   private async refreshPermissions(): Promise<void> {
     this.rules = buildRuleSet(this.config.permissions);
     this.trusted = this.config.permissions.requireTrust
@@ -704,58 +812,97 @@ class Shell {
    *   - 模式默认 ask → 提案路径视为已确认；内核直接调 edit.apply 时仍要确认
    *   - 敏感路径 + 模式放行 → 确认一次（模式放行 ≠ 用户知情）
    */
+  /**
+   * 写入门闸。
+   *
+   * 三层叠加：沙箱策略（policy.ts）→ 规则引擎（permissions.ts）→ 敏感路径二次确认。
+   * `userApproved` = 用户刚在提案里点了「接受」，用来避免"点一次接受又问一次"。
+   */
   private async assertWriteAllowed(
-    path: string,
+    rawPath: string,
     ctx: InboundRequestContext,
-    opts: { userApproved: boolean },
+    opts: { userApproved: boolean; role?: AgentRole },
   ): Promise<void> {
-    const evaluation = this.describePermission("write", path);
+    const role: AgentRole = opts.role ?? "main";
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) throw deniedError("未打开工作区");
+    const absolute = nodePath.isAbsolute(rawPath) ? nodePath.resolve(rawPath) : nodePath.resolve(root, rawPath);
+    const inside = isInside(root, absolute);
+
+    const policy = this.policyFor("write", { role, insideWorkspace: inside });
+    if (policy.decision === "deny") throw deniedError(policy.reason);
+    if (!inside) await this.ensurePathAccess(rawPath, ctx, role);
+
+    const evaluation = this.describePermission("write", rawPath);
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
 
-    const needsConfirm =
+    const needAsk =
+      (policy.decision === "ask" && inside && !opts.userApproved) ||
       (evaluation.decision === "ask" && (evaluation.source === "rule" || !opts.userApproved)) ||
       (evaluation.decision === "allow" &&
         evaluation.source === "mode" &&
-        isSensitiveWrite(path) &&
+        isSensitiveWrite(rawPath) &&
         !opts.userApproved);
 
-    if (!needsConfirm) return;
+    if (!needAsk) return;
 
     const answer = await this.confirm.ask(
       {
-        question: `允许修改 ${path}？`,
-        detail: `${evaluation.reason}\n\n路径：${path}`,
+        question: `允许修改 ${rawPath}？`,
+        detail: `${policy.reason}\n${evaluation.reason}\n\n路径：${rawPath}`,
         options: [
           { id: "yes", label: "允许" },
           { id: "no", label: "拒绝" },
         ],
-        rememberKey: `write:${path}`,
+        rememberKey: `write:${rawPath}`,
       },
       ctx,
     );
     if (answer.choice !== "yes") throw deniedError("用户拒绝写入");
   }
 
-  /** 命令执行：先过权限，再交给 runAdapter（内部可走 docker 沙箱） */
+  /**
+   * 命令执行：
+   *   - 有 docker → 一律在容器内执行（不管用户把 sandbox 设成 off 还是 auto）
+   *   - 没有 docker → 主代理每条都要确认；子代理只允许只读命令
+   */
   private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
+    const role: AgentRole = params.role === "subagent" ? "subagent" : "main";
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) throw deniedError("未打开工作区");
+
+    const cwdAbs = params.cwd ? nodePath.resolve(root, params.cwd) : root;
+    const inside = isInside(root, cwdAbs);
+    const readOnly = isReadOnlyCommand(params.command);
+
+    const policy = this.policyFor("run", { role, insideWorkspace: inside, readOnlyCommand: readOnly });
+    if (policy.decision === "deny") throw deniedError(policy.reason);
+    if (!inside) await this.ensurePathAccess(params.cwd ?? ".", ctx, role);
+
     const evaluation = this.describePermission("run", params.command);
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
 
-    if (evaluation.decision === "ask") {
+    const needAsk = policy.decision === "ask" || evaluation.decision === "ask";
+    if (needAsk) {
       const answer = await this.confirm.ask(
         {
           question: "执行这条命令？",
-          detail: `${evaluation.reason}\n\n${params.command}\n\n沙箱：${this.config.permissions.sandbox}`,
+          detail:
+            `${policy.reason}\n${evaluation.reason}\n\n` +
+            `${params.command}\n\n` +
+            `沙箱：${this.dockerAvailable ? "docker" : "无（直接执行）"}`,
           options: [
             { id: "yes", label: "执行" },
             { id: "no", label: "取消" },
           ],
-          rememberKey: `run:${params.command}`,
+          // 无沙箱时每条都要问（不给"记住"）；有 docker 且非 fullAccess 时可记住
+          rememberKey: this.dockerAvailable && !this.config.permissions.fullAccess ? `run:${params.command}` : undefined,
         },
         ctx,
       );
       if (answer.choice !== "yes") throw deniedError("用户取消执行");
     }
+
     return this.runner.run(params, ctx);
   }
 
@@ -977,7 +1124,7 @@ class Shell {
       config: this.config,
       coreKind: this.core?.kind ?? this.config.coreMode,
     });
-    const name = path.basename(uri.fsPath);
+    const name = nodePath.basename(uri.fsPath);
 
     const choice = await vscode.window.showInformationMessage(
       `Bee Code: 诊断包已生成（已脱敏）— ${name}`,
@@ -991,7 +1138,7 @@ class Shell {
     if (choice === "另存为…") {
       const target = await vscode.window.showSaveDialog({
         title: "另存诊断包",
-        defaultUri: vscode.Uri.file(path.join(os.homedir(), name)),
+        defaultUri: vscode.Uri.file(nodePath.join(os.homedir(), name)),
         filters: { Markdown: ["md"] },
       });
       if (!target) return;
@@ -1071,7 +1218,10 @@ class Shell {
     const secrets = createSecretAdapter(this.context, this.log);
 
     // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
-    this.server.register("fs.read", (params, ctx) => fs.read(params, ctx));
+    this.server.register("fs.read", async (params, ctx) => {
+      await this.ensurePathAccess(params.path, ctx, "main");
+      return fs.read(params, ctx);
+    });
     this.server.register("fs.list", (params, ctx) => fs.list(params, ctx));
     this.server.register("search.grep", (params, ctx) => search.grep(params, ctx));
     this.server.register("symbols.outline", (params, ctx) => symbols.outline(params, ctx));
@@ -1079,7 +1229,7 @@ class Shell {
     this.server.register("symbols.references", (params, ctx) => symbols.references(params, ctx));
     this.server.register("diagnostics.get", (params, ctx) => diagnostics.get(params, ctx));
     this.server.register("edit.apply", async (params, ctx) => {
-      await this.assertWriteAllowed(params.path, ctx, { userApproved: false });
+      await this.assertWriteAllowed(params.path, ctx, { userApproved: false, role: params.role === "subagent" ? "subagent" : "main" });
       return this.edit.apply(params, ctx);
     });
     this.server.register("run", (params, ctx) => this.runCommand(params, ctx));

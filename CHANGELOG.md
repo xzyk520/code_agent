@@ -36,6 +36,14 @@
   - 写入门闸接线：提案接受前校验规则 + 敏感路径二次确认；**接受前自动建检查点**
   - `package.json` 声明 `capabilities.untrustedWorkspaces: "limited"` 与 `virtualWorkspaces: false`
 
+- **沙箱策略细化（协议 v13）**：
+  - 启动自动检测 docker：可用则提示一次；不可用只在**首次或配置变化**时询问，之后静默
+  - 没有 docker：主代理每条命令都审批（不允许"记住"）；子代理禁止写文件、只能跑只读命令
+  - 有 docker：命令**强制**在容器内执行（主/子代理一致）；`fullAccess` 免审批
+  - 工作区外路径：主代理需审批、子代理一律拒绝（无论有没有 docker）
+  - 未受信任工作区：只读（不变）
+  - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
+
 ### Security
 
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
@@ -151,6 +159,14 @@
   - docker 沙箱（`sandbox: docker|auto`）：`--network none --read-only --cap-drop ALL`，无 docker 时按配置报错或回退
   - 写入门闸接线：提案接受前校验规则 + 敏感路径二次确认；**接受前自动建检查点**
   - `package.json` 声明 `capabilities.untrustedWorkspaces: "limited"` 与 `virtualWorkspaces: false`
+
+- **沙箱策略细化（协议 v13）**：
+  - 启动自动检测 docker：可用则提示一次；不可用只在**首次或配置变化**时询问，之后静默
+  - 没有 docker：主代理每条命令都审批（不允许"记住"）；子代理禁止写文件、只能跑只读命令
+  - 有 docker：命令**强制**在容器内执行（主/子代理一致）；`fullAccess` 免审批
+  - 工作区外路径：主代理需审批、子代理一律拒绝（无论有没有 docker）
+  - 未受信任工作区：只读（不变）
+  - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
 
 ### Security
 
