@@ -7,8 +7,9 @@ import type { createEditAdapter } from "./editAdapter";
 
 type EditAdapter = ReturnType<typeof createEditAdapter>;
 
-/** 正文缓存有效期：超过它重新拉，避免用过期内容写盘 */
-const TEXT_CACHE_TTL_MS = 30_000;
+/** 正文缓存上限：条数与总字节（LRU 淘汰）。没有 TTL —— 失效靠 upsert 事件，不靠时间 */
+const TEXT_CACHE_MAX_ENTRIES = 3;
+const TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * 提案（虚拟文件）的暂存与落实。
@@ -23,8 +24,9 @@ const TEXT_CACHE_TTL_MS = 30_000;
  */
 export class ProposalAdapter implements vscode.Disposable {
   private readonly byId = new Map<string, ProposalDto>();
-  /** 查看过的正文短暂缓存：避免「查看 → 接受」把同一份大文件拉两次 */
-  private readonly textCache = new Map<string, { text: string; at: number }>();
+  /** 查看过的正文缓存：避免「查看 → 接受」把同一份大文件拉两次（LRU，有容量上限） */
+  private readonly textCache = new Map<string, { text: string; bytes: number }>();
+  private textCacheBytes = 0;
   private disposed = false;
 
   constructor(
@@ -51,6 +53,8 @@ export class ProposalAdapter implements vscode.Disposable {
         this.logger.debug(`proposal ${id} 被同路径的新提案 ${dto.id} 取代（标 stale）`);
       }
     }
+    // A 方案：正文变化无法从元数据观测，任何 upsert 都视为可能变了 → 丢弃缓存
+    this.forgetText(dto.id);
     this.byId.set(dto.id, dto);
   }
 
@@ -65,6 +69,7 @@ export class ProposalAdapter implements vscode.Disposable {
   clear(): void {
     this.byId.clear();
     this.textCache.clear();
+    this.textCacheBytes = 0;
   }
 
   /** 文件在提案生成后被改过 → 标记 stale，UI 上会提示"重新生成" */
@@ -100,7 +105,7 @@ export class ProposalAdapter implements vscode.Disposable {
       this.logger.warn(`读取提案正文失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-    this.textCache.set(id, { text, at: Date.now() });
+    this.rememberText(id, text);
     const result = await this.diff.openProposal({ path: dto.path, text, title: dto.summary });
     return result.opened;
   }
@@ -124,16 +129,15 @@ export class ProposalAdapter implements vscode.Disposable {
       this.logger.warn(`提案 ${id} 缺少 baseVersion，接受时将不做版本冲突检测（可能覆盖用户的新修改）`);
     }
 
-    let text: string;
-    const cached = this.textCache.get(id);
-    if (cached && Date.now() - cached.at < TEXT_CACHE_TTL_MS) {
-      text = cached.text;
-    } else {
+    let text = this.takeText(id);
+    if (text === undefined) {
       try {
         text = await fetchText(id);
       } catch (err) {
         return { applied: false, message: `读取提案正文失败：${err instanceof Error ? err.message : String(err)}` };
       }
+      // 写失败时可以重试，不必再拉一次
+      this.rememberText(id, text);
     }
 
     const result = await this.edit.apply(
@@ -149,6 +153,7 @@ export class ProposalAdapter implements vscode.Disposable {
     if (!result.applied) return result;
 
     this.byId.delete(id);
+    this.forgetText(id);
     await decide(id, "accept").catch((err: unknown) => {
       this.logger.warn(`proposal.decide(accept) 失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -162,6 +167,7 @@ export class ProposalAdapter implements vscode.Disposable {
   ): Promise<void> {
     if (!this.byId.has(id)) return;
     this.byId.delete(id);
+    this.forgetText(id);
     await decide(id, "reject").catch((err: unknown) => {
       this.logger.warn(`proposal.decide(reject) 失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -172,6 +178,41 @@ export class ProposalAdapter implements vscode.Disposable {
     this.disposed = true;
     this.byId.clear();
     this.textCache.clear();
+    this.textCacheBytes = 0;
+  }
+
+  // ───────────────────────── 正文缓存（LRU + 字节上限） ─────────────────────────
+
+  private rememberText(id: string, text: string): void {
+    this.forgetText(id);
+    const bytes = Buffer.byteLength(text, "utf8");
+    this.textCache.set(id, { text, bytes });
+    this.textCacheBytes += bytes;
+    this.evictTextCache();
+  }
+
+  /** 取用即刷新 LRU 顺序；返回 undefined 表示没缓存 */
+  private takeText(id: string): string | undefined {
+    const hit = this.textCache.get(id);
+    if (!hit) return undefined;
+    this.textCache.delete(id);
+    this.textCache.set(id, hit);
+    return hit.text;
+  }
+
+  private forgetText(id: string): void {
+    const hit = this.textCache.get(id);
+    if (!hit) return;
+    this.textCacheBytes -= hit.bytes;
+    this.textCache.delete(id);
+  }
+
+  private evictTextCache(): void {
+    while (this.textCache.size > TEXT_CACHE_MAX_ENTRIES || this.textCacheBytes > TEXT_CACHE_MAX_BYTES) {
+      const oldest = this.textCache.keys().next().value;
+      if (!oldest) break;
+      this.forgetText(oldest);
+    }
   }
 }
 

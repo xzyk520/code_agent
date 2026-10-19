@@ -20,6 +20,8 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **提案正文缓存改为事件失效 + LRU**：去掉 30 秒 TTL；`upsert`（内核更新提案）时立即丢弃该 id 的缓存，
+  容量上限 3 条 / 8 MB（LRU 淘汰），接受/拒绝后释放
 - **提案面板修复**：`stale` 提案不再「凭空消失」（灰色显示、只能查看/丢弃）；同路径新提案自动把旧目标为失效；
   查看过的正文短期缓存（避免「查看 → 接受」拉两次）；`baseVersion` 缺失时记警告（不再静默无条件覆盖）；
   「全部接受」支持中途取消（命令 `beeCode.proposal.cancelAcceptAll`）
