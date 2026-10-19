@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -141,10 +141,29 @@ export interface EditApplyResult {
   message?: string;
 }
 
-export interface CheckpointCreateParams { label?: string }
-export interface CheckpointCreateResult { id: string; files: number }
+export interface CheckpointCreateParams {
+  label?: string;
+  /** 轻量模式：只快照这些路径（相对工作区根）。留空 = 整个工作区 */
+  paths?: string[];
+}
+export interface CheckpointCreateResult {
+  id: string;
+  files: number;
+  /** true = 这次没有建检查点（设置关闭 / 没工作区），此时 id 为空串 */
+  skipped?: boolean;
+  /** skipped 的原因，给内核与日志看 */
+  reason?: string;
+}
 
-export interface CheckpointRestoreParams { id: string; scope?: "files" | "task" | "both" }
+/**
+ * 恢复检查点。
+ *
+ * 只恢复**文件**：会话/任务状态属于内核自己，由内核合成「整轮回滚」
+ * （先重置自身状态，再调这个方法把文件退回去）。
+ */
+export interface CheckpointRestoreParams {
+  id: string;
+}
 export interface CheckpointRestoreResult { restored: string[] }
 
 export interface DiffOpenParams { path: string; baseText: string; title?: string }

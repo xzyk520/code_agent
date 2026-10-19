@@ -411,7 +411,9 @@ class Shell {
   }
 
   private async restoreCheckpoint(): Promise<void> {
-    const items = this.checkpoint.list().map((record) => ({
+    // 从 git 历史读：重载窗口后依然能回滚到之前的检查点
+    const records = await this.checkpoint.list();
+    const items = records.map((record) => ({
       label: record.id.slice(0, 8),
       description: new Date(record.createdAt).toLocaleString(),
       detail: record.label,
@@ -435,7 +437,7 @@ class Shell {
     );
     if (confirm !== "恢复") return;
 
-    const result = await this.checkpoint.restore({ id: picked.id, scope: "files" });
+    const result = await this.checkpoint.restore({ id: picked.id });
     void vscode.window.showInformationMessage(
       `Bee Code: 已恢复 ${result.restored.length} 个文件。`,
     );

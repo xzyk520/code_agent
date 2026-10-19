@@ -193,12 +193,27 @@ class ShellClient:
             message=result.get("message"),
         )
 
-    async def checkpoint(self, label: str | None = None) -> str:
-        result = await self._call("checkpoint.create", {"label": label or ""})
+    async def checkpoint(self, label: str | None = None, paths: list[str] | None = None) -> str:
+        """建一个检查点，返回 commit id；`skipped=True` 时返回空串（见 `checkpoint_result`）。
+
+        轻量模式：传 `paths` 只快照这些文件，大仓库不必全树快照。
+        """
+        payload: dict[str, Any] = {"label": label or ""}
+        if paths:
+            payload["paths"] = list(paths)
+        result = await self._call("checkpoint.create", payload)
         return str(result.get("id", ""))
 
-    async def restore_checkpoint(self, checkpoint_id: str, scope: str = "files") -> list[str]:
-        result = await self._call("checkpoint.restore", {"id": checkpoint_id, "scope": scope}, timeout=120.0)
+    async def checkpoint_result(self, label: str | None = None, paths: list[str] | None = None) -> dict[str, Any]:
+        """同上，但返回完整结果（含 `skipped` / `reason`）——需要区分「没做」和「做了」时用。"""
+        payload: dict[str, Any] = {"label": label or ""}
+        if paths:
+            payload["paths"] = list(paths)
+        return dict(await self._call("checkpoint.create", payload))
+
+    async def restore_checkpoint(self, checkpoint_id: str) -> list[str]:
+        """只恢复文件；任务/会话状态由内核自己重置。"""
+        result = await self._call("checkpoint.restore", {"id": checkpoint_id}, timeout=120.0)
         return list(result.get("restored", []))
 
     # ───────────────────────── UI ─────────────────────────

@@ -768,26 +768,36 @@ interface FunctionUnit {
 采用**影子 git 仓库**（Cline 的做法），与项目 `.git` 完全隔离：
 
 ```
-<globalStorage>/bee-code/shadow.git     ← GIT_DIR（不污染项目）
-<workspace>                             ← GIT_WORK_TREE
+<globalStorage>/shadow.git     ← GIT_DIR（不污染项目）
+<workspace>                    ← GIT_WORK_TREE（每次操作时现取）
 ```
 
 ```bash
-git init --bare "<globalStorage>/bee-code/shadow.git"
-git --git-dir="<shadow>" --work-tree="<ws>" add -A
-git --git-dir="<shadow>" --work-tree="<ws>" commit -m "checkpoint: turn 3"
-# 查看/恢复：
-git --git-dir="<shadow>" --work-tree="<ws>" status --short
-git --git-dir="<shadow>" --work-tree="<ws>" checkout -- <path>
+git --git-dir="<shadow>" init -q --bare        # 注意：init 不能带 --work-tree
+git --git-dir="<shadow>" --work-tree="<ws>" -c user.name=... -c user.email=... add -A -- .
+git --git-dir="<shadow>" --work-tree="<ws>" -c user.name=... commit -q -m "checkpoint: turn 3" --allow-empty
+git --git-dir="<shadow>" --work-tree="<ws>" diff --name-only <id>   # 预览将被覆盖的文件
+git --git-dir="<shadow>" --work-tree="<ws>" checkout <id> -- .      # 真的回滚
 ```
 
-规则：
+实现（`src/adapters/checkpointAdapter.ts`）里有七条必须遵守的规则，每一条都对应一个真实故障：
 
-- **时机**：每次 `apply_patch` **之前**落一次快照（保证「写入可回滚」），一轮任务结束时再落一次（供 Restore Task）。
-- **范围**：默认只快照「本任务涉及的文件 + 当前未提交的改动」，避免大仓库被 `add -A` 拖慢（Cline 明确记录过这个痛点：仓库越大、checkpoint 越占空间越慢）。
-- **保留**：最近 50 个（`beeCode.checkpoint.retention`），超出按时间淘汰。
-- **三档恢复**：`Restore Files`（只回文件）/ `Restore Task`（回对话 + 文件）/ `Restore Both`。
-- **降级方案**：环境里没有 git 时，退化为 `<globalStorage>/bee-code/snapshots/<ts>/<relPath>` 的纯文件快照（能恢复、不能 diff）。
+| # | 规则 | 不这么做会怎样 |
+| --- | --- | --- |
+| 1 | **提交身份显式覆盖**：所有写操作带 `-c user.name=Bee Code -c user.email=beecode@localhost` | 没配过 `user.name` 的用户，`git commit` 直接失败（checkpoint 静默失效） |
+| 2 | **`init` 单独一条命令**，不经过统一的 `git()` | `git --git-dir=X --work-tree=Y init --bare` 会报 `GIT_WORK_TREE ... not allowed without specifying GIT_DIR` |
+| 3 | **工作区根每次现取**（getter，不在构造时冻结） | 用户切换/新增工作区后，快照写到旧目录 |
+| 4 | **`list()` 从 `git log` 读**，不依赖内存数组 | 重载窗口后 UI 认为"没有检查点"，用户失去回滚入口 |
+| 5 | **超过 retention 压缩历史**：用 `commit-tree` 以原 message 重建最近 N 个 commit 的父链，再 `reflog expire` + `gc --prune=now` | 单纯 `gc` 删不掉祖先（它们永远 reachable），`shadow.git` 只增不减 |
+| 6 | **写操作串行化**（内部 promise 队列） | 并发 `create()` 撞 `index.lock`，报 `Unable to create .../index.lock` |
+| 7 | **不可用时显式返回 `skipped + reason`**，而不是静默给空 id | 内核以为有了回滚点，实际没有 |
+
+补充约定：
+
+- **范围**：默认快照整个工作区；传 `paths` 时只 `add -- <paths>`（大仓库的轻量模式）。影子仓库会**继承工作区的 `.gitignore`**，但它只排除被忽略的路径——项目若没忽略 `node_modules`，快照就会把它收进去。
+- **恢复只处理文件**。协议里的 `scope`（files/task/both）已移除：会话与任务状态属于内核，由内核先重置自身状态、再调 `checkpoint.restore` 把文件退回去——**壳不该假装能恢复它看不见的东西**。
+- **保留数量**：`beeCode.checkpoint.retention`（默认 50）。压缩保留原 message，因此 `list()` 里的标签不会退化成 `compacted xxxxxxx`。
+- **降级方案**：环境里没有 git 时退化为纯文件快照（能恢复、不能 diff）——⬜ 尚未实现。
 
 ### 10.6 冲突与并发
 
