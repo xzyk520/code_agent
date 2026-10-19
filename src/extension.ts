@@ -1219,7 +1219,7 @@ class Shell {
 
     // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
     this.server.register("fs.read", async (params, ctx) => {
-      await this.ensurePathAccess(params.path, ctx, "main");
+      await this.ensurePathAccess(params.path, ctx, params.role === "subagent" ? "subagent" : "main");
       return fs.read(params, ctx);
     });
     this.server.register("fs.list", (params, ctx) => fs.list(params, ctx));

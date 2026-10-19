@@ -109,6 +109,11 @@ def turn_label(turn: int, note: str = "") -> str:
 
 
 class ShellClient:
+    """壳侧方法封装。
+
+    `role` 会随 `run` / `edit.apply` 一起发给壳——子代理自动获得更严的策略，
+    不需要在工具层重复判断。
+    """
     """所有 `shell.*` RPC 的薄封装。方法名与 README §4.5.1 一一对应。
 
     每个请求都过 `contract.check_shell_call()`：方法名拼错、必填参数漏了、
@@ -136,8 +141,13 @@ class ShellClient:
         }
     )
 
-    def __init__(self, peer: JsonRpcPeer) -> None:
+    def __init__(self, peer: JsonRpcPeer, role: str = "main") -> None:
         self._peer = peer
+        self._role = role
+
+    def with_role(self, role: str) -> "ShellClient":
+        """返回一个使用指定角色的客户端（共享同一个 peer）。"""
+        return ShellClient(self._peer, role=role)
 
     async def _call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0) -> Any:
         payload = params or {}
@@ -147,7 +157,7 @@ class ShellClient:
     # ───────────────────────── 读 ─────────────────────────
 
     async def read_file(self, path: str, start_line: int | None = None, end_line: int | None = None) -> ReadResult:
-        payload: dict[str, Any] = {"path": path}
+        payload: dict[str, Any] = {"path": path, "role": self._role}
         if start_line is not None:
             payload["startLine"] = start_line
         if end_line is not None:
@@ -379,7 +389,7 @@ class ShellClient:
         reason: str | None = None,
         op: str = "write",
     ) -> ApplyResult:
-        payload: dict[str, Any] = {"path": path, "newText": new_text, "op": op}
+        payload: dict[str, Any] = {"path": path, "newText": new_text, "op": op, "role": self._role}
         if expected_version is not None:
             payload["expectedVersion"] = expected_version
         if reason:
@@ -445,7 +455,7 @@ class ShellClient:
         ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
         需要确认时会弹窗。不要用它做只读探测——读文件用 `read_file`。
         """
-        payload: dict[str, Any] = {"command": command}
+        payload: dict[str, Any] = {"command": command, "role": self._role}
         if cwd:
             payload["cwd"] = cwd
         if timeout_ms is not None:

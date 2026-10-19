@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -118,7 +118,9 @@ export interface TextRangeDto {
   endLine: number;   // 1-based, inclusive
 }
 
-export interface FsReadParams { path: string; startLine?: number; endLine?: number }
+export interface FsReadParams {
+  /** main = 主代理；subagent = 子代理（影响工作区外路径的判定） */
+  role?: "main" | "subagent"; path: string; startLine?: number; endLine?: number }
 export interface FsReadResult {
   text: string;
   /** 编辑器文档版本；走磁盘/流式读取时省略（0 会和真实版本 0 混淆） */

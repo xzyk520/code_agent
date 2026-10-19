@@ -153,6 +153,17 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
     )
 
 
+async def spawn_subagent(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """派一个只读子代理。结果只回传结论，不回传它的上下文。"""
+    if ctx.spawn is None:
+        raise RuntimeError("当前 agent 不允许派生子代理")
+    task = str(params.get("task") or "").strip()
+    if not task:
+        raise ValueError("task 不能为空：请写清楚要让子代理查什么")
+    max_steps = int(params.get("max_steps") or 8)
+    return await ctx.spawn(task, max_steps)
+
+
 def _int_or_none(value: Any) -> int | None:
     return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 

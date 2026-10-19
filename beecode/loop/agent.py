@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import re
+import uuid
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -35,6 +36,14 @@ from ..tools import Tool, ToolContext, build_tools, tool_schemas
 
 Notify = Callable[[str, dict[str, Any]], None]
 Propose = Callable[[str, str, str], Awaitable[str]]
+
+#: 子代理的固定前缀：只读、给结论与引用、不复述代码
+_SUBAGENT_PREFIX = (
+    "你是一个只读探索子代理，运行在沙箱化的工具环境中。"
+    "只能用只读工具（读文件/搜索/符号/诊断）；不能修改文件，也不能再派生子代理。"
+    "回答要求：先给结论，再给证据（`path:line` 引用）；不要复述大段代码；"
+    "找不到就明确说找不到，不要编造。"
+)
 
 #: 模型"只说不做"的措辞特征（只在 builder/debugger 模式下用，且只催一次）
 _PROMISE_PATTERN = re.compile(
@@ -79,6 +88,7 @@ class AgentLoop:
         propose: Propose | None = None,
         client_factory: Callable[[Session], OpenAIClient] | None = None,
         log: Callable[[str], None] | None = None,
+        role: str = "main",
     ) -> None:
         self._notify = notify
         self._shell = shell
@@ -86,7 +96,9 @@ class AgentLoop:
         self._propose = propose
         self._client_factory = client_factory or _default_client
         self._log = log or (lambda _msg: None)
-        self._tools: dict[str, Tool] = build_tools()
+        self._role = role
+        # 子代理没有 propose_edit，也没有 spawn_subagent（不允许无限嵌套）
+        self._tools: dict[str, Tool] = build_tools(role)
         self._schemas = tool_schemas(self._tools)
 
     async def run_turn(
@@ -97,6 +109,7 @@ class AgentLoop:
         attachments: list[dict[str, Any]],
         history: list[dict[str, str]],
         summary: str | None,
+        system_override: str | None = None,
     ) -> TurnStats:
         vision = supports_vision(
             str(session.model_config.get("model") or ""),
@@ -105,7 +118,7 @@ class AgentLoop:
         self._log(f"视觉模型：{'是' if vision else '否'}（{session.model_config.get('model', '')}）")
 
         messages = session.build_request_messages(
-            system_prompt(session.mode),
+            system_override or system_prompt(session.mode),
             history=history,
             summary=summary,
             user_text=text,
@@ -113,7 +126,12 @@ class AgentLoop:
             vision=vision,
         )
         client = self._client_factory(session)
-        ctx = ToolContext(shell=self._shell, propose=self._propose or _no_propose, log=self._log)
+        ctx = ToolContext(
+            shell=self._shell,
+            propose=self._propose or _no_propose,
+            log=self._log,
+            spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._role == "main" else None,
+        )
 
         stats = TurnStats()
         repeat: Counter[str] = Counter()
@@ -329,6 +347,59 @@ class AgentLoop:
         })
         answer, _calls, _usage = await self._stream_once(client, messages, session, stats)
         return answer
+
+    # ───────────────────────── 子代理 ─────────────────────────
+
+    async def _spawn(self, task: str, max_steps: int, parent: Session) -> dict[str, Any]:
+        """跑一个只读子代理，只把结论带回来。
+
+        隔离点：
+          - 独立 Session / 独立上下文（它读几十个文件也不会污染主对话）
+          - 只读工具集（没有 propose_edit / spawn_subagent）
+          - 壳侧根据 `role: subagent` 收紧命令与写权限
+          - 取消随父任务一起传播（同一个 asyncio 任务树）
+        """
+        child = Session.create(
+            f"sub_{uuid.uuid4().hex[:8]}",
+            "chat",
+            dict(parent.model_config),
+            parent.api_key,
+        )
+        child_loop = AgentLoop(
+            lambda _method, _params: None,  # 子代理不往 UI 推流，避免刷屏
+            self._shell.with_role("subagent"),
+            config=TurnConfig(
+                max_steps=min(max(1, max_steps), 12),
+                tool_timeout_s=self._config.tool_timeout_s,
+                repeat_limit=self._config.repeat_limit,
+                nudge_limit=1,
+            ),
+            propose=None,
+            client_factory=self._client_factory,
+            log=self._log,
+            role="subagent",
+        )
+        self._log(f"subagent 开始：{task[:100]}")
+        stats = await child_loop.run_turn(
+            child,
+            text=f"任务：{task}",
+            attachments=[],
+            history=[],
+            summary=None,
+            system_override=_SUBAGENT_PREFIX,
+        )
+        answer = ""
+        for message in reversed(child.messages):
+            if message.get("role") == "assistant" and isinstance(message.get("content"), str):
+                answer = str(message["content"])
+                break
+        self._log(f"subagent 结束：steps={stats.steps} tools={stats.tool_calls}")
+        return {
+            "ok": True,
+            "findings": answer[:8000] if answer else "（子代理没有给出结论）",
+            "steps": stats.steps,
+            "toolCalls": stats.tool_calls,
+        }
 
     # ───────────────────────── 通知 ─────────────────────────
 

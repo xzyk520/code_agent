@@ -583,6 +583,7 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | `get_diagnostics` | 只读 | `path?` | LSP 诊断（编译错误、lint） |
 | `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
 | `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?` | 受权限/沙箱约束（§12.4），可能要用户批准 |
+| `spawn_subagent` | 派生 | `task`, `max_steps?` | 只读子代理（独立上下文），只回传结论；仅主代理可用 |
 
 > 与设计稿的差异：暂未提供 `apply_patch`（unified diff）与 `run_test`——前者留作后续（全文提案更简单、冲突检测更可靠），后者等命令执行稳定后再做。
 
@@ -1349,17 +1350,26 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | 没检测到（首次 / 配置变化） | 弹窗问「有 Docker 吗」：有 → 重新检测；没有 → 记录并静默；稍后 → 下次再问 |
 | 没检测到（已问过） | **静默**，按无沙箱策略运行 |
 | 装好 Docker 之后 | 命令「重新检测 Docker 沙箱」，无需重启窗口 |
-#### 12.5.6 子代理与"沙箱内验证"（设计已定，待工具循环）
+#### 12.5.6 子代理（已实现）
 
 ```
-主 agent ── spawn_subagent(task, tools:[read], budget) ──▶ 子 agent（独立上下文，只读）
-                                                              │
-                                                         需要执行 → run（沙箱内）
-                                                              ▼
-                                                  结论 + path:line 引用（不回传原始上下文）
+主 agent ── spawn_subagent(task, max_steps?) ──▶ 子 agent（独立上下文，8 个只读工具）
+                                                      │
+                                                 需要执行 → run（沙箱内）
+                                                      ▼
+                                          结论 + path:line 引用（≤8KB，不回传 transcript）
 ```
 
-三个前提：① 工具循环（M2，未做）；② 权限引擎已能按动作判定（子代理可直接 deny write/run）；③ 沙箱执行器已就绪（主/子代理共用 `run`）。
+落地方式：
+
+| 项 | 实现 |
+| --- | --- |
+| 工具 | `spawn_subagent(task, max_steps?)`，只在**主代理**的工具集里 |
+| 子代理工具集 | 8 个只读工具（无 `propose_edit`、无 `spawn_subagent`）→ **不能无限嵌套** |
+| 上下文 | 独立 `Session`，只把 ≤8KB 的结论回传主代理 |
+| 角色 | 子代理的 `ShellClient` 带 `role: "subagent"`，壳侧策略自动收紧（§12.5.5） |
+| 步数 | 默认 8、上限 12；父轮次 `abort` 会级联取消子代理 |
+| 输出 | 子代理不往 UI 推流（避免刷屏），只在内核日志留痕 |
 
 `run` 返回的 `exitCode/stdout/stderr` 就是"沙箱内验证回路"的原料：测试/构建结果回灌模型，由它决定下一步。
 

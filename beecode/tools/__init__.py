@@ -32,6 +32,8 @@ class ToolContext:
     propose: Callable[[str, str, str], Awaitable[str]]
     #: 写内核日志（stderr）
     log: Callable[[str], None]
+    #: 派生子代理：task, max_steps → 结论（None = 当前 agent 不允许派生子代理）
+    spawn: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
 
 
 ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -59,8 +61,25 @@ def _bool(description: str) -> dict[str, Any]:
     return {"type": "boolean", "description": description}
 
 
-def build_tools() -> dict[str, Tool]:
-    """按名字注册全部工具。顺序即提示词里的顺序（读 → 搜索 → 结构 → 写 → 执行）。"""
+#: 子代理只能用的只读工具（没有 propose_edit，也没有 spawn_subagent）
+READ_ONLY_TOOLS = (
+    "read_file",
+    "list_files",
+    "search_code",
+    "file_outline",
+    "find_symbol",
+    "find_references",
+    "get_diagnostics",
+    "run_command",
+)
+
+
+def build_tools(role: str = "main") -> dict[str, Tool]:
+    """按角色注册工具。
+
+    - main：全部 10 个（含 `spawn_subagent`）
+    - subagent：只读 8 个（`run_command` 由壳侧策略限制为只读命令）
+    """
     from . import builtin
 
     specs = [
@@ -131,6 +150,18 @@ def build_tools() -> dict[str, Tool]:
             ),
         ),
         ToolSpec(
+            "spawn_subagent",
+            "派一个只读子代理去探索代码（独立上下文，只回传结论）。适合大范围搜索/阅读，"
+            "避免污染主对话。子代理不能改文件、不能派孙代理。",
+            _obj(
+                {
+                    "task": _str("给子代理的任务，写清楚要找什么、要回答什么"),
+                    "max_steps": _int("子代理最多几步（默认 8，上限 12）"),
+                },
+                ["task"],
+            ),
+        ),
+        ToolSpec(
             "run_command",
             "在工作区内执行命令（受权限/沙箱约束，可能需要用户批准）。用于跑测试、构建、查看状态。",
             _obj(
@@ -154,9 +185,11 @@ def build_tools() -> dict[str, Tool]:
         "get_diagnostics": builtin.get_diagnostics,
         "propose_edit": builtin.propose_edit,
         "run_command": builtin.run_command,
+        "spawn_subagent": builtin.spawn_subagent,
     }
 
-    return {spec.name: Tool(spec=spec, fn=handlers[spec.name]) for spec in specs}
+    names = [spec.name for spec in specs] if role == "main" else [n for n in READ_ONLY_TOOLS]
+    return {name: Tool(spec=next(s for s in specs if s.name == name), fn=handlers[name]) for name in names}
 
 
 def tool_schemas(tools: dict[str, Tool]) -> list[dict[str, Any]]:

@@ -54,6 +54,13 @@
   - `propose_edit`：读取当前版本 → 登记提案 → 广播 `proposal.changed`（含 additions/deletions/baseVersion）
   - **视觉能力感知**：`beeCode.model.supportsVision`（auto/on/off），非视觉模型把图片降级为文字说明
 
+- **子代理（spawn_subagent）**：
+  - 主代理可派只读子代理探索代码（独立上下文，只回传 ≤8KB 结论）
+  - 子代理工具集 8 个只读工具，**没有** `propose_edit` 与 `spawn_subagent`（不允许无限嵌套）
+  - 子代理的 `role` 透传给壳（`fs.read` / `run` / `edit.apply`），权限自动收紧：
+    工作区外一律拒绝；无 docker 时禁止写与执行非只读命令
+  - 父轮次 abort 会级联取消子代理；默认 8 步、上限 12 步
+
 ### Security
 
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
@@ -187,6 +194,13 @@
   - 工具超时/异常：错误作为 `tool` 消息回灌模型，同时 `ui.tool(error)` 展示给用户（失败不是崩溃）
   - `propose_edit`：读取当前版本 → 登记提案 → 广播 `proposal.changed`（含 additions/deletions/baseVersion）
   - **视觉能力感知**：`beeCode.model.supportsVision`（auto/on/off），非视觉模型把图片降级为文字说明
+
+- **子代理（spawn_subagent）**：
+  - 主代理可派只读子代理探索代码（独立上下文，只回传 ≤8KB 结论）
+  - 子代理工具集 8 个只读工具，**没有** `propose_edit` 与 `spawn_subagent`（不允许无限嵌套）
+  - 子代理的 `role` 透传给壳（`fs.read` / `run` / `edit.apply`），权限自动收紧：
+    工作区外一律拒绝；无 docker 时禁止写与执行非只读命令
+  - 父轮次 abort 会级联取消子代理；默认 8 步、上限 12 步
 
 ### Security
 
