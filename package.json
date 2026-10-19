@@ -102,6 +102,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.confirm.resetRemembered",
+        "title": "清除记住的确认选择",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.session.new",
         "title": "新建会话",
         "category": "Bee Code"

@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -254,8 +254,14 @@ export interface DiffOpenResult { opened: boolean }
 
 export interface ConfirmAskParams {
   question: string;
+  /** 一句解释「为什么要问」——会显示在每个选项下方，别让用户盲点确认 */
   detail?: string;
   options: Array<{ id: string; label: string; description?: string }>;
+  /**
+   * 若提供，用户可以选「记住这次选择」；下次同一 key 直接返回，不再弹窗。
+   * 安全门闸**不要**用它；只用于低风险确认。
+   */
+  rememberKey?: string;
 }
 export interface ConfirmAskResult { choice: string | null }
 

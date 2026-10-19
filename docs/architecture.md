@@ -221,7 +221,7 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | `checkpoint.create` | `label?` / `paths?` | `{ id, files, skipped?, reason? }` | 影子 git 快照（`paths` 为轻量模式） |
 | `checkpoint.restore` | `id` | `{ restored[] }` | 只恢复文件；任务/会话状态由内核合成 |
 | `diff.open` | `path, baseText` | `{}` | 打开 `vscode.diff` 对照 |
-| `confirm.ask` | `question, detail?, options[]` | `{ choice }` | 写入门闸用它问人 |
+| `confirm.ask` | `question, detail?, options[], rememberKey?` | `{ choice }` | 写入门闸用它问人；`detail` 会显示在选项下方 |
 | `secrets.get` | `key` | `{ value }` | 只在会话启动时取一次，不进日志 |
 
 #### 4.5.2 壳 → 内核（用户动作）
@@ -1039,6 +1039,22 @@ turn-61  id e45d3a05 存在: false   ← 连最新的也变了
 | 删除文件 | 开 | 删除类改动单独确认，且强制先落检查点 |
 | 自动 Keep | 关 | 可设延时（对标 `chat.editing.autoAcceptDelay`），倒计时内可撤销 |
 | 全部关闭 | 允许 | 设置项里叫 `unsafe`，UI 上标黄 |
+
+#### 10.7.1 确认框的四个硬要求（`interactionAdapter`）
+
+写入门闸的效果**完全取决于确认框好不好用**。四条要求，缺一条它就会变成"盲点确认"：
+
+| 要求 | 实现 | 不这么做会怎样 |
+| --- | --- | --- |
+| **必须解释"为什么问"** | `detail` 挂到每个 `QuickPickItem.detail`（选中行下方显示） | 用户只看到"是否继续？"，不知道对哪个文件、改多少行 |
+| **必须有关闭路径** | 内核没给否定语义选项时，壳兜底追加「取消」 | 只有一个「继续」按钮的确认框，用户只能盲点 |
+| **必须能被取消** | 接 `ctx.signal` → `CancellationTokenSource` 传给 `showQuickPick` | 内核 `abort` 后弹窗还挂着；用户点了也没意义 |
+| **Esc = 拒绝** | 返回 `{choice: null}` | 把"用户没说 yes"当成同意，等于没有门闸 |
+
+另外两条约定：
+
+- **`rememberKey` 只用于低风险确认**。安全门闸（敏感路径、删除文件）**不要**传它——一次手滑就永久放行。想撤销时用命令 `Bee Code: 清除记住的确认选择`。
+- **密钥白名单**：`secrets.get` 只允许 `beeCode.apiKey.*` 前缀。将来存了别的凭据（GitHub token、MCP key）时，内核也拿不到——"内核不需要"应该由壳来守。
 
 ### 10.8 仍然不执行代码
 

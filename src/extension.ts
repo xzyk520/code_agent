@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { createConfirmAdapter, createSecretAdapter } from "./adapters/interactionAdapter";
+import { clearRememberedChoices, createConfirmAdapter, createSecretAdapter } from "./adapters/interactionAdapter";
 import { createDiagnosticsAdapter } from "./adapters/diagnosticsAdapter";
 import { CheckpointAdapter } from "./adapters/checkpointAdapter";
 import { DiffAdapter } from "./adapters/diffAdapter";
@@ -149,6 +149,10 @@ class Shell {
       regenerateProposal: () => this.regenerateProposal(),
       newSession: () => this.newSession(),
       pickSession: () => this.pickSession(),
+      clearRemembered: () => {
+        clearRememberedChoices(this.context);
+        void vscode.window.showInformationMessage("Bee Code: 已清除记住的确认选择。");
+      },
       pickFiles: () => this.pickFiles(),
       exportDiagnostics: () => this.exportDiagnostics(),
     });
@@ -779,7 +783,7 @@ class Shell {
     const symbols = createSymbolsAdapter(this.log);
     const diagnostics = createDiagnosticsAdapter(this.log);
     const secrets = createSecretAdapter(this.context, this.log);
-    const confirm = createConfirmAdapter(this.log);
+    const confirm = createConfirmAdapter(this.context, this.log);
 
     // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
     this.server.register("fs.read", (params, ctx) => fs.read(params, ctx));
@@ -794,7 +798,7 @@ class Shell {
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));
     this.server.register("secrets.get", (params) => secrets.get(params));
-    this.server.register("confirm.ask", (params) => confirm.ask(params));
+    this.server.register("confirm.ask", (params, ctx) => confirm.ask(params, ctx));
 
     // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
     this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);

@@ -20,6 +20,8 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **确认框修复（协议 v8）**：`detail` 真正显示在选项下方；接 `ctx.signal` 支持取消；无否定选项时兜底追加「取消」；
+  新增 `rememberKey`（可选"记住这次选择"，配套命令「清除记住的确认选择」）；`secrets.get` 加 `beeCode.apiKey.*` 白名单
 - **新增三个检索工具（协议 v7）**：
   `symbols.search`（全工作区按名字找定义，优先 workspace/symbol，无 provider 时 grep+outline 兜底并标注 `source: fallback`）、
   `symbols.references`（executeReferenceProvider，"谁在用它"）、

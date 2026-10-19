@@ -19,6 +19,8 @@ export interface CommandDeps {
   newSession(): Promise<void>;
   /** 从历史会话里挑一个继续 */
   pickSession(): Promise<void>;
+  /** 清除「记住这次选择」里存下的确认项 */
+  clearRemembered(): void;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -54,6 +56,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 
   register("beeCode.files.pick", () => deps.pickFiles());
   register("beeCode.model.configure", () => deps.configureModel());
+  register("beeCode.confirm.resetRemembered", () => deps.clearRemembered());
   register("beeCode.session.new", () => deps.newSession());
   register("beeCode.session.pick", () => deps.pickSession());
   register("beeCode.session.continue", () => deps.continueTurn());

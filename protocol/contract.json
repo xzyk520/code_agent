@@ -1,6 +1,6 @@
 {
-  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 7）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
-  "version": 7,
+  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 8）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
+  "version": 8,
   "shellMethods": {
     "fs.read": { "required": ["path"], "optional": ["startLine", "endLine"], "result": ["text", "version", "totalLines", "startLine", "endLine", "truncated"] },
     "fs.list": { "required": [], "optional": ["glob", "exclude", "maxResults"], "result": ["paths", "truncated"] },
@@ -13,7 +13,7 @@
     "checkpoint.create": { "required": [], "optional": ["label", "paths"], "result": ["id", "files", "skipped", "reason"] },
     "checkpoint.restore": { "required": ["id"], "optional": [], "result": ["restored"] },
     "diff.open": { "required": ["path", "baseText"], "optional": ["title"], "result": ["opened"] },
-    "confirm.ask": { "required": ["question", "options"], "optional": ["detail"], "result": ["choice"] },
+    "confirm.ask": { "required": ["question", "options"], "optional": ["detail", "rememberKey"], "result": ["choice"] },
     "secrets.get": { "required": ["key"], "optional": [], "result": ["value"] }
   },
   "coreMethods": [
