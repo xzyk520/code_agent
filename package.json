@@ -122,6 +122,16 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.model.test",
+        "title": "测试模型连接",
+        "category": "Bee Code"
+      },
+      {
+        "command": "beeCode.model.clearKey",
+        "title": "清除 API Key",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.dev.crashMock",
         "title": "模拟内核崩溃（mock）",
         "category": "Bee Code"
@@ -231,16 +241,22 @@
         },
         "beeCode.model.baseUrl": {
           "type": "string",
+          "scope": "machine",
+          "order": 1,
           "default": "",
           "markdownDescription": "OpenAI 兼容端点，例如 `https://api.deepseek.com/v1`（**不含** `/chat/completions`）。"
         },
         "beeCode.model.model": {
           "type": "string",
+          "scope": "window",
+          "order": 2,
           "default": "",
           "markdownDescription": "模型名，例如 `deepseek-chat`。"
         },
         "beeCode.model.apiKeyId": {
           "type": "string",
+          "scope": "machine",
+          "order": 3,
           "default": "beeCode.apiKey.default",
           "markdownDescription": "`SecretStorage` 里的键名。**密钥本身永不写入 settings.json。**"
         },

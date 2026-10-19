@@ -76,10 +76,10 @@ class Session:
         """组装这一轮发给模型的消息。
 
         顺序（与壳侧 `contextBuilder` 的分层对应）：
-          1. system：模式提示词
-          2. system：早前对话摘要（壳压缩过的 L1）
+          1. system_prompt：模式提示词
+          2. summary：早前对话摘要（壳压缩过的 L1）
           3. history：最近若干条逐字消息（壳裁剪过的 L2）
-          4. user：本轮输入（含附件文本）
+          4. user_text：本轮输入（含附件文本）
         """
         out: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         if summary:

@@ -26,6 +26,10 @@ export interface CommandDeps {
   cancelAcceptAll(): void;
   /** 仅 mock 模式：模拟内核崩溃，验证「内核挂了」的处理路径 */
   crashMock(): void;
+  /** 测试模型端点连通性（GET /models） */
+  testModel(): Promise<void>;
+  /** 清除凭据库里保存的 API Key */
+  clearModelKey(): Promise<void>;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -85,6 +89,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.core.showOutput", () => deps.log.show());
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
   register("beeCode.dev.crashMock", () => deps.crashMock());
+  register("beeCode.model.test", () => deps.testModel());
+  register("beeCode.model.clearKey", () => deps.clearModelKey());
 
   return ids;
 }

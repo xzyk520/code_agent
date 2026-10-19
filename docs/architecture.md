@@ -323,6 +323,18 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | 日志/遥测/崩溃上报 | ❌ | 统一走 `redact()` 过滤（`sk-*` 及 `gsk_`/`ghp_`/`AIza` 等厂商前缀、`Bearer *`、URL query 里的 key/signature、JSON 配置字段）；内核 stderr 同样过滤 |
 | 内存（请求时） | ✅ | 仅存活于发请求的那几毫秒，`AbortSignal` 结束即释放 |
 
+**解析顺序（v0.5 起）**：`SecretStorage` → 环境变量 `BEE_CODE_API_KEY` → 都没有则报「未配置」。
+
+环境变量只作为**兜底**，不替代 SecretStorage：前者对整个进程可见（任何子进程、调试器都能读），所以永远排在显式配置之后。它解决的是"CI / 不想把 key 存进凭据库 / 临时换 key"这类场景。
+
+**设置作用域也是安全边界**：
+
+| 设置 | scope | 原因 |
+| --- | --- | --- |
+| `beeCode.model.baseUrl` | **machine** | 若允许工作区覆盖，一个恶意仓库的 `.vscode/settings.json` 就能把提问、代码片段和密钥发到攻击者端点（而且用户在受信任工作区里不会看到任何提示） |
+| `beeCode.model.apiKeyId` | **machine** | 工作区没有理由改`SecretStorage` 的键名 |
+| `beeCode.model.model` | window | 改模型名只影响回答质量，不改变数据去向 |
+
 `SecretStorage` 的关键性质（决定了它为什么是唯一正确位置）：**落盘加密**、**不参与 Settings Sync**、桌面端底层走 Electron `safeStorage`（即 OS 凭据库）。相反，`contributes.configuration` 写入的 `settings.json` 是**明文且会随 Settings Sync 同步到其他机器/被 dotfiles 仓库提交**——这是「密钥泄露」最常见的来源。
 
 工业界的额外做法（本项目全部采纳，见 [§12](#12-安全与隐私)）：
@@ -1186,7 +1198,7 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 
 ### 12.1 密钥
 
-- 只存 `SecretStorage`，见 [§5.3](#53-密钥存储)。
+- 解析顺序：`SecretStorage` → 环境变量 `BEE_CODE_API_KEY` → 报错；只存 `SecretStorage`（环境变量是兜底，不是替代），见 [§5.3](#53-密钥存储)。
 - **传给内核时只走一次握手**：`apiKey` 通过 Python 子进程的 **stdin** 作为 `initialize` 参数传入，**不放 argv**（`ps` 全机可见）、**不放环境变量**（同用户可读、容易被 `env` 或崩溃转储带进日志）。内核只在内存持有，不落盘。
 - 所有日志走 `redact()`（`src/log.ts`），共 6 条规则：`sk-` 家族、十余种厂商前缀（`gsk_`/`hf_`/`ghp_`/`gho_`/`ghs_`/`github_pat_`/`xox[baprs]-`/`AIza`/`ya29.`/`sk_live_`/`rk_live_`）、AWS `AKIA`/`ASIA`、`Bearer` 头、URL 查询参数（含 `signature`）、JSON/配置字段。每条规则**保留前缀**，日志仍能看出"这里本来有个 token"。
 - **内核 stderr 也过同一条脱敏管道**（`coreStderr()`）：否则 Python 把带 `?api_key=` 的 traceback 打进面板，就等于开了个绕过通道。

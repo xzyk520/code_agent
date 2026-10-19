@@ -20,6 +20,16 @@
   `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
 - 开发环境补装 `httpx`（内核首次真正联网）
 
+### Added
+
+- **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
+  密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
+
+### Security
+
+- `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
+  此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
+
 ### Changed
 
 - **改动落地改为「提案 + 逐文件审批」（协议 v4）**：内核产出修正后的完整文件内容，作为**虚拟文件**预览
@@ -114,6 +124,16 @@
   `loop/agent.py`（单轮循环）、`prompts/`（三模式系统提示）；`chat.send` 真正调模型并流式推送 `ui.delta`，
   `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
 - 开发环境补装 `httpx`（内核首次真正联网）
+
+### Added
+
+- **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
+  密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
+
+### Security
+
+- `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
+  此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
 
 ### Changed
 

@@ -11,7 +11,7 @@ import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands, undeclaredCommands } from "./commands/register";
-import { defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
+import { API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
@@ -22,6 +22,7 @@ import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider
 import { toWorkspaceRelative } from "./paths";
 import { buildContext } from "./contextBuilder";
 import { SessionStore, type TurnStatus } from "./sessionStore";
+import { PROTOCOL_VERSION } from "./protocol";
 import type {
   Attachment,
   ChatSendParams,
@@ -151,6 +152,8 @@ class Shell {
       regenerateProposal: () => this.regenerateProposal(),
       cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
+      testModel: () => this.testModel(),
+      clearModelKey: () => this.clearModelKey(),
       crashMock: () => {
         if (this.core instanceof MockCore) this.core.simulateCrash("用户通过命令触发");
         else void vscode.window.showInformationMessage("Bee Code: 当前内核不是 mock 模式，无法模拟崩溃。");
@@ -172,7 +175,21 @@ class Shell {
         this.config = read.config;
         for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
         this.log.info(`配置已更新：${describeConfig(this.config)}`);
-        // 内核持有 modelConfig 与检查点开关，改配置后直接重启最省心
+
+        // 分流：只改模型相关 → 热更新（不重启进程）；其余（core/pythonPath/checkpoint…）→ 重启
+        if (event.affectsConfiguration("beeCode.model") && this.core) {
+          void this.resolveApiKey().then((resolved) => {
+            if (!this.core) return undefined;
+            return this.core
+              .modelReload({
+                modelConfig: this.config.model,
+                ...(resolved.key ? { apiKey: resolved.key } : {}),
+              })
+              .catch((err: unknown) => this.log.warn(`model.reload 失败: ${err instanceof Error ? err.message : String(err)}`));
+          });
+          this.updateStatus();
+          return;
+        }
         void this.restartCore();
       }),
     );
@@ -380,15 +397,15 @@ class Shell {
         this.updateStatus();
       });
 
-      const apiKey = await this.context.secrets.get(this.config.apiKeyId);
+      const resolvedKey = await this.resolveApiKey();
       const params: InitializeParams = {
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         workspaceRoots: workspaceRoots(),
         modelConfig: this.config.model,
         maxSteps: this.config.maxSteps,
         toolTimeoutMs: this.config.toolTimeoutMs,
         checkpointEnabled: this.config.checkpointEnabled,
-        ...(apiKey ? { apiKey } : {}),
+        ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),
       };
 
       await core.initialize(params);
@@ -638,6 +655,88 @@ class Shell {
     this.panel.setHint(`已附加 ${picked.length} 个文件`);
   }
 
+  /**
+   * 解析 API Key：**SecretStorage 优先，环境变量兜底**。
+   *
+   * 为什么这个顺序：显式配置 > 环境默认。环境变量适合 CI / 不想把 key 存进凭据库的场景；
+   * 但它对整个进程可见，所以永远排在 SecretStorage 之后。
+   */
+  private async resolveApiKey(): Promise<{ key?: string; source: "secret" | "env" | "none" }> {
+    const fromSecret = await this.context.secrets.get(this.config.apiKeyId);
+    if (fromSecret) return { key: fromSecret, source: "secret" };
+    const fromEnv = process.env[API_KEY_ENV]?.trim();
+    if (fromEnv) return { key: fromEnv, source: "env" };
+    return { source: "none" };
+  }
+
+  /** 把 base_url 归一化成 `.../models`（用于连通性自检） */
+  private modelsUrl(baseUrl: string): string | undefined {
+    const base = baseUrl.trim().replace(/\/+$/, "");
+    if (!base) return undefined;
+    if (base.endsWith("/chat/completions")) return base.replace(/\/chat\/completions$/, "/models");
+    if (base.endsWith("/v1")) return `${base}/models`;
+    return `${base}/models`;
+  }
+
+  /** 测试连接：GET {base}/models，把 HTTP 状态翻译成人话 */
+  private async testModel(): Promise<void> {
+    const base = this.config.model.baseUrl;
+    const url = this.modelsUrl(base);
+    if (!url) {
+      void vscode.window.showWarningMessage("Bee Code: 请先配置 base_url。");
+      return;
+    }
+    const { key, source } = await this.resolveApiKey();
+    if (!key) {
+      void vscode.window.showWarningMessage("Bee Code: 还没有 API Key（命令「配置模型」或环境变量 BEE_CODE_API_KEY）。");
+      return;
+    }
+
+    const started = Date.now();
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const elapsed = Date.now() - started;
+      if (!response.ok) {
+        const body = (await response.text()).slice(0, 200);
+        this.log.warn(`模型自检失败：HTTP ${response.status} ${url}（key 来源 ${source}）`);
+        void vscode.window.showWarningMessage(`Bee Code: 连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`);
+        return;
+      }
+      const data = (await response.json()) as { data?: Array<{ id?: string }> };
+      const count = Array.isArray(data.data) ? data.data.length : 0;
+      const hasModel = Array.isArray(data.data) && data.data.some((m) => m.id === this.config.model.model);
+      this.log.info(`模型自检通过：${url}（${count} 个模型，key 来源 ${source}）`);
+      void vscode.window.showInformationMessage(
+        `Bee Code: 连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${this.config.model.model}` : ""}；key 来源：${source === "env" ? "环境变量" : "凭据库"}）`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn(`模型自检异常：${message}`);
+      void vscode.window.showWarningMessage(`Bee Code: 连接失败：${message}`);
+    }
+  }
+
+  /** 清除凭据库里的密钥（环境变量不归我们管） */
+  private async clearModelKey(): Promise<void> {
+    const existing = await this.context.secrets.get(this.config.apiKeyId);
+    if (!existing) {
+      void vscode.window.showInformationMessage("Bee Code: 凭据库里没有密钥（可能在环境变量里）。");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      "确定清除凭据库里保存的 API Key？清掉后需要重新配置（或改用环境变量）。",
+      { modal: true },
+      "清除",
+    );
+    if (confirm !== "清除") return;
+    await this.context.secrets.delete(this.config.apiKeyId);
+    this.log.info("已清除凭据库中的 API Key");
+    void vscode.window.showInformationMessage("Bee Code: 已清除 API Key。");
+  }
+
   private async configureModel(): Promise<void> {
     const baseUrl = await vscode.window.showInputBox({
       title: "Bee Code · 1/3 端点",
@@ -657,16 +756,33 @@ class Shell {
     });
     if (model === undefined) return;
 
+    // 已经配置过就允许"直接回车保持不变"——每次改端点都要重输 key 太烦
+    const existing = await this.resolveApiKey();
+    const keyHint =
+      existing.source === "secret"
+        ? "已存在于凭据库：直接回车保持不变"
+        : existing.source === "env"
+          ? `当前使用环境变量 ${API_KEY_ENV}：直接回车保持不变`
+          : "仅存入 VS Code SecretStorage（OS 凭据库），不会写入 settings.json / 日志 / git";
+
     const apiKey = await vscode.window.showInputBox({
       title: "Bee Code · 3/3 API Key",
-      prompt: "仅存入 VS Code SecretStorage（OS 凭据库），不会写入 settings.json / 日志 / git",
+      prompt: keyHint,
       password: true,
       ignoreFocusOut: true,
-      validateInput: (v) => (v.trim().length < 8 ? "看起来不像有效密钥" : undefined),
+      placeHolder: existing.source === "none" ? "粘贴你的 API Key" : "（回车保持不变）",
+      validateInput: (v) => {
+        const trimmed = v.trim();
+        if (trimmed.length === 0) return existing.source === "none" ? "不能为空" : undefined;
+        return trimmed.length < 8 ? "看起来不像有效密钥" : undefined;
+      },
     });
     if (apiKey === undefined) return;
 
-    await this.context.secrets.store(this.config.apiKeyId, apiKey.trim());
+    const typedKey = apiKey.trim();
+    if (typedKey.length > 0) {
+      await this.context.secrets.store(this.config.apiKeyId, typedKey);
+    }
     const cfg = vscode.workspace.getConfiguration("beeCode");
     await cfg.update("model.baseUrl", baseUrl.trim(), vscode.ConfigurationTarget.Global);
     await cfg.update("model.model", model.trim(), vscode.ConfigurationTarget.Global);
@@ -677,10 +793,11 @@ class Shell {
     this.log.info(`模型已配置：${this.config.model.model} @ ${this.config.model.baseUrl}（key 已入库）`);
     void vscode.window.showInformationMessage("Bee Code: 模型配置完成。");
 
-    // 配置变更会触发 restartCore()，这里不重复调
-    if (this.core) {
+    // 配置变更监听会走 modelReload（不重启进程），这里不重复调用
+    const resolved = await this.resolveApiKey();
+    if (this.core && resolved.key) {
       await this.core
-        .modelReload({ modelConfig: this.config.model, apiKey: apiKey.trim() })
+        .modelReload({ modelConfig: this.config.model, apiKey: resolved.key })
         .catch(() => undefined);
     }
   }
@@ -911,7 +1028,8 @@ class Shell {
     if (!this.config.model.baseUrl) missing.push("base_url");
     if (!this.config.model.model) missing.push("model");
     if (missing.length > 0) return `未配置 ${missing.join(" / ")}：运行「Bee Code: 配置模型」`;
-    return `内核模式：${this.config.coreMode}`;
+    const keySource = process.env[API_KEY_ENV] ? " · 密钥来自环境变量" : "";
+    return `内核模式：${this.config.coreMode}${keySource}`;
   }
 
   /**

@@ -12,6 +12,14 @@ import type { ModelConfigDto, Mode } from "./protocol";
  *   3. **运行时校验**：用户在 settings.json 里手写错了类型，就回退默认值并记录问题，
  *      而不是让 `step > "30"` 这类比较静默出错。
  */
+/**
+ * 密钥环境变量回退名。
+ *
+ * 用途：不想把 key 存在 VS Code 凭据库时（或 CI 里），可以设环境变量；
+ * 优先级低于 SecretStorage（显式配置 > 环境默认）。
+ */
+export const API_KEY_ENV = "BEE_CODE_API_KEY";
+
 export interface ShellConfig {
   coreMode: "python" | "mock";
   pythonPath: string;
