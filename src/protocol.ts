@@ -75,6 +75,23 @@ export const RpcError = {
   DENIED: -32013,
 } as const;
 
+/**
+ * 把适配器异常映射成协议错误码。
+ *
+ * 只有这一份：之前 client / server 各写一遍，改一边忘另一边就会漂移。
+ */
+export function rpcCodeFor(err: unknown): number {
+  const name = err instanceof Error ? err.name : "";
+  switch (name) {
+    case "PathPolicyError":
+      return RpcError.DENIED;
+    case "MethodNotFound":
+      return RpcError.METHOD_NOT_FOUND;
+    default:
+      return RpcError.SHELL_ERROR;
+  }
+}
+
 /** 请求/响应：同时有 `id` 与 `method`。id 为 number 或 string 都算。 */
 export function isRequest(msg: JsonRpcMessage): msg is JsonRpcRequest {
   const candidate = msg as JsonRpcRequest;

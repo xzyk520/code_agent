@@ -83,8 +83,8 @@ export type InboundRequestHandler = (
   ctx: InboundRequestContext,
 ) => Promise<unknown>;
 
-export function cancelledError(): Error {
-  const err = new Error("request cancelled");
+export function cancelledError(message = "request cancelled"): Error {
+  const err = new Error(message);
   err.name = "CancelledError";
   return err;
 }

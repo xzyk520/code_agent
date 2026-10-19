@@ -20,6 +20,10 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **RPC 层修复**：`abort()` 现在会 reject 在飞的 `chat.send`（不再挂 30 分钟、不会出现并发 loop）；
+  `stdin` 写入处理背压（`drain`）；错误码映射收敛到 `protocol.rpcCodeFor`（删掉 client/server 两份拷贝）；
+  `initialize` 超时 20s → 60s 并区分「启动慢」与「版本不匹配」；重复注册 RPC 方法改为抛错；
+  传输层拆成 `src/rpc/transport.ts`（分帧 / 背压 / 退出清理与 RPC 语义分离）
 - **面板修复**：修复「回合结束后助手回复消失」（助手消息现在会写进面板 state，`pushState` 重渲染不再丢内容）；
   `status`（轻量）与 `state`（全量快照）拆分，`setHint/setBusy/setMode` 不再重发整段历史；消息上限 300 条（超出重发一次快照）；
   超长输入截断时给出提示；view 作用域监听器纳入统一释放；HTML id 修正；

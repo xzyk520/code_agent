@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as vscode from "vscode";
 import type { CoreApi, CoreExitHandler, CoreNotificationHandler, InboundRequestHandler } from "../coreApi";
 import { cancelledError } from "../coreApi";
@@ -6,9 +5,9 @@ import type { Logger } from "../log";
 import {
   isRequest,
   isResponse,
-  LineReader,
   PROTOCOL_VERSION,
   RpcError,
+  rpcCodeFor,
   type ChatSendParams,
   type InitializeParams,
   type InitializeResult,
@@ -21,6 +20,7 @@ import {
   type ProposalReadResult,
   type SessionAbortParams,
 } from "../protocol";
+import { ChildTransport } from "./transport";
 
 export interface PythonCoreOptions {
   pythonPath: string;
@@ -31,9 +31,11 @@ export interface PythonCoreOptions {
   logger: Logger;
 }
 
-/** chat.send 可能跑很久（多轮工具调用），给它一个宽松上限 */
-const DEFAULT_TIMEOUT_MS = 120_000;
-const CHAT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
+/** 一轮对话可能跨多轮工具调用，给宽松上限（实现自己决定，不暴露给调用方） */
+const CHAT_TIMEOUT_MS = 30 * 60 * 1000;
+/** Python 冷启动 + import 依赖可能很慢，给足时间 */
+const INITIALIZE_TIMEOUT_MS = 60_000;
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -43,17 +45,18 @@ interface Pending {
 }
 
 /**
- * 真实内核：子进程 + NDJSON JSON-RPC。
+ * 真实内核：子进程 + NDJSON JSON-RPC（双向）。
  *
- * 三件事必须做对，否则会很难查：
- *   1. 残行缓存（一次 data 事件不保证是整数行）
- *   2. 所有 in-flight 请求在进程退出时 reject（否则 UI 永远转圈）
- *   3. 密钥只通过 stdin 的 initialize 报文传入，不碰 argv / 环境变量
+ * 传输细节在 `transport.ts`；这里只负责 RPC 语义：
+ *   - 出站请求跟踪（pending）：超时、进程退出时全部 reject
+ *   - 入站请求处理（inbound）：AbortController + 取消映射
+ *   - 生命周期：start / initialize / shutdown（幂等）/ dispose（同步暴力）
+ *   - 密钥只通过 stdin 的 initialize 报文传入，不碰 argv / 环境变量
  */
 export class PythonCore implements CoreApi {
   readonly kind = "python" as const;
 
-  private child: ChildProcessWithoutNullStreams | undefined;
+  private readonly transport: ChildTransport;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly notificationHandlers = new Set<CoreNotificationHandler>();
@@ -64,10 +67,18 @@ export class PythonCore implements CoreApi {
   /** shutdown 的幂等锚点 */
   private stopping: Promise<void> | undefined;
 
-  constructor(private readonly opts: PythonCoreOptions) {}
+  constructor(private readonly opts: PythonCoreOptions) {
+    this.transport = new ChildTransport({
+      pythonPath: opts.pythonPath,
+      args: opts.args,
+      cwd: opts.cwd,
+      env: opts.env,
+      logger: opts.logger,
+    });
+  }
 
   get alive(): boolean {
-    return this.child !== undefined && this.child.exitCode === null && !this.disposed;
+    return this.transport.alive && !this.disposed;
   }
 
   setRequestHandler(handler: InboundRequestHandler): void {
@@ -75,39 +86,15 @@ export class PythonCore implements CoreApi {
   }
 
   start(): void {
-    if (this.child) return;
+    if (this.transport.started) return;
     this.stopping = undefined; // 允许重启后再次优雅停止
-    const { pythonPath, args, cwd, logger } = this.opts;
-    logger.info(`启动内核: ${pythonPath} ${args.join(" ")} (cwd=${cwd})`);
-
-    const child = spawn(pythonPath, args, {
-      cwd,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      // PYTHONPATH（定位 beecode 包）+ 编码相关；密钥仍走 stdin 报文，不进程环境
-      env: { ...process.env, ...(this.opts.env ?? {}) },
-    });
-    this.child = child;
-
-    child.stdout.setEncoding("utf8");
-    const reader = new LineReader((line) => this.onLine(line));
-    child.stdout.on("data", (chunk: string) => reader.push(chunk));
-
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => logger.coreStderr(chunk));
-
-    child.on("error", (err) => {
-      logger.error(`内核进程启动失败: ${err.message}`);
-      this.failAll(new Error(`内核启动失败：${err.message}`));
-    });
-
-    child.on("exit", (code, signal) => {
-      reader.flush();
-      const reason = signal ? `signal ${signal}` : `exit ${code ?? "?"}`;
-      logger.warn(`内核进程退出（${reason}）`);
-      this.child = undefined;
-      this.failAll(new Error(`内核已退出（${reason}）`));
-      for (const handler of this.exitHandlers) handler(code, reason);
+    this.transport.start({
+      onLine: (line) => this.onLine(line),
+      onError: (err) => this.failAll(new Error(`内核启动失败：${err.message}`)),
+      onExit: (code, reason) => {
+        this.failAll(new Error(`内核已退出（${reason}）`));
+        for (const handler of this.exitHandlers) handler(code, reason);
+      },
     });
   }
 
@@ -115,7 +102,22 @@ export class PythonCore implements CoreApi {
 
   async initialize(params: InitializeParams): Promise<InitializeResult> {
     this.start();
-    const result = (await this.request("initialize", { ...params, protocolVersion: PROTOCOL_VERSION }, 20_000)) as InitializeResult | undefined;
+    let result: InitializeResult;
+    try {
+      result = (await this.request(
+        "initialize",
+        { ...params, protocolVersion: PROTOCOL_VERSION },
+        INITIALIZE_TIMEOUT_MS,
+      )) as InitializeResult;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("RPC 超时")) {
+        throw new Error(
+          `内核在 ${Math.round(INITIALIZE_TIMEOUT_MS / 1000)}s 内没有完成初始化：可能是 Python 启动慢、依赖没装好，或 pythonPath 指错了。原始错误：${message}`,
+        );
+      }
+      throw err;
+    }
     if (!result || result.protocolVersion !== PROTOCOL_VERSION) {
       throw new Error(
         `协议版本不匹配：壳=${PROTOCOL_VERSION}，内核=${result?.protocolVersion ?? "未知"}。请重装扩展或同步 beecode/ipc.py。`,
@@ -125,7 +127,6 @@ export class PythonCore implements CoreApi {
   }
 
   chatSend(params: ChatSendParams): Promise<void> {
-    // 一轮对话可能跨多轮工具调用，给宽松上限（实现自己决定，不暴露给调用方）
     return this.request("chat.send", params, CHAT_TIMEOUT_MS).then(() => undefined);
   }
 
@@ -137,14 +138,24 @@ export class PythonCore implements CoreApi {
     return this.request("proposal.decide", params).then(() => undefined);
   }
 
-  abort(sessionId: string): Promise<void> {
-    // 先取消本地所有在飞的 inbound（适配器），再通知内核
+  /**
+   * 取消当前会话。
+   *
+   * 顺序很重要：
+   *   1. 先 abort 壳侧在飞的入站请求（内核正在等我们干活的那些）
+   *   2. **再 reject 在飞的 `chat.send`**：否则壳会一直等到 30 分钟超时，
+   *      而调用方（extension）已经把 busy 复位了 → 用户可以再发一轮 → 两个 agent loop 并发
+   *   3. 最后通知内核（失败就忽略，进程可能已经不在）
+   */
+  async abort(sessionId: string): Promise<void> {
     for (const [key, controller] of this.inbound) {
       controller.abort();
       this.inbound.delete(key);
     }
+    this.rejectPending("chat.send", cancelledError("用户取消了本轮对话"));
+
     const params: SessionAbortParams = { sessionId };
-    return this.request("session.abort", params, 10_000).then(() => undefined).catch(() => undefined);
+    await this.request("session.abort", params, 10_000).catch(() => undefined);
   }
 
   modelReload(params: ModelReloadParams): Promise<void> {
@@ -161,25 +172,16 @@ export class PythonCore implements CoreApi {
   }
 
   private async doShutdown(): Promise<void> {
-    const child = this.child;
-    if (!child) return;
-    this.disposed = true;
+    if (!this.transport.started) return;
     try {
+      // 先发 shutdown 再置 disposed：否则 request() 会以"内核未运行"直接拒绝，等于没通知
       await this.request("shutdown", {}, 3_000);
     } catch {
       /* 内核可能已崩，忽略 */
     }
-    this.child = undefined;
-    if (child.exitCode === null) {
-      try {
-        child.stdin.end();
-      } catch {
-        /* 管道可能已断 */
-      }
-      setTimeout(() => {
-        if (child.exitCode === null) child.kill();
-      }, 2_000).unref();
-    }
+    this.disposed = true;
+    this.transport.endInput();
+    setTimeout(() => this.transport.kill(), 2_000).unref();
   }
 
   onNotification(handler: CoreNotificationHandler): vscode.Disposable {
@@ -199,20 +201,7 @@ export class PythonCore implements CoreApi {
   dispose(): void {
     this.disposed = true;
     this.failAll(new Error("内核已释放"));
-    const child = this.child;
-    this.child = undefined;
-    if (child && child.exitCode === null) {
-      try {
-        child.stdin.end();
-      } catch {
-        /* 忽略 */
-      }
-      try {
-        child.kill();
-      } catch {
-        /* 进程可能已退出 */
-      }
-    }
+    this.transport.dispose();
     for (const controller of this.inbound.values()) controller.abort();
     this.inbound.clear();
     this.notificationHandlers.clear();
@@ -240,11 +229,7 @@ export class PythonCore implements CoreApi {
         this.opts.logger.warn(`收到非数字 id 的响应（${typeof msg.id}），已忽略`);
         return;
       }
-      this.settle(
-        "error" in msg
-          ? { id: msg.id, error: msg.error }
-          : { id: msg.id, result: msg.result },
-      );
+      this.settle("error" in msg ? { id: msg.id, error: msg.error } : { id: msg.id, result: msg.result });
       return;
     }
     const note = msg as { method?: string; params?: unknown };
@@ -268,7 +253,7 @@ export class PythonCore implements CoreApi {
 
   private async handleInbound(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     if (!this.requestHandler) {
-      this.write({ jsonrpc: "2.0", id, error: { code: RpcError.METHOD_NOT_FOUND, message: "壳未注册请求处理器" } });
+      void this.write({ jsonrpc: "2.0", id, error: { code: RpcError.METHOD_NOT_FOUND, message: "壳未注册请求处理器" } });
       return;
     }
     const controller = new AbortController();
@@ -282,14 +267,14 @@ export class PythonCore implements CoreApi {
           if (controller.signal.aborted) throw cancelledError();
         },
       });
-      this.write({ jsonrpc: "2.0", id, result: result ?? {} });
+      void this.write({ jsonrpc: "2.0", id, result: result ?? {} });
     } catch (err) {
       const isCancel = err instanceof Error && err.name === "CancelledError";
-      this.write({
+      void this.write({
         jsonrpc: "2.0",
         id,
         error: {
-          code: isCancel ? RpcError.SHELL_ERROR : toRpcCode(err),
+          code: isCancel ? RpcError.SHELL_ERROR : rpcCodeFor(err),
           message: err instanceof Error ? err.message : String(err),
         },
       });
@@ -301,7 +286,7 @@ export class PythonCore implements CoreApi {
   // ───────────────────────── 底层 ─────────────────────────
 
   private request(method: string, params: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<unknown> {
-    if (!this.child || this.child.exitCode !== null) {
+    if (!this.transport.alive) {
       return Promise.reject(new Error("内核未运行"));
     }
     const id = this.nextId++;
@@ -309,23 +294,21 @@ export class PythonCore implements CoreApi {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         // 超时也顺手取消内核侧的工作
-        this.notify("$/cancelRequest", { id });
+        void this.notify("$/cancelRequest", { id });
         reject(new Error(`RPC 超时：${method}（${Math.round(timeoutMs / 1000)}s）`));
       }, timeoutMs);
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer, method });
-      this.write({ jsonrpc: "2.0", id, method, params });
+      void this.write({ jsonrpc: "2.0", id, method, params });
     });
   }
 
-  private notify(method: string, params: unknown): void {
-    this.write({ jsonrpc: "2.0", method, params });
+  private notify(method: string, params: unknown): Promise<void> {
+    return this.write({ jsonrpc: "2.0", method, params });
   }
 
-  private write(message: JsonRpcMessage): void {
-    const child = this.child;
-    if (!child || child.stdin.destroyed) return;
-    child.stdin.write(`${JSON.stringify(message)}\n`);
+  private write(message: JsonRpcMessage): Promise<void> {
+    return this.transport.write(message);
   }
 
   private settle(msg: { id: number; result?: unknown; error?: JsonRpcErrorObject }): void {
@@ -340,21 +323,21 @@ export class PythonCore implements CoreApi {
     }
   }
 
+  /** 把某个方法所有在飞请求立刻 reject（用于 abort；避免调用方挂到超时） */
+  private rejectPending(method: string, err: Error): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.method !== method) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      pending.reject(err);
+    }
+  }
+
   private failAll(err: Error): void {
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.reject(err);
       this.pending.delete(id);
     }
-  }
-}
-
-function toRpcCode(err: unknown): number {
-  const name = err instanceof Error ? err.name : "";
-  switch (name) {
-    case "PathPolicyError":
-      return RpcError.DENIED;
-    default:
-      return RpcError.SHELL_ERROR;
   }
 }

@@ -24,7 +24,8 @@ export class ShellServer {
 
   register<K extends ShellMethod>(method: K, handler: ShellHandler<K>): void {
     if (this.handlers.has(method)) {
-      this.logger.warn(`重复注册 RPC 方法: ${method}`);
+      // 重复注册是启动期的编程错误：静默覆盖会让"新 handler 没生效"极难排查
+      throw new Error(`重复注册 RPC 方法: ${method}`);
     }
     // 单次协变断言：对外保持强类型，对内用统一签名存表
     this.handlers.set(method, handler as unknown as ShellHandler<ShellMethod>);
@@ -59,20 +60,5 @@ export class ShellServer {
 
   listed(): ShellMethod[] {
     return [...this.handlers.keys()].sort();
-  }
-}
-
-/** 把适配器异常映射成协议错误码；未知异常用 SHELL_ERROR */
-export function rpcCodeFor(err: unknown): number {
-  const name = err instanceof Error ? err.name : "";
-  switch (name) {
-    case "PathPolicyError":
-      return RpcError.DENIED;
-    case "MethodNotFound":
-      return RpcError.METHOD_NOT_FOUND;
-    case "CancelledError":
-      return RpcError.SHELL_ERROR;
-    default:
-      return RpcError.SHELL_ERROR;
   }
 }
