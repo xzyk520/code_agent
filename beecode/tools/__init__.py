@@ -1,0 +1,169 @@
+"""工具定义与分发。
+
+工具是 loop 的"手"：模型只能通过它们改变世界。
+每个工具必须满足：
+  1. 有清晰的 JSON Schema（模型看得到）
+  2. 返回**紧凑的 dict**（会被塞回上下文，不能太大）
+  3. 出错时抛异常，由 loop 统一转成 tool 消息（不要把异常抛给壳）
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from ..shell import ShellClient
+
+
+@dataclass(slots=True)
+class ToolSpec:
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(slots=True)
+class ToolContext:
+    """执行工具时需要的一切外部能力（由 loop 注入）。"""
+
+    shell: ShellClient
+    #: 生成提案：path, content, summary → proposal id
+    propose: Callable[[str, str, str], Awaitable[str]]
+    #: 写内核日志（stderr）
+    log: Callable[[str], None]
+
+
+ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+@dataclass(slots=True)
+class Tool:
+    spec: ToolSpec
+    fn: ToolFn
+
+
+def _obj(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
+
+
+def _str(description: str) -> dict[str, Any]:
+    return {"type": "string", "description": description}
+
+
+def _int(description: str) -> dict[str, Any]:
+    return {"type": "integer", "description": description}
+
+
+def _bool(description: str) -> dict[str, Any]:
+    return {"type": "boolean", "description": description}
+
+
+def build_tools() -> dict[str, Tool]:
+    """按名字注册全部工具。顺序即提示词里的顺序（读 → 搜索 → 结构 → 写 → 执行）。"""
+    from . import builtin
+
+    specs = [
+        ToolSpec(
+            "read_file",
+            "读取工作区内的文件（可指定行范围）。返回 text / totalLines / 行号范围。",
+            _obj(
+                {
+                    "path": _str("工作区相对路径，例如 src/index.ts"),
+                    "start_line": _int("起始行（1-based，可选）"),
+                    "end_line": _int("结束行（1-based，可选）"),
+                },
+                ["path"],
+            ),
+        ),
+        ToolSpec(
+            "list_files",
+            "列出工作区文件（已过滤 .gitignore / node_modules）。",
+            _obj({"glob": _str('可选 glob，例如 "src/**/*.ts"'), "max_results": _int("最多返回多少个（默认 500）")}),
+        ),
+        ToolSpec(
+            "search_code",
+            "按关键词或正则搜索代码。filesOnly=true 时只返回文件与命中次数（省 token）。",
+            _obj(
+                {
+                    "query": _str("搜索内容"),
+                    "regex": _bool("是否按正则解释"),
+                    "glob": _str("限定文件范围"),
+                    "files_only": _bool("只返回文件列表（召回阶段用）"),
+                    "max_results": _int("最多多少条（默认 50）"),
+                },
+                ["query"],
+            ),
+        ),
+        ToolSpec(
+            "file_outline",
+            "列出某个文件里的函数/类及其行号范围（不读内容）。",
+            _obj({"path": _str("文件路径")}, ["path"]),
+        ),
+        ToolSpec(
+            "find_symbol",
+            "在全工作区按名字查找符号定义。返回 path/name/kind/行范围。",
+            _obj({"query": _str("符号名（支持部分匹配）"), "max_results": _int("最多多少条（默认 30）")}, ["query"]),
+        ),
+        ToolSpec(
+            "find_references",
+            "查找某个符号被引用的位置。",
+            _obj(
+                {"path": _str("文件路径"), "symbol": _str("符号名（如 parseConfig 或 ConfigParser.parse）")},
+                ["path", "symbol"],
+            ),
+        ),
+        ToolSpec(
+            "get_diagnostics",
+            "读取 LSP 诊断（编译错误/告警）。诊断为空不代表代码没问题。",
+            _obj({"path": _str("可选：只看这个文件")}),
+        ),
+        ToolSpec(
+            "propose_edit",
+            "提交一份文件修改提案（用户逐文件审批后才落盘）。content 是**修改后的完整文件内容**。",
+            _obj(
+                {
+                    "path": _str("工作区相对路径"),
+                    "content": _str("修改后的完整文件内容"),
+                    "summary": _str("一句话说明改了什么"),
+                },
+                ["path", "content"],
+            ),
+        ),
+        ToolSpec(
+            "run_command",
+            "在工作区内执行命令（受权限/沙箱约束，可能需要用户批准）。用于跑测试、构建、查看状态。",
+            _obj(
+                {
+                    "command": _str("要执行的命令"),
+                    "cwd": _str("工作区相对目录（可选）"),
+                    "timeout_ms": _int("超时毫秒（默认 120000）"),
+                },
+                ["command"],
+            ),
+        ),
+    ]
+
+    handlers: dict[str, ToolFn] = {
+        "read_file": builtin.read_file,
+        "list_files": builtin.list_files,
+        "search_code": builtin.search_code,
+        "file_outline": builtin.file_outline,
+        "find_symbol": builtin.find_symbol,
+        "find_references": builtin.find_references,
+        "get_diagnostics": builtin.get_diagnostics,
+        "propose_edit": builtin.propose_edit,
+        "run_command": builtin.run_command,
+    }
+
+    return {spec.name: Tool(spec=spec, fn=handlers[spec.name]) for spec in specs}
+
+
+def tool_schemas(tools: dict[str, Tool]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": t.spec.name, "description": t.spec.description, "parameters": t.spec.parameters},
+        }
+        for t in tools.values()
+    ]

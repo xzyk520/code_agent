@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
-from .openai import ChatDelta, ModelError, OpenAIClient, estimate_tokens
+from .openai import ChatDelta, ModelError, OpenAIClient, ToolCall, estimate_tokens
+from .vision import supports_vision
 
-__all__ = ["ChatDelta", "ModelError", "OpenAIClient", "estimate_tokens"]
+__all__ = ["ChatDelta", "ModelError", "OpenAIClient", "ToolCall", "estimate_tokens", "supports_vision"]

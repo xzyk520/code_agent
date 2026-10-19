@@ -288,6 +288,15 @@
           "type": "number",
           "default": 8192
         },
+        "beeCode.model.supportsVision": {
+          "type": "string",
+          "scope": "window",
+          "order": 5,
+          "enum": ["auto", "on", "off"],
+          "enumDescriptions": ["按模型名自动判断", "强制当作视觉模型", "强制当作纯文本模型"],
+          "default": "auto",
+          "markdownDescription": "模型能否接收图片。`auto` 按模型名判断（gpt-4o / claude-3 / gemini / qwen-vl 等）；不是视觉模型时图片会降级成文字说明。"
+        },
         "beeCode.model.supportsTools": {
           "type": "boolean",
           "default": true,

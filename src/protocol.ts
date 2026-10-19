@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -386,6 +386,8 @@ export type ShellMethod = keyof ShellMethodParams;
 export type Mode = "chat" | "builder" | "debugger";
 
 export interface ModelConfigDto {
+  /** 视觉能力：auto=按模型名猜；on/off=用户显式声明 */
+  supportsVision?: "auto" | "on" | "off";
   baseUrl: string;
   model: string;
   temperature?: number;

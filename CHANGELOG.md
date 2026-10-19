@@ -44,6 +44,16 @@
   - 未受信任工作区：只读（不变）
   - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
 
+### Added
+
+- **Agent Loop（M2，协议 v14）**：
+  - 工具调用循环：流式解析 `tool_calls` 分片 → 执行 → 结果回灌 → 继续，直到模型给出最终回答
+  - 9 个内置工具：`read_file` / `list_files` / `search_code` / `file_outline` / `find_symbol` / `find_references` / `get_diagnostics` / `propose_edit` / `run_command`
+  - 守卫：空响应、只说不做、**提前收工**（要改代码却没提案）、重复调用、结果无变化、步数上限
+  - 工具超时/异常：错误作为 `tool` 消息回灌模型，同时 `ui.tool(error)` 展示给用户（失败不是崩溃）
+  - `propose_edit`：读取当前版本 → 登记提案 → 广播 `proposal.changed`（含 additions/deletions/baseVersion）
+  - **视觉能力感知**：`beeCode.model.supportsVision`（auto/on/off），非视觉模型把图片降级为文字说明
+
 ### Security
 
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
@@ -167,6 +177,16 @@
   - 工作区外路径：主代理需审批、子代理一律拒绝（无论有没有 docker）
   - 未受信任工作区：只读（不变）
   - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
+
+### Added
+
+- **Agent Loop（M2，协议 v14）**：
+  - 工具调用循环：流式解析 `tool_calls` 分片 → 执行 → 结果回灌 → 继续，直到模型给出最终回答
+  - 9 个内置工具：`read_file` / `list_files` / `search_code` / `file_outline` / `find_symbol` / `find_references` / `get_diagnostics` / `propose_edit` / `run_command`
+  - 守卫：空响应、只说不做、**提前收工**（要改代码却没提案）、重复调用、结果无变化、步数上限
+  - 工具超时/异常：错误作为 `tool` 消息回灌模型，同时 `ui.tool(error)` 展示给用户（失败不是崩溃）
+  - `propose_edit`：读取当前版本 → 登记提案 → 广播 `proposal.changed`（含 additions/deletions/baseVersion）
+  - **视觉能力感知**：`beeCode.model.supportsVision`（auto/on/off），非视觉模型把图片降级为文字说明
 
 ### Security
 

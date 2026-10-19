@@ -72,6 +72,7 @@ class Session:
         summary: str | None = None,
         user_text: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        vision: bool = False,
     ) -> list[dict[str, Any]]:
         """组装这一轮发给模型的消息。
 
@@ -91,16 +92,38 @@ class Session:
                 out.append({"role": role, "content": text})
         if user_text is not None or attachments:
             # 复用 add_user 的格式化逻辑，但**不写进会话历史**（避免重复：历史由壳维护）
-            formatted = _format_user_content(user_text or "", attachments or [])
+            formatted = _format_user_content(user_text or "", attachments or [], vision=vision)
             out.append({"role": "user", "content": formatted})
         return out
 
 
-def _format_user_content(text: str, attachments: list[dict[str, Any]]) -> str:
+def _format_user_content(
+    text: str,
+    attachments: list[dict[str, Any]],
+    *,
+    vision: bool = False,
+) -> str | list[dict[str, Any]]:
+    """把"用户输入 + 附件"拼成 OpenAI 消息内容。
+
+    - 纯文本附件（代码选区）→ 直接拼进字符串
+    - 图片附件：视觉模型转成 `image_url` 多模态片段；非视觉模型降级成一行文字说明
+    """
     if not attachments:
         return text
+
     blocks: list[str] = []
+    images: list[dict[str, Any]] = []
     for item in attachments:
+        image = item.get("imageBase64")
+        if isinstance(image, str) and image:
+            if vision:
+                mime = item.get("mimeType") or "image/png"
+                images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
+            else:
+                where = item.get("path") or "（粘贴的图片）"
+                blocks.append(f"【图片已省略】{where}：当前模型不支持图像输入")
+            continue
+
         path = item.get("path") or ""
         start = item.get("startLine")
         end = item.get("endLine")
@@ -111,7 +134,11 @@ def _format_user_content(text: str, attachments: list[dict[str, Any]]) -> str:
             where += "（未保存）"
         body = item.get("text") or ""
         blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
-    return "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
+
+    text_part = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
+    if not images:
+        return text_part
+    return [{"type": "text", "text": text_part}, *images]
 
 
 def new_session_id() -> str:

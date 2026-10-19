@@ -512,19 +512,27 @@ system =
 
 ## 7. Agent 内核与循环
 
-### 7.1 循环状态机
+### 7.1 循环状态机（已实现）
 
 ```
-IDLE ──submit──▶ ASSEMBLING ──▶ THINKING ──┬─(tool_calls)──▶ EXECUTING_TOOL ──▶ THINKING
-                                           ├─(final text)──▶ REVIEWING ──▶ DONE
-                                           └─(error)──────▶ RETRY/FAILED
-任意状态 ──cancel──▶ ABORTED（丢弃 sandbox 未提交内容）
-REVIEWING ──approve──▶ APPLYING ──▶ DONE
+用户输入 ──▶ 组装消息（system + 摘要 + 历史 + 本轮）
+                 │
+                 ▼
+          ┌──▶ 调模型（流式，带 tools）──── ui.delta ──▶ 面板
+          │        │
+          │        ├─ 有 tool_calls ──▶ 逐个执行（超时/异常 → tool 消息）
+          │        │                       │
+          │        └───────────────────────┘ 结果回灌，继续
+          │
+          └─ 无 tool_calls ──▶ 守卫检查（空响应/只说不做/提前收工）
+                                   │
+                                   └─▶ 完成：写入会话 + ui.usage
+任意时刻 ──abort──▶ CancelledError 穿透 ──▶ chat.send 返回「本轮已取消」
 ```
 
-```ts
-// beecode/loop/agent.py（示意）
-async def run(session: Session, turn: UserTurn) -> AsyncIterator[LoopEvent]:
+```python
+# 实际实现：beecode/loop/agent.py
+async def run_turn(self, session, *, text, attachments, history, summary) -> TurnStats:
     guard = Guard(session.budget)
     step = 0
     while True:
@@ -562,35 +570,37 @@ async def run(session: Session, turn: UserTurn) -> AsyncIterator[LoopEvent]:
             yield LoopEvent("tool_end", call=call, result=result)
 ```
 
-### 7.2 工具清单
+### 7.2 工具清单（已实现）
 
 | 工具 | 类型 | 主要参数 | 说明 |
 | --- | --- | --- | --- |
-| `list_files` | 只读 | `glob`, `maxDepth`, `includeIgnored?` | 返回工作区文件树（Git-aware） |
-| `read_file` | 只读 | `path`, `startLine?`, `endLine?` | 分片读取，单次上限 400 行，超出提示分段 |
-| `search_code` | 只读 | `query`, `regex?`, `glob?`, `contextLines?` | ripgrep 后端，返回 `路径:行:内容` |
+| `list_files` | 只读 | `glob?`, `max_results?` | 工作区文件树（已过滤 .gitignore/node_modules） |
+| `read_file` | 只读 | `path`, `start_line?`, `end_line?` | 分片读取；单次返回上限 256KB/2000 行，超出标 `truncated` |
+| `search_code` | 只读 | `query`, `regex?`, `glob?`, `files_only?` | `files_only` 用于召回阶段省 token |
 | `file_outline` | 只读 | `path` | 符号大纲（函数/类/方法 + 行号区间） |
-| `get_diagnostics` | 只读 | `path?`, `severity?` | 读 LSP 诊断（编译错误、lint） |
-| `apply_patch` | 提案（不写盘） | `path`, `patch(unified diff)`, `reason` | 唯一改文件入口：算出全文 → 存为提案 → 广播 `proposal.changed` |
-| `create_file` | 写（写盘 + 待审） | `path`, `content`, `reason` | 新建文件；同样进入待审 |
-| `delete_file` | 提案（不写盘） | `path`, `reason` | 删除也走提案：接受后才真正 `deleteFile` |
-| `run_command` | 执行 🧪 | `command`, `cwd?`, `timeoutMs?` | 默认关闭；需 allowlist + 每次审批 |
-| `run_test` | 执行 🧪 | `target`, `framework?` | 识别 jest/pytest/go test 等后执行 |
-| `load_skill` | 元 | `name` | 按需加载技能正文（见 [§13](#13-skill-与-mcp-集成)） |
+| `find_symbol` | 只读 | `query`, `max_results?` | 全工作区按名字找定义（LSP 优先，fallback 文本） |
+| `find_references` | 只读 | `path`, `symbol` | 引用位置（LSP） |
+| `get_diagnostics` | 只读 | `path?` | LSP 诊断（编译错误、lint） |
+| `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
+| `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?` | 受权限/沙箱约束（§12.4），可能要用户批准 |
+
+> 与设计稿的差异：暂未提供 `apply_patch`（unified diff）与 `run_test`——前者留作后续（全文提案更简单、冲突检测更可靠），后者等命令执行稳定后再做。
 
 工具定义要求：**描述写给模型看**（何时用、何时不用、返回什么），**schema 写给校验用**（`additionalProperties: false`），**权限写给审批用**（`kind: 'read' | 'write' | 'exec'` + `readOnlyHint` 类似物）。
 
 ### 7.3 循环守卫（防死循环 / 防烧钱）
 
-| 守卫 | 默认阈值 | 触发行为 |
+| 守卫 | 实际阈值 | 触发行为 |
 | --- | --- | --- |
-| 步数上限 `maxSteps` | 30 | 停止循环，输出「已达步数上限」+ 当前进度摘要 + 继续按钮 |
-| token 预算 `maxTokensPerTask` | 400k | 同上，并给出「本次预计花费」 |
-| 重复动作检测 | 相同 `(tool, args)` 哈希连续 2 次 | 插入纠正提示「你刚做过同样的调用，请换策略」，连续 3 次则停止 |
-| 无进展检测 | 连续 4 步没有新的文件被读取、没有新的待审改动 | 停止并询问用户「是否补充信息」 |
-| 错误熔断 | 同一工具连续失败 3 次 | 禁用该工具本轮，回填「工具不可用，请改用 X」 |
-| 单工具超时 | 30s（命令类可配） | 中止该工具，回填超时错误（不中断整个循环） |
-| 用户中断 | 随时 | `AbortSignal` → 丢弃 sandbox 内容 → 保留已产出文本 |
+| 步数上限 `maxSteps` | 12（可配） | 追加「不要再调工具，基于已有信息收尾」并继续一次；仍超限则停止 |
+| 空响应 | 连续 2 次空文本且无工具调用 | 先催一次；仍空则报错（不静默结束） |
+| 重复动作 | 相同 `(tool, args)` 第 3 次 | 拦截并回填「结果不会变，请换策略」；第 4 次终止本轮 |
+| 结果无变化 | 连续 3 次工具结果哈希相同 | 回填 `no_progress` 错误，要求换策略或总结 |
+| 只说不做 | builder/debugger 且文本含「我将/我会/Let me…」 | 催一次「立即调用工具，或直接给结论」 |
+| 提前收工 | 用户要求改代码但本轮 0 个提案 | 追问「你还没有提交任何修改」，允许一次补提案 |
+| 单工具超时 | `toolTimeoutMs`（默认 60s） | 中止该工具，把 `timeout` 错误回填给模型，并标记 `ui.tool(error)` |
+| 工具异常 | 任意异常 | 捕获后回填 `{error, kind}`；**不中断循环**，模型可改策略 |
+| 用户中断 | 随时 | `task.cancel()` → `CancelledError` 穿透 → `chat.send` 返回「本轮已取消」 |
 
 > 设计要点：守卫要「先提醒、再停止」。直接硬停会让用户觉得模型「卡住了」；先插入一条系统提示纠正策略，往往能自愈。
 

@@ -76,6 +76,7 @@ export function readConfig(): ConfigReadResult {
       temperature: reader.num("model.temperature", 0.2, 0, 2),
       maxOutputTokens: reader.num("model.maxOutputTokens", 8192, 1, 1_000_000),
       supportsTools: reader.bool("model.supportsTools", true),
+      supportsVision: reader.oneOf("model.supportsVision", "auto", ["auto", "on", "off"] as const),
     },
     maxSteps: reader.num("agent.maxSteps", 30, 1, 500),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),

@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import difflib
 import sys
+import uuid
 from typing import Any
 
 from . import __version__
@@ -33,7 +35,7 @@ from .ipc import (
     RpcError,
 )
 from .llm import ModelError
-from .loop import AgentLoop
+from .loop import AgentLoop, TurnConfig
 from .session import Session
 from .shell import ShellClient
 
@@ -44,6 +46,7 @@ _state: dict[str, Any] = {
     "model_config": {},
     "api_key": None,
     "max_steps": 12,
+    "tool_timeout_ms": 60_000,
 }
 
 #: 会话表：sessionId → Session（内存态，不持久化——历史由壳负责）
@@ -79,6 +82,7 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     # 密钥只留在内存里，不落盘、不进日志
     _state["api_key"] = params.get("apiKey")
     _state["max_steps"] = int(params.get("maxSteps") or 12)
+    _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
 
     _log(f"initialize: roots={len(_state['workspace_roots'])} model={_state['model_config'].get('model', '')}")
     return {"protocolVersion": PROTOCOL_VERSION, "coreVersion": __version__}
@@ -134,7 +138,16 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
     history = list(params.get("history") or [])
     summary = params.get("summary")
 
-    loop = AgentLoop(_notify)
+    loop = AgentLoop(
+        _notify,
+        _shell(),
+        config=TurnConfig(
+            max_steps=int(_state.get("max_steps") or 12),
+            tool_timeout_s=max(5.0, float(_state.get("tool_timeout_ms") or 60_000) / 1000.0),
+        ),
+        propose=_propose,
+        log=_log,
+    )
     task = asyncio.create_task(
         loop.run_turn(
             session,
@@ -142,7 +155,6 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             attachments=attachments,
             history=history,
             summary=summary if isinstance(summary, str) else None,
-            max_steps=int(_state.get("max_steps") or 12),
         )
     )
     _tasks[session_id] = task
@@ -172,6 +184,66 @@ async def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, An
 
 
 # ───────────────────────── 提案 ─────────────────────────
+
+
+def _shell() -> ShellClient:
+    shell = _state.get("shell")
+    if shell is None:
+        raise RpcError(SHELL_ERROR, "内核尚未就绪")
+    return shell
+
+
+async def _propose(path: str, content: str, summary: str) -> str:
+    """把模型给出的完整文件内容登记为提案，并通知壳。
+
+    - 先读一次当前文件拿 `version`：接受时作为 expectedVersion，防止覆盖用户新编辑
+    - additions/deletions 用于卡片展示
+    """
+    proposal_id = f"p_{uuid.uuid4().hex[:10]}"
+    base_text = ""
+    base_version = None
+    try:
+        current = await _shell().read_file(path)
+        base_text = current.text
+        base_version = current.version
+    except Exception as exc:  # noqa: BLE001 - 新文件或读取失败都不该阻断提案
+        _log(f"proposal: 读取 {path} 失败（按新文件处理）：{exc}")
+
+    additions, deletions = _count_changes(base_text, content)
+    _PROPOSALS[proposal_id] = {
+        "path": path,
+        "text": content,
+        "baseVersion": base_version,
+        "summary": summary,
+    }
+    _notify(
+        "proposal.changed",
+        {
+            "added": [
+                {
+                    "id": proposal_id,
+                    "path": path,
+                    "baseVersion": base_version,
+                    "additions": additions,
+                    "deletions": deletions,
+                    "status": "pending",
+                    "summary": summary or None,
+                }
+            ]
+        },
+    )
+    _log(f"proposal {proposal_id}: {path} (+{additions}/-{deletions})")
+    return proposal_id
+
+
+def _count_changes(old: str, new: str) -> tuple[int, int]:
+    additions = deletions = 0
+    for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0):
+        if line.startswith("+") and not line.startswith("+++"):
+            additions += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions += 1
+    return additions, deletions
 
 
 def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:

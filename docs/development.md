@@ -63,7 +63,9 @@ bee-code/
 │  ├─ __main__.py                # ✅ 入口 + 方法注册 + chat.send（M1 单轮）+ abort + proposal.read/decide
 │  ├─ session.py                 # ✅ 会话内存态：消息、模式、模型配置、附件格式化
 │  ├─ llm/openai.py              # ✅ OpenAI 兼容流式客户端（SSE、错误翻译、token 估算）
-│  ├─ loop/agent.py              # ✅ M1 单轮循环：调模型 → 流式 ui.delta → ui.usage（工具循环待 M2）
+│  ├─ loop/agent.py              # ✅ M2 工具循环：tool_calls → 执行 → 回灌 + 守卫 + 视觉感知
+│  ├─ tools/builtin.py           # ✅ 9 个内置工具（读/搜/符号/诊断/提案/执行）
+│  ├─ llm/vision.py              # ✅ 视觉能力判定（auto 按模型名，on/off 可强制）
 │  ├─ prompts/__init__.py        # ◐ 三模式系统提示（短版，待按 §6 扩写）
 │  ├─ ipc.py                     # ✅ JSON-RPC 对端：分发、超时、$·cancelRequest、BOM 容错
 │  ├─ contract.py                # ✅ 读 protocol/contract.json，发 RPC 前校验方法名与参数

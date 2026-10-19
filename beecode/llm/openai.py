@@ -5,7 +5,8 @@
 约定：
   - `base_url` 可以是 `https://api.openai.com/v1`（自动补 `/chat/completions`），
     也可以直接给完整的 `.../chat/completions` 地址。
-  - 流式增量按 `choices[0].delta.content` 取；`[DONE]` 结束。
+  - 流式增量按 `choices[0].delta.content` 取；工具调用按 `delta.tool_calls` 分片累积；
+    `[DONE]` 结束。
   - 任何失败都抛 `ModelError`（消息面向用户，不含堆栈）。
 """
 
@@ -28,12 +29,23 @@ class ModelError(RuntimeError):
 
 
 @dataclass(slots=True)
+class ToolCall:
+    """模型请求的一次工具调用（分片已经拼好）。"""
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(slots=True)
 class ChatDelta:
-    """流式事件：增量文本 / 结束原因 / 用量（三者都可能为空）。"""
+    """流式事件：增量文本 / 结束原因 / 用量 / 工具调用（其余都可能为空）。"""
 
     text: str = ""
     finish_reason: str | None = None
     usage: dict[str, int] | None = None
+    #: 只在流结束时出现一次（参数已拼完整）
+    tool_calls: list[ToolCall] | None = None
 
 
 class OpenAIClient:
@@ -84,6 +96,7 @@ class OpenAIClient:
         }
         if tools:
             payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         if temperature is not None:
             payload["temperature"] = temperature
 
@@ -101,9 +114,14 @@ class OpenAIClient:
                         body = (await response.aread()).decode("utf-8", "replace")[:500]
                         raise ModelError(_explain_http_error(response.status_code, body))
 
+                    calls: dict[int, dict[str, str]] = {}
                     async for line in response.aiter_lines():
-                        for delta in _parse_sse_line(line):
+                        for delta in _parse_sse_line(line, calls):
                             yield delta
+
+                    finished = _finish_calls(calls)
+                    if finished:
+                        yield ChatDelta(tool_calls=finished)
         except httpx.TimeoutException as exc:
             raise ModelError(f"模型响应超时（{READ_TIMEOUT:.0f}s）：{exc}") from exc
         except httpx.HTTPError as exc:
@@ -124,7 +142,7 @@ def _explain_http_error(status: int, body: str) -> str:
     return f"模型返回 HTTP {status}{hint}：{body}"
 
 
-def _parse_sse_line(line: str) -> list[ChatDelta]:
+def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDelta]:
     """解析一行 SSE。非数据行、心跳、`[DONE]` 都返回空列表。"""
     if not line or not line.startswith("data:"):
         return []
@@ -155,11 +173,41 @@ def _parse_sse_line(line: str) -> list[ChatDelta]:
         choice = choices[0] or {}
         delta = choice.get("delta") or {}
         text = delta.get("content")
-        finish = choice.get("finish_reason")
         if isinstance(text, str) and text:
             out.append(ChatDelta(text=text))
+
+        # 工具调用分片：index / id / function.name / function.arguments 都可能分批到达
+        for item in delta.get("tool_calls") or []:
+            index = int(item.get("index") or 0)
+            slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            if item.get("id"):
+                slot["id"] = str(item["id"])
+            function = item.get("function") or {}
+            if function.get("name"):
+                slot["name"] = str(function["name"])
+            if function.get("arguments"):
+                slot["arguments"] += str(function["arguments"])
+
+        finish = choice.get("finish_reason")
         if finish:
             out.append(ChatDelta(finish_reason=str(finish)))
+    return out
+
+
+def _finish_calls(calls: dict[int, dict[str, str]]) -> list[ToolCall]:
+    """把累积的分片整理成有序的工具调用列表（缺 id 时补一个稳定的假 id）。"""
+    out: list[ToolCall] = []
+    for index in sorted(calls):
+        slot = calls[index]
+        if not slot["name"]:
+            continue
+        out.append(
+            ToolCall(
+                id=slot["id"] or f"call_{index}",
+                name=slot["name"],
+                arguments=slot["arguments"] or "{}",
+            )
+        )
     return out
 
 
