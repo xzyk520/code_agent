@@ -46,6 +46,8 @@ class GrepHit:
     line: int
     col: int
     text: str
+    count: int | None = None
+    context: str | None = None
 
 
 @dataclass(slots=True)
@@ -181,15 +183,20 @@ class ShellClient:
         glob: str | None = None,
         context_lines: int = 0,
         max_results: int = 200,
+        case_sensitive: bool = False,
+        exclude: str | None = None,
     ) -> list[GrepHit]:
         payload: dict[str, Any] = {
             "query": query,
             "regex": regex,
             "contextLines": context_lines,
             "maxResults": max_results,
+            "caseSensitive": case_sensitive,
         }
         if glob:
             payload["glob"] = glob
+        if exclude:
+            payload["exclude"] = exclude
         result = await self._call("search.grep", payload)
         return [GrepHit(**hit) for hit in result.get("hits", [])]
 
@@ -200,6 +207,8 @@ class ShellClient:
         regex: bool = False,
         glob: str | None = None,
         max_results: int = 200,
+        case_sensitive: bool = False,
+        exclude: str | None = None,
     ) -> dict[str, Any]:
         """召回模式：只返回「哪些文件命中、各几次」`{files, truncated}`。
 
@@ -210,9 +219,12 @@ class ShellClient:
             "regex": regex,
             "maxResults": max_results,
             "filesOnly": True,
+            "caseSensitive": case_sensitive,
         }
         if glob:
             payload["glob"] = glob
+        if exclude:
+            payload["exclude"] = exclude
         return dict(await self._call("search.grep", payload))
 
     async def outline(self, path: str) -> list[Symbol]:

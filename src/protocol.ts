@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -130,9 +130,29 @@ export interface SearchGrepParams {
   maxResults?: number;
   /** 只返回「哪些文件命中、各几次」，不返回行文本（召回阶段用，token 省一个数量级） */
   filesOnly?: boolean;
+  /** 区分大小写（默认 false：代码搜索通常不区分，但找常量/类型名时需要开） */
+  caseSensitive?: boolean;
+  /** `null` = 完全不过滤（透传 findFiles）；省略 = 默认排除 */
+  exclude?: string | null;
 }
-export interface GrepHit { path: string; line: number; col: number; text: string }
-export interface GrepFileHit { path: string; matches: number }
+export interface GrepHit {
+  path: string;
+  line: number;
+  col: number;
+  /** 命中行原文（裸行，不含行号前缀） */
+  text: string;
+  /** 这一行里命中了多少次（>1 时才返回） */
+  count?: number;
+  /** 上下文片段（`contextLines > 0` 时返回，带行号与 ▶ 标记） */
+  context?: string;
+}
+export interface GrepFileHit {
+  path: string;
+  /** 命中次数；达到单文件上限时按上限记 */
+  matches: number;
+  /** true = 该文件命中数超过统计上限（`matches` 只是下限） */
+  capped?: boolean;
+}
 export interface SearchGrepResult {
   hits: GrepHit[];
   /** `filesOnly: true` 时返回：文件 + 命中次数（不含行文本，省 token） */

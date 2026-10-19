@@ -20,6 +20,9 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **检索器加固（协议 v9）**：正则长度上限 300 / 嵌套量词启发式拒绝 / 单行匹配上限 2000 字符 / 整体 5 秒预算；
+  新增 `caseSensitive` 与 `exclude`；`hits[].text` 统一为裸行（上下文移到 `context`、同行多次匹配记 `count`）；
+  `filesOnly` 的计数不再被单行上限误伤，超过 1000 次的文件标 `capped`；结果按路径+行号排序保证可复现
 - **提案正文缓存改为事件失效 + LRU**：去掉 30 秒 TTL；`upsert`（内核更新提案）时立即丢弃该 id 的缓存，
   容量上限 3 条 / 8 MB（LRU 淘汰），接受/拒绝后释放
 - **提案面板修复**：`stale` 提案不再「凭空消失」（灰色显示、只能查看/丢弃）；同路径新提案自动把旧目标为失效；
