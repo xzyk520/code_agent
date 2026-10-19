@@ -210,8 +210,8 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 
 | 方法 | 参数 | 返回 | 说明 |
 | --- | --- | --- | --- |
-| `fs.read` | `path, startLine?, endLine?` | `{ text, version }` | 优先用编辑器里的**未保存**内容 |
-| `fs.list` | `glob, exclude?, maxResults?` | `{ paths[] }` | 壳合并 `files.exclude` + `.gitignore` |
+| `fs.read` | `path, startLine?, endLine?` | `{ text, version?, totalLines?, startLine, endLine, truncated }` | 优先用编辑器里的**未保存**内容 |
+| `fs.list` | `glob, exclude?, maxResults?` | `{ paths[], truncated }` | 先多取再过滤（避免被忽略文件吃满配额）；壳合并 `files.exclude` + `.gitignore` |
 | `search.grep` | `query, regex?, glob?, contextLines?` | `{ hits[{path,line,col,text}] }` | 壳内跑 ripgrep |
 | `symbols.outline` | `path` | `{ symbols[] }` | `executeDocumentSymbolProvider` |
 | `diagnostics.get` | `path?` / `minSeverity?` / `maxItems?`（默认 200，上限 2000）/ `includeIgnored?` | `{ items[], total, truncated }`；每条含 `code`（`TS2322` 等）与 1-based 行列 | `languages.getDiagnostics`，按严重度排序、默认过滤 `node_modules`/`.git`/`.gitignore` |
@@ -620,6 +620,56 @@ UI 有三处：
 - **不做**默认的向量索引：全量 embedding 有索引成本、陈旧问题和「把私钥/密钥文件也塞进向量库」的隐私风险。业界两种主流替代是 **agentic search**（Claude Code / Codex CLI / Cline：只给检索工具，让模型自己决定读什么）和 **结构化 repo map**（Aider：只把符号与引用图压成骨架，不整库向量化）。本项目优先走 agentic search 为主、repo map 为辅。🧪 向量检索作为可选增强（本地 embedding 模型），默认关闭，见 [§14](#14-工业界参考) 的对比。
 - Aider 的 **repo map** 思路（tree-sitter 抽取符号 + 引用图 + 图排序压到预算内）值得借鉴：它把「整个仓库的结构」压成 1~4k token 的骨架，对「跨文件改一处」类任务性价比很高。🔬 M2 之后作为 `file_outline` 的批量版本引入。
 
+### 8.2.1 读文件：按「这次读多少」限流，而不是按「文件多大」拒绝
+
+v0.4 起把闸门从"文件大小"挪到了"单次返回量"，因为用户的目标往往是**读大文件里的某几行/某个函数**：
+
+| 层 | 阈值 | 作用 |
+| --- | --- | --- |
+| 整文件大小 | 512 KB | 只决定**走哪条路径**：≤512KB 整份打开（能拿 `version`、能看到未保存内容）；>512KB 改流式按行读 |
+| 单次返回字节 | 256 KB | 硬闸门：无论文件多大，一条工具结果不会超过它 |
+| 单次返回行数 | 2000 行 | 同上，防止"一行都没有但行数极多"的文件 |
+| 二进制探测 | 前 8 KB 含 NUL | 直接拒绝，避免把乱码塞进上下文 |
+
+流式读的实现要点：`createReadStream` + `readline`，**读到 `endLine` 就停**。
+所以"在 500 MB 日志里读第 5000–5010 行"只占十几 KB 内存，返回 3 行、约 150 字节（实测）。
+
+返回值现在带三个可用字段：
+
+```ts
+{ text, version?, totalLines?, startLine, endLine, truncated }
+```
+
+- `version` 只在"编辑器文档"路径存在（磁盘读取省略——`0` 会和真实版本 0 混淆）
+- `totalLines` 在流式读取没到文件尾时**未知**（省略），不要假设它一定有
+- `truncated` 为 true 时，调用方应改用更窄的行范围，而不是以为文件就这么点内容
+
+### 8.2.2 在超大文件里读一个函数：先定位，再按范围读
+
+**不要猜行号。** 推荐的两步流程（也是 Aider/Claude Code 的做法：先给结构，再精确读）：
+
+```
+1) symbols.outline(path) → [{ name, kind, startLine, endLine, container }, …]
+   从里面挑目标符号（支持 "ConfigParser.parse" 这种带容器的路径）
+2) fs.read(path, startLine, endLine) → 只读那个函数
+```
+
+内核侧已经封装成一行：
+
+```python
+result = await shell.read_symbol("src/huge.ts", "parseConfig")
+# 内部：outline → 精确匹配 / 后缀匹配 → 按 range 读 → 返回 ReadResult（含 truncated）
+```
+
+三条配套建议：
+
+| 场景 | 做法 |
+| --- | --- |
+| 用户说"看看 `parseConfig` 怎么实现的" | `read_symbol`，一次拿到函数体 |
+| 用户只给了一个模糊描述 | 先 `outline` 把候选符号列表给模型，让它选，再读 |
+| 函数体本身 > 2000 行（罕见） | 返回 `truncated: true`，再按 `startLine` 续读下一段 |
+
+这样即使文件有十万行，进入上下文的也只有目标函数那几十行——**上下文成本由"你要看什么"决定，而不是"文件多大"**。
 ### 8.3 上下文预算
 
 ```ts
@@ -1099,7 +1149,7 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 
 - 所有路径 `path.resolve` 后必须 `startsWith(workspaceRoot)`，拒绝 `..` 穿越与符号链接逃逸。
 - 默认拒绝写入：`.git/**`、`node_modules/**`、`.env*`、`*.pem`、`*.key`、`id_rsa*`、`.beecode/secrets*`。
-- 读取大文件截断（> 512KB 拒绝，> 100KB 只给大纲 + 片段）。
+- 读取大文件：> 512KB 走流式按行读（不再整体拒绝）；单次返回上限 256KB / 2000 行，超出标 `truncated`。
 - 忽略规则三层合并：内置默认 → `.gitignore` → 用户 `beeCode.files.exclude`。
 
 ### 12.4 命令执行

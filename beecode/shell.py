@@ -21,8 +21,15 @@ from .ipc import JsonRpcPeer
 @dataclass(slots=True)
 class ReadResult:
     text: str
-    version: int
-    total_lines: int
+    version: int | None
+    total_lines: int | None
+    start_line: int
+    end_line: int
+    truncated: bool
+
+    @property
+    def line_count(self) -> int:
+        return self.end_line - self.start_line + 1
 
 
 @dataclass(slots=True)
@@ -117,18 +124,52 @@ class ShellClient:
         if end_line is not None:
             payload["endLine"] = end_line
         result = await self._call("fs.read", payload)
+        version = result.get("version")
+        total = result.get("totalLines")
         return ReadResult(
             text=result.get("text", ""),
-            version=int(result.get("version", 0)),
-            total_lines=int(result.get("totalLines", 0)),
+            version=int(version) if isinstance(version, (int, float)) else None,
+            total_lines=int(total) if isinstance(total, (int, float)) else None,
+            start_line=int(result.get("startLine", 1)),
+            end_line=int(result.get("endLine", 1)),
+            truncated=bool(result.get("truncated", False)),
         )
 
     async def list_files(self, glob: str = "**/*", exclude: str | None = None, max_results: int = 5000) -> list[str]:
+        """只返回路径列表（需要知道是否被截断时用 `list_files_result`）。"""
+        result = await self.list_files_result(glob, exclude=exclude, max_results=max_results)
+        return list(result.get("paths", []))
+
+    async def read_symbol(self, path: str, symbol: str) -> ReadResult:
+        """在（可能很大的）文件里读**一个函数/类**：先 outline 定位，再按行范围读。
+
+        推荐姿势，避免让模型猜行号：
+            symbols.outline(path) → 找到 name 匹配（或 `Container.name` 后缀匹配）的符号
+            fs.read(path, start_line, end_line)
+
+        匹配规则：完全相等优先；否则按 `.` 后缀匹配（`ConfigParser.parse` 可简写 `parse`）。
+        """
+        symbols = await self.outline(path)
+        wanted = symbol.strip()
+        if not wanted:
+            raise ValueError("symbol 不能为空")
+
+        exact = [s for s in symbols if s.name == wanted]
+        suffix = [s for s in symbols if s.name != wanted and wanted.endswith("." + s.name)]
+        candidates = exact or suffix
+        if not candidates:
+            names = ", ".join(sorted({s.name for s in symbols})[:20]) or "（该文件没有符号信息）"
+            raise ValueError(f"在 {path} 里找不到符号 {symbol}；候选：{names}")
+
+        target = candidates[0]
+        return await self.read_file(path, target.start_line, target.end_line)
+    async def list_files_result(
+        self, glob: str = "**/*", exclude: str | None = None, max_results: int = 5000
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {"glob": glob, "maxResults": max_results}
         if exclude is not None:
             payload["exclude"] = exclude
-        result = await self._call("fs.list", payload)
-        return list(result.get("paths", []))
+        return dict(await self._call("fs.list", payload))
 
     async def grep(
         self,

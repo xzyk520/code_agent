@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -101,10 +101,26 @@ export interface TextRangeDto {
 }
 
 export interface FsReadParams { path: string; startLine?: number; endLine?: number }
-export interface FsReadResult { text: string; version: number; totalLines: number }
+export interface FsReadResult {
+  text: string;
+  /** 编辑器文档版本；走磁盘/流式读取时省略（0 会和真实版本 0 混淆） */
+  version?: number;
+  /** 总行数；流式读取没读到文件尾时可能未知 */
+  totalLines?: number;
+  /** 本次实际返回的行范围（1-based） */
+  startLine: number;
+  endLine: number;
+  /** 是否因为单次上限被截断（行数或字节） */
+  truncated: boolean;
+}
 
-export interface FsListParams { glob?: string; exclude?: string; maxResults?: number }
-export interface FsListResult { paths: string[] }
+export interface FsListParams {
+  glob?: string;
+  /** `null` = 完全不过滤（透传给 findFiles）；省略 = 用默认排除 */
+  exclude?: string | null;
+  maxResults?: number;
+}
+export interface FsListResult { paths: string[]; truncated: boolean }
 
 export interface SearchGrepParams {
   query: string;

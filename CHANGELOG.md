@@ -20,6 +20,11 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **读文件改为按"返回量"限流**：文件 >512KB 不再整体拒绝，改流式按行读（只读到 `endLine`，内存与文件大小无关）；
+  单次返回上限 256KB / 2000 行，超出标 `truncated`；返回 `startLine/endLine`；二进制（前 8KB 含 NUL）直接拒绝；
+  `version` 改为可选（磁盘读取不再返回误导性的 0）
+- **`fs.list` 先多取再过滤**：修复"前 N 个都被 `.gitignore` 忽略 → 返回空列表"；新增 `truncated`
+- **`shell.read_symbol(path, symbol)`**：先 `symbols.outline` 定位再按行范围读，大文件里读单个函数的推荐姿势
 - **协议 v5**：`chat.send` 新增可选 `history[]`，重载后「继续」时可带上上下文
 - **协议 v3**：`diagnostics.get` 支持 `minSeverity` / `maxItems` / `includeIgnored`，返回 `{items, total, truncated}`；
   每条诊断新增 `code`（`TS2322` 等）与 1-based 列号
