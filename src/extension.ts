@@ -497,9 +497,16 @@ class Shell {
         text: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      if (this.assistantBuffer.trim()) {
+        const text = this.assistantBuffer;
+        // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
+        this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text });
+        this.remember("assistant", text);
+        this.assistantBuffer = "";
+      }
       this.setBusy(false);
       this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
-      void this.sessions.updateStatus(this.sessionId, "thinking");
+      void this.sessions.updateStatus(this.sessionId, this.turn);
       this.panel.pushState();
     }
   }

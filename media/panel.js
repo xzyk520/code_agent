@@ -28,8 +28,8 @@
     hint: must("hint", HTMLElement),
     send: must("send", HTMLButtonElement),
     stop: must("stop", HTMLButtonElement),
-    keepAll: must("keepAll", HTMLButtonElement),
-    undoAll: must("undoAll", HTMLButtonElement),
+    acceptAll: must("acceptAll", HTMLButtonElement),
+    rejectAll: must("rejectAll", HTMLButtonElement),
   };
 
   /** @type {NodeListOf<HTMLButtonElement>} */
@@ -176,8 +176,8 @@
 
   el.send.addEventListener("click", send);
   el.stop.addEventListener("click", () => post({ type: "stop" }));
-  el.keepAll.addEventListener("click", () => post({ type: "acceptAll" }));
-  el.undoAll.addEventListener("click", () => post({ type: "rejectAll" }));
+  el.acceptAll.addEventListener("click", () => post({ type: "acceptAll" }));
+  el.rejectAll.addEventListener("click", () => post({ type: "rejectAll" }));
 
   for (const button of modeButtons) {
     button.addEventListener("click", () => {
@@ -214,8 +214,24 @@
         el.hint.textContent = next.hint || "";
         break;
       }
+      case "status": {
+        // 轻量状态：绝不重渲染消息列表（否则流式中的回复会被清掉）
+        state.mode = /** @type {Mode} */ (msg.mode);
+        state.busy = Boolean(msg.busy);
+        renderMode();
+        renderBusy();
+        el.hint.textContent = String(msg.hint ?? "");
+        break;
+      }
       case "message": {
         const message = /** @type {ChatMessage} */ (msg.message);
+        if (message.role === "assistant" && streamingNode) {
+          // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
+          streamingNode.textContent = message.text;
+          clearStreaming();
+          break;
+        }
+        if (message.role === "user") clearStreaming();
         addMessage(message.role, message.text);
         break;
       }
@@ -226,16 +242,8 @@
         el.messages.scrollTop = el.messages.scrollHeight;
         break;
       }
-      case "final": {
-        clearStreaming();
-        break;
-      }
-      case "busy": {
-        state.busy = Boolean(msg.busy);
-        if (state.busy) clearStreaming();
-        renderBusy();
-        break;
-      }
+
+
       case "attachments": {
         renderAttachments(/** @type {Attachment[]} */ (msg.items) || []);
         break;

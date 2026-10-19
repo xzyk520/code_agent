@@ -20,6 +20,9 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **面板修复**：修复「回合结束后助手回复消失」（助手消息现在会写进面板 state，`pushState` 重渲染不再丢内容）；
+  `status`（轻量）与 `state`（全量快照）拆分，`setHint/setBusy/setMode` 不再重发整段历史；消息上限 300 条（超出重发一次快照）；
+  超长输入截断时给出提示；view 作用域监听器纳入统一释放；`aria-live` 与 HTML id 修正
 - **mock 内核修复**：取消改为即时（可取消的 sleep，不再等一个分片周期）；流式分片按 code point 切（emoji 不再被劈成孤立代理）；
   通知分发容错（一个 handler 抛错不影响其他）；补 `ui.tool` 事件（用于验证"重载时停在工具调用"）；
   提案指向工作区里真实存在的文件；新增 `beeCode.dev.crashMock` 命令验证内核崩溃路径

@@ -46,10 +46,15 @@ export interface PanelState {
  * 安全：CSP nonce、localResourceRoots 限定到 media/、消息 type 白名单、
  * **不信任**前端传来的路径（面板只能传 pending id）。
  */
+/** 面板最多保留多少条消息（超出时从最早的丢，避免 DOM 无限增长） */
+const MAX_MESSAGES = 300;
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "beeCode.chatView";
 
   private view: vscode.WebviewView | undefined;
+  /** view 作用域的监听器：重建 view 时先释放旧的 */
+  private viewDisposables: vscode.Disposable[] = [];
   private state: PanelState = {
     mode: "chat",
     busy: false,
@@ -64,6 +69,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    for (const disposable of this.viewDisposables.splice(0)) disposable.dispose();
     this.view = view;
     const mediaRoot = vscode.Uri.joinPath(this.extensionUri, "media");
     view.webview.options = {
@@ -71,11 +77,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [mediaRoot],
     };
     view.webview.html = buildHtml(view.webview, mediaRoot);
-    view.webview.onDidReceiveMessage((raw) => this.onMessage(raw));
-
-    view.onDidChangeVisibility(() => {
-      if (view.visible) this.pushState();
-    });
+    this.viewDisposables.push(view.webview.onDidReceiveMessage((raw) => this.onMessage(raw)));
+    this.viewDisposables.push(
+      view.onDidChangeVisibility(() => {
+        if (view.visible) this.pushState();
+      }),
+    );
   }
 
   reveal(): void {
@@ -88,9 +95,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** 重载后恢复聊天记录（不改状态机，只回填视图） */
   restore(messages: ChatMessageView[], mode?: PanelState["mode"]): void {
-    this.state.messages = messages;
+    this.state.messages = messages.slice(-MAX_MESSAGES);
     if (mode) this.state.mode = mode;
-    this.pushState();
+    this.pushState();   // 全量快照：重载/切换会话时才需要
   }
 
   /** 当前完整消息列表（会话持久化用） */
@@ -104,21 +111,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   setBusy(busy: boolean): void {
     this.state.busy = busy;
-    this.pushState();
+    this.pushStatus();
   }
 
   setMode(mode: PanelState["mode"]): void {
     this.state.mode = mode;
-    this.pushState();
+    this.pushStatus();
   }
 
   setHint(hint: string | undefined): void {
     this.state.hint = hint;
-    this.pushState();
+    this.pushStatus();
   }
 
   addMessage(message: ChatMessageView): void {
     this.state.messages.push(message);
+    if (this.state.messages.length > MAX_MESSAGES) {
+      // 裁剪后必须整表重发，否则 DOM 与 state 会漂移
+      this.state.messages = this.state.messages.slice(-MAX_MESSAGES);
+      this.pushState();
+      return;
+    }
     this.post({ type: "message", message });
   }
 
@@ -142,6 +155,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "attachments", items: [] });
   }
 
+  /** 轻量状态：只带 mode/busy/hint，不动消息列表（高频调用，别每次重发整段历史） */
+  pushStatus(): void {
+    this.post({ type: "status", mode: this.state.mode, busy: this.state.busy, hint: this.state.hint ?? "" });
+  }
+
+  /** 全量快照：webview 刚加载 / 恢复会话 / 消息被裁剪时才发 */
   pushState(): void {
     this.post({ type: "state", state: this.state });
   }
@@ -160,7 +179,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.pushState();
         return;
       case "send": {
-        const text = typeof msg.text === "string" ? msg.text.slice(0, 20_000) : "";
+        const raw = typeof msg.text === "string" ? msg.text : "";
+        if (raw.length > 20_000) {
+          this.setHint("输入过长，已截断到 20000 字符。");
+        }
+        const text = raw.slice(0, 20_000);
         const mode = msg.mode === "builder" || msg.mode === "debugger" || msg.mode === "chat" ? msg.mode : this.state.mode;
         this.state.mode = mode;
         const attachments = this.state.attachments;
@@ -192,7 +215,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "mode":
         if (msg.mode === "builder" || msg.mode === "debugger" || msg.mode === "chat") {
           this.state.mode = msg.mode;
-          this.pushState();
+          this.pushStatus();
         }
         return;
       default:
@@ -238,13 +261,13 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   </header>
 
   <section id="attachments" class="attachments"></section>
-  <section id="messages" class="messages"></section>
+  <section id="messages" class="messages" aria-live="polite" aria-label="对话记录"></section>
   <section id="pending" class="pending hidden">
     <div class="pending-head">
       <span id="pending-title">待审提案</span>
       <span class="pending-actions">
-        <button id="keepAll">全部接受</button>
-        <button id="undoAll">全部拒绝</button>
+        <button id="acceptAll">全部接受</button>
+        <button id="rejectAll">全部拒绝</button>
       </span>
     </div>
     <ul id="pending-list"></ul>
