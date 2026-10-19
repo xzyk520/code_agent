@@ -8,7 +8,7 @@
 - 本文档描述 **v0.0.x 设计阶段** 的总体架构，会随实现持续修订；接口以代码为准，本文以「为什么这样设计」为准。
 - 标记约定：🧭 已定方案 ｜ 🔬 需在实现期验证（PoC） ｜ 🧪 实验性/可选。
 - 本文档同时是一份**调研结论文档**：每个关键设计点都尽量给出对应工业界做法与出处（见 [§14](#14-工业界参考) 与 [§20 参考资料](./reference.md#20-参考资料)）。
-- 项目定名 **Bee Code**：仓库名 `bee-code`，扩展 ID `<publisher>.bee-code`，显示名 `Bee Code`，命令前缀 `beeCode.`，配置项命名空间 `beeCode.*`，项目内数据目录 `.beecode/`，虚拟文档 scheme `beecode-base:` / `beecode-proposed:`。
+- 项目定名 **Bee Code**：仓库名 `bee-code`，扩展 ID `<publisher>.bee-code`，显示名 `Bee Code`，命令前缀 `beeCode.`，配置项命名空间 `beeCode.*`，项目内数据目录 `.beecode/`，虚拟文档 scheme `beecode-xzyk520-base:`（带 publisher 前缀，避免与其他扩展撞名）。
 - 修订：**v0.1 起，改动落地范式从「Overlay 先审后写」改为工业主流的「写入 + 待审（Keep/Undo）」**，理由见 [§14.10](#1410-为什么最终改用主流范式先写后审)，方案见 [§10](#10-改动落地写入--待审write-then-review)。
 - 技术栈（v0.2 定）：**Python 内核 + TypeScript 薄壳**。VS Code 扩展 API 只有 TS/JS（Extension Host 是 Node.js），Python 无法作为扩展语言；因此把 agent 逻辑（循环/检索/提示词/补丁/协议）全部放进 Python 子进程，TS 壳只做编辑器集成。契约见 [§4.5](#45-壳--内核的-ipc-契约json-rpc-20-over-stdio)，分发方案见 [§17.1](./development.md#171-python-运行时分发这是-a-方案最大的成本必须早定)。
 - 许可证：**MIT**（见 [LICENSE](../LICENSE)）。
@@ -887,7 +887,7 @@ turn-61  id e45d3a05 存在: false   ← 连最新的也变了
 const sc = vscode.scm.createSourceControl('beeCode.pending', 'Bee Code 待审');
 sc.quickDiffProvider = {
   // 只要告诉 VS Code「这个文件的原始内容在哪」，红绿它自己算
-  provideOriginalResource(uri) { return baseUriFor(uri); }   // beecode-base: 虚拟文档
+  provideOriginalResource(uri) { return baseUriFor(uri); }   // beecode-xzyk520-base: 虚拟文档
 };
 // 逐改动菜单：handler 收到 VS Code 切好的 LineChange[]
 vscode.commands.registerCommand('beeCode.revertChange', (uri, changes: vscode.LineChange[], index: number) => {
@@ -900,6 +900,19 @@ vscode.commands.registerCommand('beeCode.revertChange', (uri, changes: vscode.Li
 - 它要求「改动已经在文件里」——这与写盘范式天然契合，也是我们改范式的原因之一。
 - A/B 仍然保留：`vscode.diff` 用于「函数级精确对照」，`vscode.changes` 用于「本轮总览」。
 - ⚠️ diff 编辑器默认 `ignoreTrimWhitespace: true`，**只改缩进的改动会显示成无变化**；审阅场景要显式关掉。
+
+#### 11.1.1 `diffAdapter` 的三条实现约束
+
+| 约束 | 为什么 |
+| --- | --- |
+| 路径必须走 `resolveTarget()` | 否则内核可以用 `../../etc/passwd` 让扩展把工作区外的文件内容渲染到编辑器里（只读，但仍是信息暴露面）；`path.resolve` 还依赖扩展宿主的 cwd |
+| 虚拟文档内容表有上限（50 条 / 20 MB，LRU 淘汰） | 每次预览都存一份 `baseText`，一次会话审阅几十个大文件会持续吃内存 |
+| 淘汰时跳过「当前正打开」的条目 | 若把正开着的预览内容清空，左侧会变成空文件——用户看到的是「整个文件都被删了」 |
+
+另外两个行为：
+
+- **同一文件重新提案时原地刷新**：若该文件的预览文档仍打开，复用同一个 URI 并触发 `onDidChange`，不再堆一个同名标签；预览已关闭则分配新 id（不同提案各自独立）。
+- **多文件总览用公开命令 `vscode.changes`**（`[修改后, 修改前, 基准]` 三元组），不用内部命令 `_workbench.openMultiDiffEditor`。
 
 ### 11.2 从 hunk 到「函数单元」
 

@@ -12,6 +12,8 @@
 - **诊断默认过滤噪声**：`node_modules` / `.git` / 构建产物 / `.gitignore` 里的文件不再进入结果
 - **诊断按严重度排序**（error 优先）并默认最多 200 条，避免一次塞爆上下文
 - 忽略规则抽成 `src/workspaceIgnore.ts`，由 fs / search / diagnostics 三个适配器共用（之前是两份拷贝，规则容易漂移）
+- **diff 预览**：路径改走 `resolveTarget`（不再能借预览读工作区外文件）；虚拟文档内容表加 LRU 上限（50 条 / 20 MB）；
+  同一文件重新提案时原地刷新；`openChanges` 统一返回 `{opened}` 并处理失败；scheme 改为 `beecode-xzyk520-base`
 
 ### Planned
 
