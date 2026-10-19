@@ -27,6 +27,7 @@ bee-code/
 │  ├─ coreLocator.ts             # ✅ 内核定位：工作区 → 扩展目录，注入 PYTHONPATH / 编码变量
 │  ├─ diagnostics.ts             # ✅ 导出脱敏诊断包（落 globalStorage，可另存）
 │  ├─ proposalAdapter.ts         # ✅ 提案暂存：接受才落盘、拒绝零副作用
+│  ├─ dev/mockCore.ts           # ✅ 假内核：流式 / 工具阶段 / 提案 / 崩溃模拟（只调壳用）
 │  ├─ contextBuilder.ts          # ✅ 上下文裁剪：摘要 + 最近 N 条 + token 预算
 │  ├─ sessionStore.ts            # ✅ 会话仓库（JSONL 全量历史 + index.json），重载/切换会话
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
@@ -190,6 +191,13 @@ npx @vscode/vsce package                   # 生成 .vsix
       { "command": "beeCode.model.configure","title": "Bee Code: 配置模型（base_url / key / model）" },
       { "command": "beeCode.proposal.acceptAll", "title": "Bee Code: 接受全部提案" },
       { "command": "beeCode.proposal.rejectAll", "title": "Bee Code: 拒绝全部提案" },
+  { "command": "beeCode.proposal.cancelAcceptAll", "title": "Bee Code: 取消批量接受" },
+  { "command": "beeCode.confirm.resetRemembered", "title": "Bee Code: 清除记住的确认选择" },
+  { "command": "beeCode.session.new", "title": "Bee Code: 新建会话" },
+  { "command": "beeCode.session.pick", "title": "Bee Code: 历史会话…" },
+  { "command": "beeCode.session.continue", "title": "Bee Code: 继续上次的操作" },
+  { "command": "beeCode.session.regenerate", "title": "Bee Code: 重新生成上次的提案" },
+  { "command": "beeCode.dev.crashMock", "title": "Bee Code: 模拟内核崩溃（mock）" },
       { "command": "beeCode.checkpoint.restore","title": "Bee Code: 恢复到检查点…" }
     ],
     "keybindings": [

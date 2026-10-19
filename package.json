@@ -122,6 +122,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.dev.crashMock",
+        "title": "模拟内核崩溃（mock）",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.session.continue",
         "title": "继续上次的操作",
         "category": "Bee Code"

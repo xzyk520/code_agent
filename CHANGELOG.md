@@ -20,6 +20,9 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **mock 内核修复**：取消改为即时（可取消的 sleep，不再等一个分片周期）；流式分片按 code point 切（emoji 不再被劈成孤立代理）；
+  通知分发容错（一个 handler 抛错不影响其他）；补 `ui.tool` 事件（用于验证"重载时停在工具调用"）；
+  提案指向工作区里真实存在的文件；新增 `beeCode.dev.crashMock` 命令验证内核崩溃路径
 - **命令层修复（协议 v11）**：附件路径改为工作区相对（不再泄露绝对路径）；`untitled:` 文档标记 `untitled: true`
   （内核不会拿假路径去 `fs.read`）；多选区按范围去重；`CancelledError` 不再弹红框；命令成功也记 debug 耗时；
   新增启动自检 `undeclaredCommands()`——命令注册表与 `package.json` 声明对账

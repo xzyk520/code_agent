@@ -24,6 +24,8 @@ export interface CommandDeps {
   clearRemembered(): void;
   /** 取消「全部接受」的后续处理（已完成的不回滚） */
   cancelAcceptAll(): void;
+  /** 仅 mock 模式：模拟内核崩溃，验证「内核挂了」的处理路径 */
+  crashMock(): void;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -82,6 +84,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.core.restart", () => deps.restartCore());
   register("beeCode.core.showOutput", () => deps.log.show());
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
+  register("beeCode.dev.crashMock", () => deps.crashMock());
 
   return ids;
 }

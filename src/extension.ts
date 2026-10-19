@@ -151,6 +151,10 @@ class Shell {
       regenerateProposal: () => this.regenerateProposal(),
       cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
+      crashMock: () => {
+        if (this.core instanceof MockCore) this.core.simulateCrash("用户通过命令触发");
+        else void vscode.window.showInformationMessage("Bee Code: 当前内核不是 mock 模式，无法模拟崩溃。");
+      },
       pickSession: () => this.pickSession(),
       clearRemembered: () => {
         clearRememberedChoices(this.context);
@@ -353,7 +357,7 @@ class Shell {
     this.starting = (async () => {
       let core: CoreApi;
       try {
-        core = this.config.coreMode === "mock" ? new MockCore(this.log) : this.createPythonCore();
+        core = this.config.coreMode === "mock" ? new MockCore(this.log, () => this.firstWorkspaceFile()) : this.createPythonCore();
       } catch (err) {
         if (err instanceof CoreNotFoundError) {
           // 安装模式下最常见的失败：扩展目录里没有 beecode 包
@@ -592,6 +596,13 @@ class Shell {
     if (!core) return;
     const opened = await this.proposals.show(id, async (proposalId) => (await core.proposalRead({ id: proposalId })).text);
     if (!opened) void vscode.window.showWarningMessage("Bee Code: 无法打开提案预览。");
+  }
+
+  /** mock 的提案指向一个真实存在的文件，否则点「查看」会看到空 diff */
+  private async firstWorkspaceFile(): Promise<string | undefined> {
+    const found = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,py,md}", "**/node_modules/**", 1);
+    const uri = found[0];
+    return uri ? toWorkspaceRelative(uri.fsPath) : undefined;
   }
 
   private async pickFiles(): Promise<void> {
