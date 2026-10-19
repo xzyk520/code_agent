@@ -1,53 +1,96 @@
 """内核入口：`python -m beecode`。
 
-⚠️ 这个文件目前只是**协议骨架**：把 RPC 分发接好，业务留给实现者。
-真正的 agent loop / 提示词 / 工具 / 补丁都在 `beecode/loop`、`prompts`、`tools`、`apply`
-（见 README §15，尚未创建）。
+当前实现范围（M1）：
+  - `initialize` / `shutdown` / `model.reload` / `proposal.read` / `proposal.decide`
+  - **`chat.send`：单轮对话**（用户输入 → 调模型 → 流式吐字），见 `loop/agent.py`
+  - `session.abort`：取消正在跑的那一轮
+
+下一步（M2）才是工具循环；提示词、上下文、守卫都还是最小实现。
 
 约定（与 TS 壳一致）：
   - 每行一个 JSON（NDJSON），stdin 读、stdout 写
-  - **不要**往 stdout 打印任何调试信息！会破坏协议帧。调试用 stderr。
+  - **不要**往 stdout 打印任何调试信息！会破坏协议帧。调试用 stderr
+  - `chat.send` 整轮结束才返回；进度用 `ui.delta` / `ui.tool` / `ui.usage` 通知
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from typing import Any
 
 from . import __version__
-from .ipc import PROTOCOL_VERSION, JsonRpcPeer, RequestContext, SIG_VERSION_MISMATCH, RpcError
+from .ipc import (
+    INVALID_PARAMS,
+    PROTOCOL_VERSION,
+    SHELL_ERROR,
+    SIG_CONFLICT,
+    SIG_NOT_FOUND,
+    SIG_VERSION_MISMATCH,
+    JsonRpcPeer,
+    RequestContext,
+    RpcError,
+)
+from .llm import ModelError
+from .loop import AgentLoop
+from .session import Session
 from .shell import ShellClient
 
-# 会话状态：真正实现时应该放进 session.py，这里只留最小骨架
+#: 全局状态。真正复杂之后应该抽成 `Kernel` 类，现在够用。
 _state: dict[str, Any] = {
     "initialized": False,
     "workspace_roots": [],
     "model_config": {},
     "api_key": None,
+    "max_steps": 12,
 }
+
+#: 会话表：sessionId → Session（内存态，不持久化——历史由壳负责）
+_sessions: dict[str, Session] = {}
+#: 每个会话最多一个在跑的回合：sessionId → Task
+_tasks: dict[str, asyncio.Task[None]] = {}
+#: 提案："虚拟文件"内容只放在这里，壳按需通过 proposal.read 拉取
+_PROPOSALS: dict[str, dict[str, Any]] = {}
+
+
+def _peer() -> JsonRpcPeer:
+    peer = _state.get("peer")
+    if peer is None:
+        raise RpcError(SHELL_ERROR, "内核尚未就绪")
+    return peer
+
+
+def _notify(method: str, params: dict[str, Any]) -> None:
+    _peer().notify(method, params)
+
+
+# ───────────────────────── 生命周期 ─────────────────────────
 
 
 def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
     version = int(params.get("protocolVersion", 0))
     if version != PROTOCOL_VERSION:
-        raise RpcError(
-            SIG_VERSION_MISMATCH,
-            f"协议版本不匹配：壳={version}，内核={PROTOCOL_VERSION}",
-        )
+        raise RpcError(SIG_VERSION_MISMATCH, f"协议版本不匹配：壳={version}，内核={PROTOCOL_VERSION}")
 
     _state["initialized"] = True
     _state["workspace_roots"] = list(params.get("workspaceRoots", []))
     _state["model_config"] = dict(params.get("modelConfig", {}))
     # 密钥只留在内存里，不落盘、不进日志
     _state["api_key"] = params.get("apiKey")
+    _state["max_steps"] = int(params.get("maxSteps") or 12)
 
     _log(f"initialize: roots={len(_state['workspace_roots'])} model={_state['model_config'].get('model', '')}")
     return {"protocolVersion": PROTOCOL_VERSION, "coreVersion": __version__}
 
 
-def _on_shutdown(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    _log("shutdown")
+async def _on_shutdown(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    _log("shutdown：取消在飞回合")
+    for sid, task in list(_tasks.items()):
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        _tasks.pop(sid, None)
     return {}
 
 
@@ -55,28 +98,80 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
     _state["model_config"] = dict(params.get("modelConfig", {}))
     if params.get("apiKey"):
         _state["api_key"] = params.get("apiKey")
+    # 已存在的会话同步新配置（否则旧会话还在用旧 base_url）
+    for session in _sessions.values():
+        session.model_config = dict(_state["model_config"])
+        session.api_key = _state["api_key"]
+    _log("model.reload")
     return {}
 
 
-def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    """TODO(你来实现)：这是 agent loop 的入口。
-
-    契约（README §4.5.2）：
-      params = {sessionId, mode: "chat"|"builder"|"debugger", text, attachments[]}
-
-    整轮结束才返回；过程中的流式输出用 peer.notify 推给壳：
-      peer.notify("ui.delta", {"sessionId": sid, "text": chunk})
-      peer.notify("ui.tool",  {"sessionId": sid, "name": "read_file", "status": "start"})
-      peer.notify("proposal.changed", {"added": [ ... ProposalDto ... ]})
-      peer.notify("ui.usage", {"sessionId": sid, "inputTokens": 0, "outputTokens": 0})
-
-    要读写文件请用 ShellClient（见 shell.py），不要直接 open()。
-    """
-    raise RpcError(-32603, "chat.send 尚未实现（内核骨架）")
+# ───────────────────────── 一轮对话 ─────────────────────────
 
 
-#: 提案："虚拟文件"内容只放在这里，壳按需通过 proposal.read 拉取
-_PROPOSALS: dict[str, dict[str, Any]] = {}
+async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    session_id = str(params.get("sessionId") or "")
+    if not session_id:
+        raise RpcError(INVALID_PARAMS, "缺少 sessionId")
+
+    # 并发保护：同一会话同时只允许跑一轮（壳侧也有 busy 兜底，这里是纵深防御）
+    running = _tasks.get(session_id)
+    if running is not None and not running.done():
+        raise RpcError(SIG_CONFLICT, "上一轮还没结束，请先停止或等待")
+
+    mode = str(params.get("mode") or "chat")
+    session = _sessions.get(session_id)
+    if session is None:
+        session = Session.create(session_id, mode, _state["model_config"], _state["api_key"])  # type: ignore[arg-type]
+        _sessions[session_id] = session
+    else:
+        session.mode = mode  # type: ignore[assignment]
+        session.model_config = dict(_state["model_config"])
+        session.api_key = _state["api_key"]
+
+    text = str(params.get("text") or "")
+    attachments = list(params.get("attachments") or [])
+    history = list(params.get("history") or [])
+    summary = params.get("summary")
+
+    loop = AgentLoop(_notify)
+    task = asyncio.create_task(
+        loop.run_turn(
+            session,
+            text=text,
+            attachments=attachments,
+            history=history,
+            summary=summary if isinstance(summary, str) else None,
+            max_steps=int(_state.get("max_steps") or 12),
+        )
+    )
+    _tasks[session_id] = task
+    try:
+        await task
+    except asyncio.CancelledError:
+        _log(f"chat.send 已取消：{session_id}")
+        raise RpcError(SHELL_ERROR, "本轮已取消") from None
+    except ModelError as exc:
+        raise RpcError(SHELL_ERROR, str(exc)) from exc
+    finally:
+        _tasks.pop(session_id, None)
+    return {}
+
+
+async def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    session_id = str(params.get("sessionId") or "")
+    task = _tasks.get(session_id)
+    if task is None:
+        _log(f"session.abort：{session_id} 没有在跑的回合")
+        return {"aborted": False}
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+    _log(f"session.abort：已取消 {session_id}")
+    return {"aborted": True}
+
+
+# ───────────────────────── 提案 ─────────────────────────
 
 
 def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -84,7 +179,7 @@ def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, 
     proposal_id = str(params.get("id", ""))
     proposal = _PROPOSALS.get(proposal_id)
     if proposal is None:
-        raise RpcError(-32012, f"提案不存在：{proposal_id}")
+        raise RpcError(SIG_NOT_FOUND, f"提案不存在：{proposal_id}")
     return {"text": proposal["text"]}
 
 
@@ -96,20 +191,15 @@ def _on_proposal_decide(params: dict[str, Any], ctx: RequestContext) -> dict[str
     proposal_id = str(params.get("id", ""))
     decision = str(params.get("decision", ""))
     if decision not in ("accept", "reject"):
-        raise RpcError(-32602, f"未知的 decision：{decision}")
+        raise RpcError(INVALID_PARAMS, f"未知的 decision：{decision}")
     existed = _PROPOSALS.pop(proposal_id, None) is not None
     _log(f"proposal.decide {proposal_id} → {decision}（{'存在' if existed else '已不存在'}）")
     if existed:
-        peer_ref = _state.get("peer")
-        if peer_ref is not None:
-            peer_ref.notify("proposal.changed", {"removed": [proposal_id]})
+        _notify("proposal.changed", {"removed": [proposal_id]})
     return {"ok": existed}
 
 
-def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    # TODO(你来实现)：取消正在跑的 agent loop（asyncio.Task.cancel）
-    _log(f"session.abort: {params.get('sessionId')}")
-    return {}
+# ───────────────────────── 入口 ─────────────────────────
 
 
 def _log(message: str) -> None:
@@ -120,8 +210,7 @@ def _log(message: str) -> None:
 async def _serve() -> None:
     peer = JsonRpcPeer()
     _state["peer"] = peer
-    shell = ShellClient(peer)
-    _state["shell"] = shell
+    _state["shell"] = ShellClient(peer)
 
     peer.register("initialize", _on_initialize)
     peer.register("shutdown", _on_shutdown)

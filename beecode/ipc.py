@@ -44,7 +44,8 @@ class RpcError(Exception):
 class RequestContext:
     """一次壳 → 内核请求的上下文。"""
 
-    id: int
+    #: JSON-RPC 允许 number 或 string
+    id: int | str
     method: str
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -74,7 +75,9 @@ class JsonRpcPeer:
         self._handlers: dict[str, Handler] = {}
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[Any]] = {}
-        self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        #: 请求上下文：取消时要能 set 它的 cancelled 事件（同步代码也能感知取消）
+        self._contexts: dict[str, RequestContext] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
 
@@ -125,7 +128,9 @@ class JsonRpcPeer:
 
     def _dispatch(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        has_id = isinstance(message.get("id"), int)
+        raw_id = message.get("id")
+        # JSON-RPC 允许 number 或 string；bool 是 int 的子类，要排除
+        has_id = isinstance(raw_id, (int, str)) and not isinstance(raw_id, bool)
 
         if "method" not in message:
             # 这是对端（壳）给我们的响应
@@ -135,8 +140,12 @@ class JsonRpcPeer:
         if method == "$/cancelRequest":
             params = message.get("params") or {}
             target = params.get("id")
-            if isinstance(target, int):
-                task = self._tasks.get(target)
+            if isinstance(target, (int, str)) and not isinstance(target, bool):
+                key = str(target)
+                context = self._contexts.get(key)
+                if context is not None:
+                    context.cancelled.set()
+                task = self._tasks.get(key)
                 if task is not None:
                     task.cancel()
             return
@@ -145,9 +154,11 @@ class JsonRpcPeer:
             self._dispatch_notification(method, message.get("params") or {})
             return
 
-        task = asyncio.create_task(self._run_handler(int(message["id"]), method, message.get("params") or {}))
-        self._tasks[int(message["id"])] = task
-        task.add_done_callback(lambda _t, i=int(message["id"]): self._tasks.pop(i, None))
+        req_id = message["id"]
+        key = str(req_id)
+        task = asyncio.create_task(self._run_handler(req_id, method, message.get("params") or {}))
+        self._tasks[key] = task
+        task.add_done_callback(lambda _t, k=key: self._tasks.pop(k, None))
 
     def _dispatch_notification(self, method: str, params: dict[str, Any]) -> None:
         handler = self._handlers.get(method)
@@ -160,13 +171,15 @@ class JsonRpcPeer:
         except Exception:  # noqa: BLE001 - 通知失败不能拖垮主循环
             pass
 
-    async def _run_handler(self, req_id: int, method: str, params: dict[str, Any]) -> None:
+    async def _run_handler(self, req_id: int | str, method: str, params: dict[str, Any]) -> None:
         handler = self._handlers.get(method)
         if handler is None:
             self._write_error(req_id, METHOD_NOT_FOUND, f"未知方法：{method}")
             return
 
         ctx = RequestContext(id=req_id, method=method)
+        key = str(req_id)
+        self._contexts[key] = ctx
         try:
             result = handler(params, ctx)
             if inspect.isawaitable(result):
@@ -178,10 +191,13 @@ class JsonRpcPeer:
             self._write_error(req_id, exc.code, exc.message, exc.data)
         except Exception as exc:  # noqa: BLE001
             self._write_error(req_id, INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
+        finally:
+            self._contexts.pop(key, None)
 
     def _settle(self, message: dict[str, Any]) -> None:
         req_id = message.get("id")
-        if not isinstance(req_id, int):
+        # 我们发出去的请求 id 都是 int；string id 是对端 bug
+        if not isinstance(req_id, int) or isinstance(req_id, bool):
             return
         future = self._pending.get(req_id)
         if future is None or future.done():

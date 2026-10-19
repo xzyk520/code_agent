@@ -486,7 +486,8 @@ class Shell {
         mode,
         text: userText,
         attachments: attachments.map(toAttachment),
-        history: ctx.history,
+        // 本轮用户消息已经通过 text 单独传，别在 history 里重复一次
+        history: stripTrailingUser(ctx.history, userText),
         summary: ctx.summary,
       };
       await core.chatSend(params);
@@ -939,4 +940,18 @@ function toAttachment(context: AttachedContext): Attachment {
     ...(context.text ? { text: context.text } : {}),
     kind: context.kind,
   };
+}
+
+/**
+ * 历史末尾若正好是本轮用户输入，去掉它。
+ *
+ * 壳先把用户消息写进会话存储、再构建上下文，所以 `history` 的最后一条就是本轮输入；
+ * 而 `text` 又会单独传一次。不去重的话内核会收到两份同样的用户消息。
+ */
+function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] {
+  const last = history[history.length - 1];
+  if (last && last.role === "user" && last.text.trim() === text.trim()) {
+    return history.slice(0, -1);
+  }
+  return history;
 }

@@ -13,6 +13,13 @@
 - **上下文裁剪**（`src/contextBuilder.ts`）：发给模型的不是整份历史，而是「机械摘要 + 最近 8 条 + token 预算」；
   重载恢复与正常轮次走同一条构建路径（协议 v5 增加 `chat.send.summary`）
 
+### Added
+
+- **内核 M1：能对话**。新增 `session.py`（会话内存态）、`llm/openai.py`（OpenAI 兼容 SSE 流式客户端）、
+  `loop/agent.py`（单轮循环）、`prompts/`（三模式系统提示）；`chat.send` 真正调模型并流式推送 `ui.delta`，
+  `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
+- 开发环境补装 `httpx`（内核首次真正联网）
+
 ### Changed
 
 - **改动落地改为「提案 + 逐文件审批」（协议 v4）**：内核产出修正后的完整文件内容，作为**虚拟文件**预览
@@ -100,6 +107,13 @@
 - **诊断包**：`Bee Code: 导出诊断包（已脱敏）`，落 `<globalStorage>/diagnostics/`，可另存
 - **Mock 内核**：`beeCode.core.mode = "mock"` 时不装 Python 也能调壳（流式 / pending / 取消）
 - 工程化：双 tsconfig（扩展无 DOM / 面板有 DOM）、esbuild 打包（44 KB）、vsce 打包脚本、`.vscodeignore` 清理
+
+### Added
+
+- **内核 M1：能对话**。新增 `session.py`（会话内存态）、`llm/openai.py`（OpenAI 兼容 SSE 流式客户端）、
+  `loop/agent.py`（单轮循环）、`prompts/`（三模式系统提示）；`chat.send` 真正调模型并流式推送 `ui.delta`，
+  `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
+- 开发环境补装 `httpx`（内核首次真正联网）
 
 ### Changed
 
