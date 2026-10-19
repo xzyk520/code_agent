@@ -11,7 +11,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -161,8 +161,24 @@ export interface SearchGrepResult {
 }
 
 export interface SymbolsOutlineParams { path: string }
-export interface SymbolDto { name: string; kind: string; container?: string; range: TextRangeDto }
+export interface SymbolDto {
+  name: string;
+  kind: string;
+  container?: string;
+  /** 整个符号（含前导注释/docstring）：`read_symbol` 用它 */
+  range: TextRangeDto;
+  /** 标识符本身的位置（含列）：`references` 要用它（用 range 起始行常常落在注释里） */
+  selection?: SymbolSelectionDto;
+}
 export interface SymbolsOutlineResult { symbols: SymbolDto[]; source: "lsp" | "none" }
+
+/** 标识符的精确位置（1-based 行列） */
+export interface SymbolSelectionDto {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
 
 export interface SymbolHitDto {
   path: string;
@@ -170,6 +186,7 @@ export interface SymbolHitDto {
   kind: string;
   container?: string;
   range: TextRangeDto;
+  selection?: SymbolSelectionDto;
 }
 export interface SymbolsSearchParams {
   query: string;

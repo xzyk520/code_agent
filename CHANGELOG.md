@@ -20,6 +20,10 @@
   协议：`review.*` 与 `pending.changed` 被 `proposal.read` / `proposal.decide` / `proposal.changed` 取代；
   新增 `src/adapters/proposalAdapter.ts`，`diffAdapter` 增加 `openProposal`（反向 diff）。
 
+- **符号服务修复（协议 v10）**：`outline`/`search` 返回 `selection`（标识符精确行列），`references` 用它定位
+  （之前用 `range.startLine` 会落在前导注释里，导致引用查询经常返回空）；LSP 搜索结果过滤工作区外与依赖目录；
+  回退路径先按名字粗筛（不再用"函数定义"正则，避免漏掉 `foo() {}` 这类方法）、并跳过忽略路径；
+  扁平符号用 `containerName`；`references` 去重 + 排序 + 过滤非 file 位置；新增 `shell.references_of_symbol()`
 - **检索器加固（协议 v9）**：正则长度上限 300 / 嵌套量词启发式拒绝 / 单行匹配上限 2000 字符 / 整体 5 秒预算；
   新增 `caseSensitive` 与 `exclude`；`hits[].text` 统一为裸行（上下文移到 `context`、同行多次匹配记 `count`）；
   `filesOnly` 的计数不再被单行上限误伤，超过 1000 次的文件标 `capped`；结果按路径+行号排序保证可复现

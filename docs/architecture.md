@@ -213,9 +213,9 @@ TS 壳（stdin/stdout 的服务端）  ⇄  Python 内核（子进程）
 | `fs.read` | `path, startLine?, endLine?` | `{ text, version?, totalLines?, startLine, endLine, truncated }` | 优先用编辑器里的**未保存**内容 |
 | `fs.list` | `glob, exclude?, maxResults?` | `{ paths[], truncated }` | 先多取再过滤（避免被忽略文件吃满配额）；壳合并 `files.exclude` + `.gitignore` |
 | `search.grep` | `query, regex?, glob?, contextLines?, maxResults?, filesOnly?` | `{ hits[], files?, truncated }` | 壳内逐文件正则；`filesOnly` 只回文件+计数（召回阶段省 token） |
-| `symbols.outline` | `path` | `{ symbols[], source }` | `executeDocumentSymbolProvider` |
-| `symbols.search` | `query, maxResults?` | `{ symbols[], source: lsp\|fallback\|none, truncated }` | `executeWorkspaceSymbolProvider`；无 provider 时「grep 找文件 + outline」兜底 |
-| `symbols.references` | `path, line, column?, maxResults?` | `{ locations[], truncated }` | `executeReferenceProvider`：回答"谁在用它" |
+| `symbols.outline` | `path` | `{ symbols[], source }`；每个符号带 `range`（含注释）与 `selection`（标识符精确位置） | `executeDocumentSymbolProvider` |
+| `symbols.search` | `query, maxResults?` | `{ symbols[], source: lsp\\|fallback\\|none, truncated }` | `executeWorkspaceSymbolProvider`（结果过滤工作区外/依赖）；无 provider 时「按名字粗筛文件 + outline」兜底 |
+| `symbols.references` | `path, line, column?, maxResults?` | `{ locations[], truncated }` | `executeReferenceProvider`；**line 要用 `selection.startLine`**（用 range 起始行会落在注释里） |
 | `diagnostics.get` | `path?` / `minSeverity?` / `maxItems?`（默认 200，上限 2000）/ `includeIgnored?` | `{ items[], total, truncated }`；每条含 `code`（`TS2322` 等）与 1-based 行列 | `languages.getDiagnostics`，按严重度排序、默认过滤 `node_modules`/`.git`/`.gitignore` |
 | `edit.apply` | `path` / `newText` / `op?`（`write`\|`delete`）/ `expectedVersion?` / `reason?` | `{ applied, version?, conflict?, message? }` | **唯一写入通道**：单次 `WorkspaceEdit`（新建走 `createFile` + `insert`，换行符跟随目标文件） |
 | `checkpoint.create` | `label?` / `paths?` | `{ id, files, skipped?, reason? }` | 影子 git 快照（`paths` 为轻量模式） |
@@ -696,6 +696,8 @@ result = await shell.read_symbol("src/huge.ts", "parseConfig")
 ```
 
 三条配套建议：
+
+> ⚠️ 查引用的正确姿势是 `shell.references_of_symbol(path, symbol)`：它先 outline 拿 `selection`（标识符位置），再调 `symbols.references`。用 `range.startLine` 会把位置落在前导注释上，参考提供者常常解析不到符号、返回空结果。
 
 | 场景 | 做法 |
 | --- | --- |

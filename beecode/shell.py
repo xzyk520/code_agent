@@ -57,6 +57,9 @@ class Symbol:
     start_line: int
     end_line: int
     container: str | None = None
+    #: 标识符本身的位置（1-based）；`references` 要用它，range 起始行可能落在注释里
+    selection_line: int | None = None
+    selection_column: int | None = None
 
 
 @dataclass(slots=True)
@@ -71,6 +74,12 @@ class Diagnostic:
     start_column: int | None = None
     end_column: int | None = None
 
+
+def _int_or_none(mapping: object, key: str) -> int | None:
+    if not isinstance(mapping, dict):
+        return None
+    value = mapping.get(key)
+    return int(value) if isinstance(value, (int, float)) else None
 
 def turn_label(turn: int, note: str = "") -> str:
     """统一的检查点标签格式：`turn-3` / `turn-3: 应用 parseConfig 改动`。
@@ -239,6 +248,8 @@ class ShellClient:
                     start_line=int(rng.get("startLine", 1)),
                     end_line=int(rng.get("endLine", 1)),
                     container=item.get("container"),
+                    selection_line=_int_or_none(item.get("selection"), "startLine"),
+                    selection_column=_int_or_none(item.get("selection"), "startColumn"),
                 )
             )
         return symbols
@@ -264,6 +275,25 @@ class ShellClient:
         """
         payload = {"path": path, "line": line, "column": column, "maxResults": max_results}
         return dict(await self._call("symbols.references", payload))
+    async def references_of_symbol(self, path: str, symbol: str, *, max_results: int = 200) -> dict[str, Any]:
+        """先 outline 找到符号，再用**标识符位置**（selection）查引用。
+
+        不要用 `range.start_line`：它包含前导注释/docstring，落在注释里的位置
+        参考提供者常常解析不到符号，会返回空结果。
+        """
+        wanted = symbol.strip()
+        if not wanted:
+            raise ValueError("symbol 不能为空")
+        symbols = await self.outline(path)
+        exact = [s for s in symbols if s.name == wanted]
+        suffix = [s for s in symbols if s.name != wanted and wanted.endswith("." + s.name)]
+        candidates = exact or suffix
+        if not candidates:
+            raise ValueError(f"在 {path} 里找不到符号 {symbol}")
+        target = candidates[0]
+        line = target.selection_line or target.start_line
+        column = target.selection_column or 1
+        return await self.symbols_references(path, line, column=column, max_results=max_results)
     async def diagnostics(
         self,
         path: str | None = None,
