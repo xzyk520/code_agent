@@ -13,19 +13,13 @@
 - **上下文裁剪**（`src/contextBuilder.ts`）：发给模型的不是整份历史，而是「机械摘要 + 最近 8 条 + token 预算」；
   重载恢复与正常轮次走同一条构建路径（协议 v5 增加 `chat.send.summary`）
 
-### Added
-
 - **内核 M1：能对话**。新增 `session.py`（会话内存态）、`llm/openai.py`（OpenAI 兼容 SSE 流式客户端）、
   `loop/agent.py`（单轮循环）、`prompts/`（三模式系统提示）；`chat.send` 真正调模型并流式推送 `ui.delta`，
   `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
 - 开发环境补装 `httpx`（内核首次真正联网）
 
-### Added
-
 - **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
   密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
-
-### Added
 
 - **权限系统（P1–P3）**：
   - 规则引擎 `src/permissions.ts`：`Read()/Edit()/Run()` 规则，求值顺序 **deny → ask → allow → 模式默认**
@@ -43,8 +37,6 @@
   - 工作区外路径：主代理需审批、子代理一律拒绝（无论有没有 docker）
   - 未受信任工作区：只读（不变）
   - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
-
-### Added
 
 - **Agent Loop（M2，协议 v14）**：
   - 工具调用循环：流式解析 `tool_calls` 分片 → 执行 → 结果回灌 → 继续，直到模型给出最终回答
@@ -66,8 +58,12 @@
   - 端点/模型留空 = 沿用主代理；密钥顺序：SecretStorage → `BEE_CODE_SUBAGENT_API_KEY` → 主代理密钥
   - 新命令：配置子代理模型 / 测试子代理连接 / 清除子代理 API Key
   - 配置变更热更新到内核（`model.reload` 携带 `subagentConfig` + `subagentApiKey`）
+- **子代理可视化**：面板新增可折叠的「子代理」卡片（任务标题、工具流水、步数统计、结论预览）
+  - 内核新增 `ui.subagent` 通知（`start` / `tool` / `end`，协议 v17）
+  - 失败时卡片保持展开并显示原因；同一轮多个子代理按 id 聚合互不干扰
 
 ### Security
+
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
   此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
 
@@ -141,8 +137,6 @@
 第一个可用骨架：**扩展壳完整、内核仅协议层**。可以在 VS Code 里 F5 起来、配置模型、看到面板；
 内核侧的 agent 逻辑尚未实现（`chat.send` 仍返回 `尚未实现`）。
 
-### Added
-
 - **扩展壳**：12 个命令、3 个选区快捷键、活动栏面板（WebviewView + CSP + 消息白名单）
 - **模型配置**：`base_url` / `model` / `api_key` 三步向导；密钥只进 `SecretStorage`，经 stdin 握手传给内核
 - **配置层**：`readConfig()` 带运行时类型与范围校验，非法值回退默认并记日志
@@ -159,19 +153,13 @@
 - **Mock 内核**：`beeCode.core.mode = "mock"` 时不装 Python 也能调壳（流式 / pending / 取消）
 - 工程化：双 tsconfig（扩展无 DOM / 面板有 DOM）、esbuild 打包（44 KB）、vsce 打包脚本、`.vscodeignore` 清理
 
-### Added
-
 - **内核 M1：能对话**。新增 `session.py`（会话内存态）、`llm/openai.py`（OpenAI 兼容 SSE 流式客户端）、
   `loop/agent.py`（单轮循环）、`prompts/`（三模式系统提示）；`chat.send` 真正调模型并流式推送 `ui.delta`，
   `session.abort` 用 `task.cancel()` 真正取消，`shutdown` 取消在飞回合；同会话并发返回 `SIG_CONFLICT`
 - 开发环境补装 `httpx`（内核首次真正联网）
 
-### Added
-
 - **模型配置体验**：新增命令「测试模型连接」（GET `/models`，报告状态码/耗时/是否包含所配模型）与「清除 API Key」；
   密钥支持 **环境变量兜底** `BEE_CODE_API_KEY`（优先级低于 SecretStorage）；配置向导在已有密钥时允许"直接回车保持不变"
-
-### Added
 
 - **权限系统（P1–P3）**：
   - 规则引擎 `src/permissions.ts`：`Read()/Edit()/Run()` 规则，求值顺序 **deny → ask → allow → 模式默认**
@@ -189,8 +177,6 @@
   - 工作区外路径：主代理需审批、子代理一律拒绝（无论有没有 docker）
   - 未受信任工作区：只读（不变）
   - 新增命令「重新检测 Docker 沙箱」、设置 `beeCode.permissions.fullAccess`；RPC 增加 `role: main|subagent`
-
-### Added
 
 - **Agent Loop（M2，协议 v14）**：
   - 工具调用循环：流式解析 `tool_calls` 分片 → 执行 → 结果回灌 → 继续，直到模型给出最终回答
@@ -214,6 +200,7 @@
   - 配置变更热更新到内核（`model.reload` 携带 `subagentConfig` + `subagentApiKey`）
 
 ### Security
+
 - `beeCode.model.baseUrl` 与 `apiKeyId` 改为 **machine 作用域**：工作区设置不再能覆盖端点。
   此前一个恶意仓库的 `.vscode/settings.json` 可以把提问、代码和密钥转发到任意地址。
 

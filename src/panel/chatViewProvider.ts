@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ProposalDto } from "../protocol";
+import type { ProposalDto, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -138,6 +138,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** 流式增量：高频，所以只发增量，不重发整份状态 */
   appendDelta(text: string): void {
     this.post({ type: "delta", text });
+  }
+
+  /** 子代理进度：前端按 id 聚合成可折叠卡片 */
+  subagentEvent(params: UiSubagentParams): void {
+    this.post({ type: "subagent", ...params });
   }
 
   setProposals(items: ProposalDto[]): void {

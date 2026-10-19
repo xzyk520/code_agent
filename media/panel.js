@@ -92,6 +92,163 @@
     return node;
   }
 
+  /**
+   * 子代理卡片（按 id 聚合）。
+   *
+   * 形态参考工业级 agent：一个可折叠的「子代理」块，标题是任务，正文是它调用过的工具，
+   * 结束时补一行统计与结论。默认展开（用户想看过程），完成后可折叠。
+   */
+  const subagents = new Map();
+
+  /**
+   * @param {string} id
+   * @param {string} task
+   */
+  function ensureSubagent(id, task) {
+    const existing = subagents.get(id);
+    if (existing) return existing;
+
+    const wrap = document.createElement("div");
+    wrap.className = "msg subagent";
+
+    const details = document.createElement("details");
+    details.className = "subagent-card";
+    details.open = true;
+
+    const summary = document.createElement("summary");
+    summary.className = "subagent-head";
+
+    const icon = document.createElement("span");
+    icon.className = "subagent-icon";
+    icon.textContent = "◈";
+
+    const taskNode = document.createElement("span");
+    taskNode.className = "subagent-task";
+    taskNode.textContent = task || "子代理任务";
+
+    const chip = document.createElement("span");
+    chip.className = "subagent-chip running";
+    chip.textContent = "探索中";
+
+    summary.append(icon, taskNode, chip);
+
+    const body = document.createElement("div");
+    body.className = "subagent-body";
+
+    const tools = document.createElement("ul");
+    tools.className = "subagent-tools";
+
+    const result = document.createElement("div");
+    result.className = "subagent-result";
+    result.hidden = true;
+
+    const stats = document.createElement("div");
+    stats.className = "subagent-stats";
+
+    const findings = document.createElement("pre");
+    findings.className = "subagent-findings";
+
+    result.append(stats, findings);
+    body.append(tools, result);
+    details.append(summary, body);
+    wrap.append(details);
+    el.messages.appendChild(wrap);
+    el.messages.scrollTop = el.messages.scrollHeight;
+
+    const entry = { details, chip, tools, result, stats, findings, pending: /** @type {Map<string, HTMLElement>} */ (new Map()) };
+    subagents.set(id, entry);
+    return entry;
+  }
+
+  /**
+   * @param {string} name
+   * @param {string} status
+   * @param {string} [summary]
+   */
+  function toolLine(name, status, summary) {
+    const li = document.createElement("li");
+    li.className = "subagent-tool " + (status === "start" ? "running" : status === "error" ? "error" : "done");
+
+    const icon = document.createElement("span");
+    icon.className = "subagent-tool-icon";
+    icon.textContent = status === "start" ? "◌" : status === "error" ? "✕" : "✓";
+
+    const label = document.createElement("span");
+    label.className = "subagent-tool-name";
+    label.textContent = name;
+
+    const detail = document.createElement("span");
+    detail.className = "subagent-tool-detail";
+    detail.textContent = summary || "";
+
+    li.append(icon, label, detail);
+    return li;
+  }
+
+  /** @param {{ [key: string]: unknown }} msg */
+  function renderSubagent(msg) {
+    const id = typeof msg.id === "string" ? msg.id : "";
+    if (!id) return;
+    const status = typeof msg.status === "string" ? msg.status : "";
+    const task = typeof msg.task === "string" ? msg.task : "";
+
+    if (status === "start") {
+      const entry = ensureSubagent(id, task);
+      announce("子代理开始：" + (task || "探索代码"));
+      return;
+    }
+
+    const entry = ensureSubagent(id, task);
+    const tool = /** @type {{ name?: unknown, status?: unknown, summary?: unknown } | undefined} */ (msg.tool);
+    if (status === "tool" && tool) {
+      const name = typeof tool.name === "string" ? tool.name : "tool";
+      const toolStatus = typeof tool.status === "string" ? tool.status : "";
+      const summary = typeof tool.summary === "string" ? tool.summary : "";
+      if (toolStatus === "start") {
+        const li = toolLine(name, "start", summary);
+        entry.tools.appendChild(li);
+        entry.pending.set(name + "\u0000" + summary, li);
+      } else {
+        const key = name + "\u0000" + summary;
+        const li = entry.pending.get(key);
+        if (li) {
+          li.className = "subagent-tool " + (toolStatus === "error" ? "error" : "done");
+          const icon = li.querySelector(".subagent-tool-icon");
+          if (icon) icon.textContent = toolStatus === "error" ? "✕" : "✓";
+          entry.pending.delete(key);
+        } else {
+          entry.tools.appendChild(toolLine(name, toolStatus, summary));
+        }
+      }
+      el.messages.scrollTop = el.messages.scrollHeight;
+      return;
+    }
+
+    if (status === "end") {
+      const error = typeof msg.error === "string" ? msg.error : "";
+      entry.chip.className = "subagent-chip " + (error ? "error" : "done");
+      entry.chip.textContent = error ? "失败" : "完成";
+      entry.details.open = !error;
+
+      const steps = typeof msg.steps === "number" ? msg.steps : 0;
+      const toolCalls = typeof msg.toolCalls === "number" ? msg.toolCalls : 0;
+      entry.stats.textContent = error
+        ? "失败：" + error
+        : "完成 · " + steps + " 步 · " + toolCalls + " 次工具调用";
+
+      const findings = typeof msg.findings === "string" ? msg.findings : "";
+      if (findings) {
+        entry.findings.textContent = findings;
+        entry.findings.hidden = false;
+        entry.result.hidden = false;
+      } else if (!error) {
+        entry.findings.hidden = true;
+        entry.result.hidden = false;
+      }
+      announce(error ? "子代理失败：" + error : "子代理完成，共 " + steps + " 步");
+      el.messages.scrollTop = el.messages.scrollHeight;
+    }
+  }
   function renderMode() {
     for (const button of modeButtons) {
       button.classList.toggle("active", button.dataset.mode === state.mode);
@@ -229,6 +386,7 @@
           addMessage(item.role, item.text);
         }
         clearStreaming();
+        subagents.clear();
         renderMode();
         renderBusy();
         renderAttachments(next.attachments || []);
@@ -252,6 +410,7 @@
           // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
           streamingNode.textContent = message.text;
           clearStreaming();
+        subagents.clear();
           setMessagesBusy(false);   // 流式结束：现在可以播报了
           announce("助手回复完成，共 " + message.text.length + " 字");
           break;
@@ -282,6 +441,10 @@
         const items = /** @type {Proposal[]} */ (msg.items) || [];
         renderProposals(items);
         if (items.length > 0) announce("待审提案 " + items.length + " 个");
+        break;
+      }
+      case "subagent": {
+        renderSubagent(msg);
         break;
       }
       case "hint": {

@@ -40,6 +40,7 @@ import type {
   RunParams,
   RunResult,
   UiDeltaParams,
+  UiSubagentParams,
   UiToolParams,
   UiUsageParams,
 } from "./protocol";
@@ -1321,6 +1322,21 @@ class Shell {
         }
         const p = params as UiToolParams;
         this.panel.setHint(`${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`);
+        return;
+      }
+      case "ui.subagent": {
+        const p = params as UiSubagentParams;
+        this.panel.subagentEvent(p);
+        if (p.status === "start") {
+          this.turn = "tool";
+          this.panel.setHint(`子代理：${p.task ?? ""}`);
+        } else if (p.status === "tool" && p.tool) {
+          this.panel.setHint(`子代理 · ${p.tool.name}${p.tool.summary ? ` ${p.tool.summary}` : ""}`);
+        } else if (p.status === "end") {
+          this.panel.setHint(
+            p.error ? `子代理失败：${p.error}` : `子代理完成（${p.steps ?? 0} 步 / ${p.toolCalls ?? 0} 次工具）`,
+          );
+        }
         return;
       }
       case "ui.usage": {

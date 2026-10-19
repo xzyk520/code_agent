@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -475,6 +475,23 @@ export interface ModelReloadParams {
 
 export interface UiDeltaParams { sessionId: string; text: string }
 export interface UiToolParams { sessionId: string; name: string; args?: unknown; status: "start" | "end" | "error"; summary?: string }
+/** 子代理的进度（面板里渲染成可折叠卡片） */
+export interface UiSubagentParams {
+  sessionId: string;
+  /** 子代理实例 id，同一轮里可能同时有多个 */
+  id: string;
+  status: "start" | "tool" | "end";
+  task?: string;
+  maxSteps?: number;
+  /** status=tool 时有效 */
+  tool?: { name: string; status: "start" | "end" | "error"; summary?: string };
+  steps?: number;
+  toolCalls?: number;
+  /** status=end 时有效：结论（已截断） */
+  findings?: string;
+  error?: string;
+}
+
 export interface UiUsageParams { sessionId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number }
 /** 提案集合变化（只有元数据，正文用 `proposal.read` 按需拉取） */
 export interface ProposalChangedParams {

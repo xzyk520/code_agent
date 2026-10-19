@@ -374,8 +374,42 @@ class AgentLoop:
                 child_config[key] = value
         api_key = self._spawn_api_key or parent.api_key
         child = Session.create(f"sub_{uuid.uuid4().hex[:8]}", "chat", child_config, api_key)
+        sub_id = child.id
+
+        def child_notify(method: str, params: dict[str, Any]) -> None:
+            """子代理的进度：只转发工具事件，文本不推流（避免刷屏）。"""
+            if method != "ui.tool":
+                return
+            name = str(params.get("name") or "")
+            if not name or name == "model":
+                return
+            self._notify(
+                "ui.subagent",
+                {
+                    "sessionId": parent.id,
+                    "id": sub_id,
+                    "status": "tool",
+                    "tool": {
+                        "name": name,
+                        "status": params.get("status"),
+                        "summary": params.get("summary"),
+                    },
+                },
+            )
+
+        self._notify(
+            "ui.subagent",
+            {
+                "sessionId": parent.id,
+                "id": sub_id,
+                "status": "start",
+                "task": task,
+                "maxSteps": min(max(1, max_steps), self._spawn_max_steps),
+            },
+        )
+
         child_loop = AgentLoop(
-            lambda _method, _params: None,  # 子代理不往 UI 推流，避免刷屏
+            child_notify,
             self._shell.with_role("subagent"),
             config=TurnConfig(
                 max_steps=min(max(1, max_steps), self._spawn_max_steps),
@@ -389,23 +423,51 @@ class AgentLoop:
             role="subagent",
         )
         self._log(f"subagent 开始：{task[:100]}")
-        stats = await child_loop.run_turn(
-            child,
-            text=f"任务：{task}",
-            attachments=[],
-            history=[],
-            summary=None,
-            system_override=_SUBAGENT_PREFIX,
-        )
+        try:
+            stats = await child_loop.run_turn(
+                child,
+                text=f"任务：{task}",
+                attachments=[],
+                history=[],
+                summary=None,
+                system_override=_SUBAGENT_PREFIX,
+            )
+        except asyncio.CancelledError:
+            self._notify(
+                "ui.subagent",
+                {"sessionId": parent.id, "id": sub_id, "status": "end", "error": "已取消"},
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 - 子代理失败不该拖垮主循环
+            message = f"{type(exc).__name__}: {exc}"
+            self._notify(
+                "ui.subagent",
+                {"sessionId": parent.id, "id": sub_id, "status": "end", "error": message[:500]},
+            )
+            self._log(f"subagent 失败：{message}")
+            return {"ok": False, "error": message, "findings": "", "steps": 0, "toolCalls": 0}
+
         answer = ""
         for message in reversed(child.messages):
             if message.get("role") == "assistant" and isinstance(message.get("content"), str):
                 answer = str(message["content"])
                 break
         self._log(f"subagent 结束：steps={stats.steps} tools={stats.tool_calls}")
+        findings = answer[:8000] if answer else "（子代理没有给出结论）"
+        self._notify(
+            "ui.subagent",
+            {
+                "sessionId": parent.id,
+                "id": sub_id,
+                "status": "end",
+                "steps": stats.steps,
+                "toolCalls": stats.tool_calls,
+                "findings": findings[:2000],
+            },
+        )
         return {
             "ok": True,
-            "findings": answer[:8000] if answer else "（子代理没有给出结论）",
+            "findings": findings,
             "steps": stats.steps,
             "toolCalls": stats.tool_calls,
         }
