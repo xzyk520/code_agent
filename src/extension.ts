@@ -76,6 +76,8 @@ class Shell {
   private summary: string | undefined;
   /** 本轮助手输出（ui.delta 累积；chatSend 结束后整段落盘） */
   private assistantBuffer = "";
+  private acceptAllCancelled = false;
+  private acceptAllToken = 0;
   private readonly proposals: ProposalAdapter;
   private readonly sessions: SessionStore;
   /** 上一轮停在哪个阶段（持久化到磁盘，重载后可判断能否继续） */
@@ -147,6 +149,7 @@ class Shell {
       rejectAll: () => this.rejectAllProposals(),
       continueTurn: () => this.continueTurn(),
       regenerateProposal: () => this.regenerateProposal(),
+      cancelAcceptAll: () => this.cancelAcceptAll(),
       newSession: () => this.newSession(),
       pickSession: () => this.pickSession(),
       clearRemembered: () => {
@@ -557,7 +560,24 @@ class Shell {
       this.panel.setHint("没有待处理的提案。");
       return;
     }
-    await this.acceptProposals(ids);
+    // 批量接受可能很久（每个提案要拉正文 + 写盘）：允许中途取消
+    this.acceptAllCancelled = false;
+    const token = ++this.acceptAllToken;
+    this.panel.setHint(`正在接受 ${ids.length} 个提案…（可运行「取消批量接受」）`);
+    for (const id of ids) {
+      if (this.acceptAllCancelled || token !== this.acceptAllToken) break;
+      await this.acceptOne(id);
+      this.refreshProposals();
+    }
+    this.panel.setHint(this.acceptAllCancelled ? "已取消批量接受（已完成的不会回滚）。" : undefined);
+    this.refreshProposals();
+  }
+
+  /** 「取消批量接受」命令：不中断正在写的那一个，但不再继续下一个 */
+  private cancelAcceptAll(): void {
+    this.acceptAllCancelled = true;
+    this.acceptAllToken += 1;
+    this.log.info("用户取消了批量接受");
   }
 
   private async rejectAllProposals(): Promise<void> {
@@ -771,7 +791,7 @@ class Shell {
   }
 
   private refreshProposals(): void {
-    this.panel.setProposals(this.proposals.pending());
+    this.panel.setProposals(this.proposals.visible());
     this.updateStatus();
   }
 

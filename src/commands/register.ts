@@ -21,6 +21,8 @@ export interface CommandDeps {
   pickSession(): Promise<void>;
   /** 清除「记住这次选择」里存下的确认项 */
   clearRemembered(): void;
+  /** 取消「全部接受」的后续处理（已完成的不回滚） */
+  cancelAcceptAll(): void;
   pickFiles(): Promise<void>;
   exportDiagnostics(): Promise<void>;
 }
@@ -62,6 +64,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.session.continue", () => deps.continueTurn());
   register("beeCode.session.regenerate", () => deps.regenerateProposal());
   register("beeCode.proposal.acceptAll", () => deps.acceptAll());
+  register("beeCode.proposal.cancelAcceptAll", () => deps.cancelAcceptAll());
   register("beeCode.proposal.rejectAll", () => deps.rejectAll());
   register("beeCode.checkpoint.restore", () => deps.restoreCheckpoint());
   register("beeCode.core.restart", () => deps.restartCore());

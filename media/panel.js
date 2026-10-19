@@ -111,8 +111,9 @@
     el.pendingList.textContent = "";
 
     for (const item of items) {
+      const stale = item.status === "stale";
       const li = document.createElement("li");
-      li.className = "proposal";
+      li.className = stale ? "proposal stale" : "proposal";
 
       const head = document.createElement("div");
       head.className = "proposal-head";
@@ -124,7 +125,7 @@
 
       const stat = document.createElement("span");
       stat.className = "stat";
-      stat.textContent = "+" + (item.additions || 0) + " −" + (item.deletions || 0);
+      stat.textContent = stale ? "已失效" : "+" + (item.additions || 0) + " −" + (item.deletions || 0);
 
       head.appendChild(pathNode);
       head.appendChild(stat);
@@ -146,17 +147,20 @@
       view.textContent = "查看改动";
       view.addEventListener("click", () => post({ type: "proposal.diff", id: item.id }));
 
-      const accept = document.createElement("button");
-      accept.className = "primary";
-      accept.textContent = "接受";
-      accept.addEventListener("click", () => post({ type: "accept", ids: [item.id] }));
+      actions.appendChild(view);
+
+      // 失效的提案不能再接受（内容已不是基于最新文件），只能查看或丢弃
+      if (!stale) {
+        const accept = document.createElement("button");
+        accept.className = "primary";
+        accept.textContent = "接受";
+        accept.addEventListener("click", () => post({ type: "accept", ids: [item.id] }));
+        actions.appendChild(accept);
+      }
 
       const reject = document.createElement("button");
-      reject.textContent = "拒绝";
+      reject.textContent = stale ? "丢弃" : "拒绝";
       reject.addEventListener("click", () => post({ type: "reject", ids: [item.id] }));
-
-      actions.appendChild(view);
-      actions.appendChild(accept);
       actions.appendChild(reject);
       li.appendChild(actions);
       el.pendingList.appendChild(li);

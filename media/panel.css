@@ -163,3 +163,6 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 .proposal-note { font-size: 0.9em; opacity: 0.8; }
 .proposal-actions { display: flex; gap: 6px; }
 .proposal-actions button.primary { font-weight: 600; }
+/* 失效提案：内容已不对应当前文件，只能查看或丢弃 */
+.proposal.stale { opacity: 0.6; border-style: dashed; }
+.proposal.stale .stat { color: var(--vscode-errorForeground); }

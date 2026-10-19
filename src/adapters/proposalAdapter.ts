@@ -7,6 +7,9 @@ import type { createEditAdapter } from "./editAdapter";
 
 type EditAdapter = ReturnType<typeof createEditAdapter>;
 
+/** 正文缓存有效期：超过它重新拉，避免用过期内容写盘 */
+const TEXT_CACHE_TTL_MS = 30_000;
+
 /**
  * 提案（虚拟文件）的暂存与落实。
  *
@@ -20,6 +23,8 @@ type EditAdapter = ReturnType<typeof createEditAdapter>;
  */
 export class ProposalAdapter implements vscode.Disposable {
   private readonly byId = new Map<string, ProposalDto>();
+  /** 查看过的正文短暂缓存：避免「查看 → 接受」把同一份大文件拉两次 */
+  private readonly textCache = new Map<string, { text: string; at: number }>();
   private disposed = false;
 
   constructor(
@@ -28,7 +33,24 @@ export class ProposalAdapter implements vscode.Disposable {
     private readonly logger: Logger,
   ) {}
 
+  /**
+   * 登记/更新提案。
+   *
+   * **同路径去重**：同一个文件只应有一个有效提案。新提案到来时，把该路径下
+   * 其它仍为 pending 的旧提案标成 stale —— 否则用户可能先接受旧的那个，
+   * 用旧内容覆盖掉新内容。
+   */
   upsert(dto: ProposalDto): void {
+    for (const [id, existing] of this.byId) {
+      if (id !== dto.id && existing.path === dto.path && existing.status === "pending") {
+        this.byId.set(id, {
+          ...existing,
+          status: "stale",
+          summary: existing.summary ?? "已被同一文件的新提案取代",
+        });
+        this.logger.debug(`proposal ${id} 被同路径的新提案 ${dto.id} 取代（标 stale）`);
+      }
+    }
     this.byId.set(dto.id, dto);
   }
 
@@ -42,6 +64,7 @@ export class ProposalAdapter implements vscode.Disposable {
 
   clear(): void {
     this.byId.clear();
+    this.textCache.clear();
   }
 
   /** 文件在提案生成后被改过 → 标记 stale，UI 上会提示"重新生成" */
@@ -50,11 +73,16 @@ export class ProposalAdapter implements vscode.Disposable {
     if (dto) this.byId.set(id, { ...dto, status: "stale" });
   }
 
-  /** 待处理的提案（按路径排序，UI 稳定） */
-  pending(): ProposalDto[] {
+  /** 面板要展示的全部提案：pending + stale（stale 也要看得见，否则会「凭空消失」） */
+  visible(): ProposalDto[] {
     return [...this.byId.values()]
-      .filter((p) => p.status === "pending")
+      .filter((p) => p.status === "pending" || p.status === "stale")
       .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** 真正待决策的提案（stale 不算，它只能重新生成） */
+  pending(): ProposalDto[] {
+    return this.visible().filter((p) => p.status === "pending");
   }
 
   count(): number {
@@ -72,6 +100,7 @@ export class ProposalAdapter implements vscode.Disposable {
       this.logger.warn(`读取提案正文失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
+    this.textCache.set(id, { text, at: Date.now() });
     const result = await this.diff.openProposal({ path: dto.path, text, title: dto.summary });
     return result.opened;
   }
@@ -90,11 +119,21 @@ export class ProposalAdapter implements vscode.Disposable {
     const dto = this.byId.get(id);
     if (!dto) return { applied: false, message: "提案不存在（可能已被内核撤回）" };
 
+    if (dto.baseVersion === undefined) {
+      // 没有 baseVersion 就没法做冲突检测 —— 记一条 warn，别让它静默变成"无条件覆盖"
+      this.logger.warn(`提案 ${id} 缺少 baseVersion，接受时将不做版本冲突检测（可能覆盖用户的新修改）`);
+    }
+
     let text: string;
-    try {
-      text = await fetchText(id);
-    } catch (err) {
-      return { applied: false, message: `读取提案正文失败：${err instanceof Error ? err.message : String(err)}` };
+    const cached = this.textCache.get(id);
+    if (cached && Date.now() - cached.at < TEXT_CACHE_TTL_MS) {
+      text = cached.text;
+    } else {
+      try {
+        text = await fetchText(id);
+      } catch (err) {
+        return { applied: false, message: `读取提案正文失败：${err instanceof Error ? err.message : String(err)}` };
+      }
     }
 
     const result = await this.edit.apply(
@@ -132,13 +171,14 @@ export class ProposalAdapter implements vscode.Disposable {
     if (this.disposed) return;
     this.disposed = true;
     this.byId.clear();
+    this.textCache.clear();
   }
 }
 
 /** 适配器要的 ctx 只在 RPC 场景存在；本地触发时给一个空的（无取消语义） */
 function syntheticContext(): InboundRequestContext {
   return {
-    id: 0,
+    id: "local",
     signal: new AbortController().signal,
     throwIfCancelled() {
       /* 本地动作不可取消 */
