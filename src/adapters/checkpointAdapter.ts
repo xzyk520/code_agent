@@ -11,6 +11,9 @@ const exec = promisify(execFile);
 /** 压缩滞后量：攒到 retention + 这个数才压缩，避免每次 create 都重写历史 */
 const COMPACT_SLACK = 10;
 
+/** retention=0（不压缩）时，list() 最多显示这么多条，避免 QuickPick 塞几千项 */
+const LIST_LIMIT_WHEN_UNBOUNDED = 500;
+
 export interface CheckpointRecord {
   id: string;
   label: string;
@@ -86,7 +89,9 @@ export class CheckpointAdapter implements vscode.Disposable {
       if (!this.available) return [];
       try {
         await this.ensureRepo();
-        const out = await this.git(["log", `--format=%H%x09%ct%x09%s`, "-n", String(this.retention)]);
+        // retention=0 表示「不压缩」，此时不能用 `-n 0`（会返回空列表），给个显示上限
+        const limit = this.retention > 0 ? this.retention : LIST_LIMIT_WHEN_UNBOUNDED;
+        const out = await this.git(["log", `--format=%H%x09%ct%x09%s`, "-n", String(limit)]);
         return out
           .split("\n")
           .map((line) => line.trim())
