@@ -65,11 +65,12 @@ bee-code/
 └─ .github/workflows/            # ⬜ ci.yml / release.yml
 ```
 
-### 15.1 三个实现取舍（值得知道）
+### 15.1 四个实现取舍（值得知道）
 
 1. **`search.grep` 没用 `findTextInFiles`**：它至今是 proposed API（stable `@types/vscode` 里没有）。当前实现是 `findFiles` + 逐文件读 + 正则匹配，上限 4000 文件 / 256KB，能用的同时保证只用公开 API。🔬 后续可以探测系统 `rg`，有则 spawn `rg --json`。
 2. **面板前端没有构建步骤**：`media/panel.js` 是原生 JS（约 200 行），刻意不引入 Vite/React —— 壳阶段的目标是「F5 就能跑」。等 UI 复杂到需要组件化时再换，`chatViewProvider` 的 postMessage 契约不用动。但它是**被类型检查的**：`tsconfig.webview.json` 用 `allowJs + checkJs` + JSDoc 跑 `tsc -p`，所以面板里的空引用、拼错属性照样会报错。
 3. **两个 tsconfig 是刻意分开的**：扩展侧 `lib` 不含 `DOM`（宿主里没有 `document`，给了类型就会写出运行时报错的代码）；前端侧反过来，`lib` 含 `DOM`、`types` 为空（webview 里没有 Node 和 `vscode`）。`npm run typecheck` 会依次跑两个项目。
+4. **资源释放只有一个所有者**：所有 `register*` / `create*` 的返回值都进 `context.subscriptions`，由 VS Code 在 `deactivate()` 返回后统一 dispose；`Shell.dispose()` 只做 subscriptions 覆盖不到的事——**按顺序停内核**（`shutdown` → `dispose`），并用 `disposed` 标志保证幂等。早期版本两边都管，导致 `status` / `log` 被释放两次（无害，但所有权不清）。
 
 
 ---
