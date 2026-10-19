@@ -209,6 +209,15 @@ class ShellClient:
         """建一个检查点，返回 commit id；`skipped=True` 时返回空串（见 `checkpoint_result`）。
 
         轻量模式：传 `paths` 只快照这些文件，大仓库不必全树快照。
+
+        ⚠️ **id 不是永久标识**：影子仓库超过 `retention + 10` 个快照时会压缩历史
+        （用 `commit-tree` 重写父链），届时**所有 commit 的哈希都会变**，连刚返回的
+        这个也可能失效。所以：
+
+        - 只在「同一批 create 之间」使用返回的 id（典型：本轮开始时快照，本轮结束时恢复）；
+        - **不要跨会话/跨多轮记住它**；需要长期引用请用 `label`（如 `turn-3`），
+          用之前先让壳重新列出检查点解析成当前 id；
+        - 拿到失效 id 时 `restore` 会以 `unknown revision` 失败，这是预期行为。
         """
         payload: dict[str, Any] = {"label": label or ""}
         if paths:
@@ -217,14 +226,23 @@ class ShellClient:
         return str(result.get("id", ""))
 
     async def checkpoint_result(self, label: str | None = None, paths: list[str] | None = None) -> dict[str, Any]:
-        """同上，但返回完整结果（含 `skipped` / `reason`）——需要区分「没做」和「做了」时用。"""
+        """同上，但返回完整结果（含 `skipped` / `reason`）——需要区分「没做」和「做了」时用。
+
+        返回字段：`{id, files, skipped?, reason?}`。`skipped=True` 表示这次没建检查点
+        （设置关闭 / 没有工作区），此时 `id` 为空串，**不要**把它当成有效 id 传给 restore。
+        """
         payload: dict[str, Any] = {"label": label or ""}
         if paths:
             payload["paths"] = list(paths)
         return dict(await self._call("checkpoint.create", payload))
 
     async def restore_checkpoint(self, checkpoint_id: str) -> list[str]:
-        """只恢复文件；任务/会话状态由内核自己重置。"""
+        """只恢复文件；任务/会话状态由内核自己重置。
+
+        ⚠️ 传进来的 `checkpoint_id` 必须是**当前仍存在**的哈希：历史压缩后旧 id 全部失效
+        （`unknown revision`）。需要「恢复到某个历史点」时，应先用 label/时间戳定位、
+        再通过壳重新列出检查点拿到当前 id，而不是缓存上次的哈希。
+        """
         result = await self._call("checkpoint.restore", {"id": checkpoint_id}, timeout=120.0)
         return list(result.get("restored", []))
 
