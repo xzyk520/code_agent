@@ -53,6 +53,8 @@ export interface FocusConfig {
   fallbackLines: number;
   /** 函数超过这么多行就退化成代码块 */
   maxLines: number;
+  /** 是否在编辑器里高亮"agent 读了哪一段" */
+  highlight: boolean;
 }
 
 /** 子代理配置：空字符串 = 沿用主代理 */
@@ -124,6 +126,7 @@ export function readConfig(): ConfigReadResult {
       autoAttach: reader.bool("focus.autoAttach", true),
       fallbackLines: reader.num("focus.fallbackLines", 30, 5, 200),
       maxLines: reader.num("focus.maxLines", 300, 20, 2_000),
+      highlight: reader.bool("focus.highlight", true),
     },
     subagent: {
       enabled: reader.bool("subagent.enabled", true),

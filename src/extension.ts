@@ -21,6 +21,7 @@ import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
 import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
+import { FocusHighlighter } from "./focusDecoration";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -94,6 +95,7 @@ class Shell {
   private readonly proposals: ProposalAdapter;
   private readonly confirm: ReturnType<typeof createConfirmAdapter>;
   private readonly runner: ReturnType<typeof createRunAdapter>;
+  private readonly focusHighlight: FocusHighlighter;
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
@@ -125,6 +127,7 @@ class Shell {
     this.edit = createEditAdapter(this.log);
     this.confirm = createConfirmAdapter(context, this.log);
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
+    this.focusHighlight = new FocusHighlighter(this.log);
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
@@ -202,6 +205,9 @@ class Shell {
       },
       pickFiles: () => this.pickFiles(),
       focus: { fallbackLines: this.config.focus.fallbackLines, maxLines: this.config.focus.maxLines },
+      highlightFocus: (focus: FocusInfo | undefined) => {
+        if (this.config.focus.highlight) this.focusHighlight.show(focus);
+      },
       exportDiagnostics: () => this.exportDiagnostics(),
     });
     this.verifyCommands(registeredCommands);
@@ -248,7 +254,7 @@ class Shell {
     );
 
     this.panel.setMode(this.config.modeDefault);
-    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions);
+    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions, this.focusHighlight);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
   }
@@ -547,6 +553,7 @@ class Shell {
     }
 
     const trimmed = text.trim();
+    this.focusHighlight.clear();
 
     // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
     let effectiveAttachments = attachments;
@@ -561,6 +568,7 @@ class Shell {
       });
       if (focus) {
         effectiveAttachments = [toFocusContext(focus)];
+        if (this.config.focus.highlight) this.focusHighlight.show(focus);
         this.log.info(
           `自动附加光标代码：${focus.path}:${focus.startLine}-${focus.endLine}（${focus.kind}${focus.symbol ? ` ${focus.symbol}` : ""}）`,
         );

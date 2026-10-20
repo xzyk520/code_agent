@@ -839,6 +839,10 @@ chat.send { attachments, focus: {path, line, startLine, endLine, kind, symbol} }
 
 命令「附加选区」也走同一套逻辑：没有选区时取光标所在函数，而不是什么都不做。
 
+**隐式选区高亮**（`src/focusDecoration.ts`）：发送时把"agent 实际读了哪一段"用虚线框画在编辑器里，
+5 秒后自动消失；悬停显示「Bee Code 读取了这段代码（函数 parseConfig）：第 30-58 行」。
+设置 `beeCode.focus.highlight` 可关闭。这样用户能立刻判断"它是不是看错地方了"。
+
 ---
 
 ## 9. 选区快捷入口

@@ -44,6 +44,8 @@ export interface CommandDeps {
   pickFiles(): Promise<void>;
   /** 光标附近代码的读取策略（附加选区命令用） */
   focus: { fallbackLines: number; maxLines: number };
+  /** 在编辑器里高亮 agent 实际读取的范围 */
+  highlightFocus(focus: import("../focus").FocusInfo | undefined): void;
   exportDiagnostics(): Promise<void>;
 }
 
@@ -182,6 +184,8 @@ async function attachSelection(
     });
     added += 1;
     if (focus.kind === "function") functions += 1;
+    // 最后附加的那一段画高亮（多光标时只标最后一段，避免花屏）
+    deps.highlightFocus(focus);
   }
 
   deps.panel.setMode(mode);

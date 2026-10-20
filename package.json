@@ -409,6 +409,13 @@
           "maximum": 2000,
           "markdownDescription": "函数超过这么多行就退化成「光标上下 N 行」，避免一次送几千行。"
         },
+        "beeCode.focus.highlight": {
+          "type": "boolean",
+          "scope": "window",
+          "order": 44,
+          "default": true,
+          "markdownDescription": "发送时在编辑器里用虚线框高亮 agent 实际读取的代码范围（5 秒后自动消失）。"
+        },
         "beeCode.mode.default": {
           "type": "string",
           "scope": "window",
