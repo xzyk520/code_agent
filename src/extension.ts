@@ -409,9 +409,25 @@ class Shell {
   /** 从轮次记录重建右侧轨迹（重载/切换会话/回滚后用） */
   private async refreshTrajectory(): Promise<void> {
     const turns = await this.turns.list(this.sessionId);
-    const items = turns
-      .filter((turn) => typeof turn.userMessageId === "string" && turn.userMessageId.length > 0)
-      .map((turn) => ({ id: turn.userMessageId as string, mode: turn.mode, intent: turn.intent }));
+    const messages = await this.sessions.open(this.sessionId);
+    const items: Array<{ id: string; mode: Mode; intent: string }> = [];
+    for (const turn of turns) {
+      // 回滚等"合成轮"没有用户消息，不进轨迹
+      if (!turn.userText || turn.userText.trim().length === 0) continue;
+      let id = turn.userMessageId;
+      if (!id) {
+        // 旧版本轮次记录没有 userMessageId：按 messageIndex 往前找最近一条用户消息
+        const start = Math.min(turn.messageIndex - 1, messages.length - 1);
+        for (let index = start; index >= 0; index -= 1) {
+          const candidate = messages[index];
+          if (candidate?.role === "user") {
+            id = candidate.id;
+            break;
+          }
+        }
+      }
+      if (id) items.push({ id, mode: turn.mode, intent: turn.intent });
+    }
     this.panel.setTrajectory(items);
   }
 

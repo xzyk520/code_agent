@@ -33,6 +33,8 @@
     modeBadge: must("mode-badge", HTMLElement),
     cost: must("cost", HTMLElement),
     trajectory: must("trajectory", HTMLElement),
+    trajectoryList: must("trajectory-list", HTMLElement),
+    trajectoryFilter: must("trajectory-filter", HTMLInputElement),
     reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
   };
@@ -328,6 +330,7 @@
     button.type = "button";
     button.className = "trajectory-item mode-" + mode;
     button.dataset.target = id;
+    button.dataset.intent = intent.toLowerCase();
     button.title = intent;
     const dot = document.createElement("span");
     dot.className = "trajectory-dot";
@@ -347,13 +350,13 @@
       node.classList.add("trajectory-flash");
       setTimeout(() => node.classList.remove("trajectory-flash"), 1_400);
     });
-    el.trajectory.appendChild(button);
+    el.trajectoryList.appendChild(button);
   }
 
   /** @param {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} items */
   function renderTrajectory(items) {
     trajectoryItems = [];
-    el.trajectory.textContent = "";
+    el.trajectoryList.textContent = "";
     for (const item of items) {
       if (typeof item.id !== "string") continue;
       trajectoryItems.push({
@@ -363,8 +366,19 @@
       });
       appendTrajectoryButton(item);
     }
-    el.trajectory.scrollTop = el.trajectory.scrollHeight;
+    el.trajectoryList.scrollTop = el.trajectoryList.scrollHeight;
   }
+
+  /** 轨迹搜索：按意图文本过滤（大小写无关） */
+  function applyTrajectoryFilter() {
+    const query = el.trajectoryFilter.value.trim().toLowerCase();
+    for (const button of el.trajectoryList.querySelectorAll(".trajectory-item")) {
+      const intent = button instanceof HTMLElement ? button.dataset.intent || "" : "";
+      button.hidden = query.length > 0 && !intent.includes(query);
+    }
+  }
+
+  el.trajectoryFilter.addEventListener("input", applyTrajectoryFilter);
 
   /** @param {{ id?: unknown, mode?: unknown, intent?: unknown }} item */
   function addTrajectoryItem(item) {
@@ -537,7 +551,7 @@
         for (const item of next.messages || []) {
           addMessage(item.role, item.text, undefined, item.id);
         }
-        el.trajectory.textContent = "";
+        el.trajectoryList.textContent = "";
         trajectoryItems = [];
         clearStreaming();
         subagents.clear();
@@ -611,6 +625,7 @@
       }
       case "trajectory": {
         renderTrajectory(/** @type {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} */ (msg.items) || []);
+        applyTrajectoryFilter();
         break;
       }
       case "trajectoryItem": {

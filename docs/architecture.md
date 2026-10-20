@@ -1447,7 +1447,9 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - 数据来自 `turns.jsonl` 的 `{intent, mode, userMessageId}`；
 - 新轮次在 `ui.intent` 到达时即时追加（不必等轮次结束）；
 - 重载/切换会话/聊天回滚后由 `refreshTrajectory()` 重建；
-- 顶部 header 同时显示**任务级成本**：本轮累计 token、耗时；超过预算 80% 显示「⚠ 接近预算」。
+- 顶部 header 同时显示**任务级成本**：本轮累计 token、耗时；超过预算 80% 显示「⚠ 接近预算」；
+- 轨迹顶部有搜索框：按意图文本过滤（大小写无关），长会话里可以只看"重构"相关；
+- 三种模式用不同颜色区分：Chat 蓝、Builder 绿、Debugger 红（圆点与左侧色条同步）。
 
 ### 11.7 子代理的可视化（已实现）
 

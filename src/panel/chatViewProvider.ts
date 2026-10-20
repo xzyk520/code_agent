@@ -360,7 +360,10 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   <section id="reads" class="reads" aria-label="agent 最近读取的文件"></section>
   <div class="conversation">
     <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
-    <aside id="trajectory" class="trajectory" aria-label="会话轨迹"></aside>
+    <aside id="trajectory" class="trajectory" aria-label="会话轨迹">
+      <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="搜索轨迹…" aria-label="搜索轨迹" />
+      <div id="trajectory-list" class="trajectory-list"></div>
+    </aside>
   </div>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="proposals" class="proposals hidden">

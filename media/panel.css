@@ -417,11 +417,36 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 }
 
 .trajectory {
-  width: 172px;
+  width: 184px;
   flex: none;
-  overflow-y: auto;
   border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
   padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.trajectory-search {
+  flex: none;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  font-size: 0.76em;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+}
+
+.trajectory-search::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.trajectory-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -453,8 +478,29 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   color: var(--vscode-textLink-foreground);
 }
 
+/* 三种模式用不同颜色：Chat 蓝 / Builder 绿 / Debugger 红 */
+.trajectory-item.mode-chat .trajectory-dot {
+  color: var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue, #3794ff));
+}
+
+.trajectory-item.mode-builder .trajectory-dot {
+  color: var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #89d185));
+}
+
 .trajectory-item.mode-debugger .trajectory-dot {
-  color: var(--vscode-errorForeground);
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.trajectory-item.mode-chat {
+  border-left: 2px solid var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue, #3794ff));
+}
+
+.trajectory-item.mode-builder {
+  border-left: 2px solid var(--vscode-charts-green, var(--vscode-terminal-ansiGreen, #89d185));
+}
+
+.trajectory-item.mode-debugger {
+  border-left: 2px solid var(--vscode-errorForeground, #f14c4c);
 }
 
 .trajectory-label {
