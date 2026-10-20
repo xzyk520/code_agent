@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 22;
+export const PROTOCOL_VERSION = 23;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -537,6 +537,8 @@ export interface UiIntentParams {
   scale?: "small" | "large";
   needsProposal?: boolean;
   degraded?: boolean;
+  /** 连续追问：沿用上一轮意图（未调用分类器） */
+  reused?: boolean;
 }
 
 /** 计划（大任务时由 update_plan 工具产出） */

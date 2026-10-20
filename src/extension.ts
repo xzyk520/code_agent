@@ -103,8 +103,8 @@ class Shell {
   private turnIntent?: { intent: string; mode: Mode };
   private readonly turnTools = new Set<string>();
   private readonly turnFiles = new Set<string>();
-  /** 模型摘要缓存：covered = 已覆盖的轮次数 */
-  private summaryCache?: { covered: number; text: string };
+  /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加 */
+  private summaryCache?: { covered: number; text: string; lines: string[] };
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
@@ -373,47 +373,64 @@ class Shell {
   }
 
   /**
-   * 用模型给"被折叠的轮次"生成摘要。
+   * 用模型给"被折叠的轮次"生成摘要（增量）。
    *
-   * 输入是壳侧持久化的轮次记录（意图 / 回答 / 工具 / 文件），
-   * 内核按 schema 输出 `{pairs:[{intent, summary}]}`，这里拼成一段文本。
+   * 只把**新折叠进来**的轮次发给模型，结果追加到已有摘要行后面，
+   * 避免历史越长、每次摘要越贵（O(n²)）。
    * 失败或 mock 内核返回空 → 退回机械摘要。
    */
   private async modelSummary(totalMessages: number): Promise<string | undefined> {
     const turns = await this.turns.list(this.sessionId);
-    // 只有"完全落在最近 8 条之外"的轮次才算已折叠
     const cutoff = Math.max(0, totalMessages - 8);
     const covered = turns.filter((turn) => turn.messageIndex <= cutoff);
     if (covered.length === 0) return undefined;
-    if (this.summaryCache && this.summaryCache.covered >= covered.length) return this.summaryCache.text;
+
+    const cached = this.summaryCache;
+    if (cached && cached.covered >= covered.length) return cached.text;
+    const startIndex = cached ? Math.min(cached.covered, covered.length) : 0;
+    const fresh = covered.slice(startIndex);
+    if (fresh.length === 0) return cached?.text;
 
     try {
       const core = this.core ?? (await this.ensureCore());
       const result = await core.contextSummarize({
-        turns: covered.map((turn) => ({
+        turns: fresh.map((turn) => ({
           intent: turn.intent,
           assistant: turn.assistant,
           tools: turn.tools,
           files: turn.files,
         })),
       });
-      if (result.summary.trim()) {
-        this.summaryCache = { covered: covered.length, text: result.summary };
-        this.log.info(`模型摘要：覆盖 ${covered.length} 轮，${result.summary.length} 字符`);
-        return result.summary;
+      const newLines = (result.pairs ?? []).map((pair) => `- ${pair.intent}：${pair.summary}`);
+      let text: string | undefined;
+      let lines: string[] = [];
+      if (newLines.length === fresh.length) {
+        lines = [...(cached?.lines ?? []), ...newLines];
+        text = `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`;
+      } else if (result.summary.trim()) {
+        // 内核没给逐条结果（数量不齐）：整段替换，缓存重置为当前覆盖范围
+        lines = result.summary.split("\n").filter((line) => line.trim().length > 0);
+        text = result.summary;
       }
-      this.log.debug("模型摘要为空，退回机械摘要");
+      if (!text) {
+        this.log.debug("模型摘要为空，退回机械摘要");
+        return cached?.text;
+      }
+      this.summaryCache = { covered: covered.length, text, lines };
+      this.log.info(`模型摘要：累计 ${covered.length} 轮（本次新增 ${fresh.length} 轮），${text.length} 字符`);
+      return text;
     } catch (err) {
       this.log.warn(`模型摘要失败（退回机械摘要）：${err instanceof Error ? err.message : String(err)}`);
     }
-    return this.summaryCache?.text;
+    return cached?.text;
   }
 
   /** 一轮结束时落盘"意图 + 回答 + 工具 + 文件"，供后续按意图总结 */
   private async appendTurn(userText: string, assistant: string, fallbackMode: Mode): Promise<void> {
     const all = await this.sessions.open(this.sessionId);
+    const intent = this.turnIntent?.intent || userText.replace(/\s+/g, " ").trim().slice(0, 120);
     await this.turns.append(this.sessionId, {
-      intent: this.turnIntent?.intent || userText.replace(/\s+/g, " ").trim().slice(0, 120),
+      intent,
       mode: this.turnIntent?.mode ?? fallbackMode,
       userText: userText.slice(0, 400),
       assistant: assistant.slice(0, 1200),
@@ -422,6 +439,8 @@ class Shell {
       ts: Date.now(),
       messageIndex: all.length,
     });
+    // 会话标题跟随"最近一次用户意图"，比第一条消息更能概括这个会话
+    if (intent.trim().length > 0) this.sessions.rename(this.sessionId, intent.trim().slice(0, 40));
     this.turnIntent = undefined;
     this.turnTools.clear();
     this.turnFiles.clear();
@@ -1587,6 +1606,7 @@ class Shell {
           p.scale === "large" ? "大任务" : "",
           p.needsProposal ? "需产出提案" : "",
           p.degraded ? "降级判定" : "",
+          p.reused ? "沿用上轮意图" : "",
         ].filter(Boolean);
         this.panel.setHint(`${label}${flags.length ? `（${flags.join("，")}）` : ""} · ${p.reason ?? ""}`);
         return;

@@ -69,11 +69,11 @@ export function buildContext(
   let kept = recent.map((m) => ({ role: m.role, text: m.text }) as ChatMessage);
   let folded = older.length;
 
-  // 摘要本身可能就超预算：截断摘要（保留开头，那里是"更早"的结论）
+  // 摘要本身可能就超预算：**保留最新的行**（越靠后越新），从最旧的行开始丢
   if (summary) {
     const summaryTokens = estimateTokens(summary);
     if (summaryTokens > budget.maxTokens / 2) {
-      summary = truncateToTokens(summary, Math.floor(budget.maxTokens / 2));
+      summary = truncateSummaryFromFront(summary, Math.floor(budget.maxTokens / 2));
     }
   }
 
@@ -125,6 +125,26 @@ export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * 摘要超预算时保留**较新**的部分：逐行从头部删，而不是截断字符串。
+ *
+ * 摘要行按时间追加（旧 → 新），所以"保留开头"会丢掉最近结论；
+ * 这里反过来，只丢最旧的几行，并在开头注明省略了多少行。
+ */
+function truncateSummaryFromFront(text: string, maxTokens: number): string {
+  if (estimateTokens(text) <= maxTokens) return text;
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  let dropped = 0;
+  while (lines.length > 1 && estimateTokens(lines.join("\n")) > maxTokens) {
+    lines.shift();
+    dropped += 1;
+  }
+  const prefix = dropped > 0 ? `…（更早的 ${dropped} 行摘要已省略）` : "";
+  let out = [prefix, ...lines].filter((line) => line.length > 0).join("\n");
+  if (estimateTokens(out) > maxTokens) out = truncateToTokens(out, maxTokens);
+  return out;
 }
 
 function truncateToTokens(text: string, maxTokens: number): string {
