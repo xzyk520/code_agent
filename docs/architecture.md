@@ -669,6 +669,19 @@ system_prompt(mode) → loop
 降级：服务端不支持 `json_schema` → `json_object` → 纯文本解析；输出非法时带着错误要求
 模型重试（最多 2 次）；仍失败 → 退回 chat 并标记 `degraded`（面板提示"降级判定"）。
 
+#### 长任务的可靠性保障（已实现）
+
+| 机制 | 行为 |
+| --- | --- |
+| 步数放宽 | `scale=large` 时用 `beeCode.agent.largeTaskSteps`（默认 24），普通任务用 `agent.maxSteps` |
+| 计划持久化 | `ui.plan` 写入 `turns.jsonl` 与 `session meta`；重载后面板恢复，下一轮作为 system 注入未完成步骤 |
+| 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
+| 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
+| 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
+| 轮预算 | `agent.maxTurnTokens`（默认 200k）与 `agent.maxTurnSeconds`（默认 900s）；用尽后**禁用工具**要求模型收尾，并跳过"没提案"追问 |
+
+收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
+
 **为什么删掉 auto 模式**：既然每轮都要分类，再保留一个"自动/手动"开关只会让 UI 与真实
 决策不一致。按钮删掉、徽标常显，用户始终能看到这一轮被判定成了什么。
 --- | --- | --- |

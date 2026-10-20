@@ -1,6 +1,6 @@
 {
-  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 24）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
-  "version": 24,
+  "$comment": "壳 ↔ 内核的协议契约（唯一真相）。改这里必须同时改 src/protocol.ts 与 beecode/ipc.py，并把 version +1（当前 25）。src/contract.ts 与 beecode/contract.py 会在运行时校验。",
+  "version": 25,
   "shellMethods": {
     "fs.read": { "required": ["path"], "optional": ["startLine", "endLine", "role"], "result": ["text", "version", "totalLines", "startLine", "endLine", "truncated"] },
     "fs.list": { "required": [], "optional": ["glob", "exclude", "maxResults"], "result": ["paths", "truncated"] },

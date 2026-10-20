@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Mode, ProposalDto, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
+import type { Mode, PlanStep, ProposalDto, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -61,6 +61,7 @@ export interface PanelState {
   proposals: ProposalDto[];
   messages: ChatMessageView[];
   attachments: AttachedContext[];
+  plan?: PlanStep[];
   hint?: string;
 }
 
@@ -175,7 +176,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** 计划清单（大任务时由 update_plan 产生） */
   planEvent(params: UiPlanParams): void {
+    this.state.plan = params.steps;
     this.post({ type: "plan", ...params });
+  }
+
+  /** 重载/切换会话时恢复计划 */
+  setPlan(plan: PlanStep[] | undefined): void {
+    this.state.plan = plan;
+    if (plan && plan.length > 0) this.post({ type: "plan", steps: plan });
+  }
+
+  getPlan(): PlanStep[] | undefined {
+    return this.state.plan;
+  }
+
+  /** 提案被接受：把计划里提到该文件的步骤标记完成（纯 UI 推断） */
+  planStepDone(path: string): void {
+    const plan = this.state.plan;
+    if (!plan || plan.length === 0) return;
+    const normalized = path.replace(/\\/g, "/").toLowerCase();
+    const base = normalized.split("/").pop() ?? "";
+    let changed = false;
+    for (const step of plan) {
+      if (step.status === "done") continue;
+      const text = step.text.replace(/\\/g, "/").toLowerCase();
+      if (text.includes(normalized) || (base.length > 0 && text.includes(base))) {
+        step.status = "done";
+        changed = true;
+        break;
+      }
+    }
+    if (changed) this.post({ type: "plan", steps: plan });
   }
 
   /** agent 读了文件：面板加一个文件名 chip（编辑器里由 FocusHighlighter 画范围） */

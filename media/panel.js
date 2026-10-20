@@ -40,7 +40,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -472,6 +472,7 @@
         planNode = null;
         readChips.clear();
         el.reads.textContent = "";
+        if (next.plan && next.plan.length > 0) renderPlan(next.plan);
         renderMode();
         renderBusy();
         renderAttachments(next.attachments || []);

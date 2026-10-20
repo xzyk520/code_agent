@@ -48,6 +48,9 @@ _state: dict[str, Any] = {
     "api_key": None,
     "max_steps": 12,
     "tool_timeout_ms": 60_000,
+    "large_task_steps": 24,
+    "max_turn_tokens": 200_000,
+    "max_turn_seconds": 900.0,
     "subagent_config": {},
     "subagent_api_key": None,
 }
@@ -86,6 +89,9 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["api_key"] = params.get("apiKey")
     _state["max_steps"] = int(params.get("maxSteps") or 12)
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
+    _state["large_task_steps"] = int(params.get("largeTaskSteps") or 24)
+    _state["max_turn_tokens"] = int(params.get("maxTurnTokens") or 200_000)
+    _state["max_turn_seconds"] = float(params.get("maxTurnSeconds") or 900)
     _state["subagent_config"] = dict(params.get("subagentConfig") or {})
     _state["subagent_api_key"] = params.get("subagentApiKey")
 
@@ -154,6 +160,9 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             max_steps=int(_state.get("max_steps") or 12),
             tool_timeout_s=max(5.0, float(_state.get("tool_timeout_ms") or 60_000) / 1000.0),
             context_window_tokens=int((_state.get("model_config") or {}).get("contextWindow") or 32_768),
+            large_task_steps=int(_state.get("large_task_steps") or 24),
+            max_turn_tokens=int(_state.get("max_turn_tokens") or 200_000),
+            max_turn_seconds=float(_state.get("max_turn_seconds") or 900),
         ),
         propose=_propose,
         log=_log,
@@ -170,6 +179,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             history=history,
             summary=summary if isinstance(summary, str) else None,
             focus=params.get("focus") if isinstance(params.get("focus"), dict) else None,
+            plan=params.get("plan") if isinstance(params.get("plan"), list) else None,
         )
     )
     _tasks[session_id] = task

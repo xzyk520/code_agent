@@ -83,6 +83,11 @@ class TurnConfig:
     compact_ratio: float = 0.7
     #: 最近几条工具结果保留原文（更旧的替换成摘要）
     keep_raw_tool_results: int = 3
+    #: 大任务放宽后的步数上限
+    large_task_steps: int = 24
+    #: 单轮 token / 墙钟预算
+    max_turn_tokens: int = 200_000
+    max_turn_seconds: float = 900.0
 
 
 @dataclass(slots=True)
@@ -130,6 +135,8 @@ class AgentLoop:
         self._digested: set[int] = set()
         self._compact_notice_added = False
         self._l3_used = False
+        #: 本轮的当前计划（update_plan 更新；propose_edit 成功时推断进度）
+        self._plan: list[dict[str, str]] | None = None
 
     async def run_turn(
         self,
@@ -141,6 +148,7 @@ class AgentLoop:
         summary: str | None,
         system_override: str | None = None,
         focus: dict[str, Any] | None = None,
+        plan: list[dict[str, str]] | None = None,
     ) -> TurnStats:
         # —— 视觉能力：显式设置 > 服务端反馈（缓存） > 乐观尝试 ——
         base_url = str(session.model_config.get("baseUrl") or "")
@@ -209,6 +217,15 @@ class AgentLoop:
                 f"意图：{effective_mode}（{intent.reason}，规模 {intent.scale}，"
                 f"需要提案 {intent.needs_proposal}{'，降级' if intent.degraded else ''}）"
             )
+            if intent.needs_proposal:
+                try:
+                    checkpoint = await self._shell.checkpoint(
+                        label=f"turn: {(intent.intent or text)[:40]}"
+                    )
+                    if checkpoint:
+                        self._log(f"自动检查点：{checkpoint[:8]}")
+                except Exception as exc:  # noqa: BLE001 - 快照失败不该阻断任务
+                    self._log(f"自动检查点失败：{exc}")
         messages = session.build_request_messages(
             system_override or system_prompt(effective_mode),
             history=history,
@@ -246,6 +263,32 @@ class AgentLoop:
         self._digested.clear()
         self._compact_notice_added = False
         self._l3_used = False
+        max_steps = self._config.max_steps
+        if intent is not None and intent.scale == "large":
+            max_steps = max(max_steps, self._config.large_task_steps)
+        started_at = asyncio.get_running_loop().time()
+        budget_hit: str | None = None
+        forced_end = False
+
+        # 跨轮延续：把上一轮未完成的计划作为 system 注入
+        if plan:
+            lines = []
+            for index, step in enumerate(plan[:12], start=1):
+                text = str(step.get("text") or "").strip()
+                if not text:
+                    continue
+                status = str(step.get("status") or "pending")
+                mark = "✓" if status == "done" else ("▶" if status == "doing" else "○")
+                lines.append(f"{index}. {mark} {text}")
+            if lines:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "上一轮留下的计划（未全部完成）：\n" + "\n".join(lines)
+                        + "\n请接着做未完成的步骤；如果计划已不适用，用 update_plan 重写。",
+                    }
+                )
+
         stats = TurnStats()
         if intent is not None and intent.usage:
             stats.input_tokens += int(intent.usage.get("inputTokens") or 0)
@@ -271,9 +314,12 @@ class AgentLoop:
 
         self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "start"})
         try:
-            while stats.steps < self._config.max_steps:
+            while stats.steps < max_steps:
                 stats.steps += 1
                 answer, calls, usage = await self._stream(client, messages, session, stats)
+                budget_hit = self._budget_reason(stats, started_at)
+                if budget_hit:
+                    break
                 if not calls:
                     nudged = self._maybe_nudge(answer, session, effective_mode, nudges)
                     if nudged is not None:
@@ -308,6 +354,7 @@ class AgentLoop:
                     stats.tool_calls += 1
                     if call.name == "propose_edit" and result.get("ok"):
                         stats.proposals += 1
+                        self._advance_plan(session, str(result.get("path") or ""))
                     self._emit_read(session, call, result)
 
                     digest = _digest(result)
@@ -319,10 +366,20 @@ class AgentLoop:
                     messages.append(_tool_message(call, result))
 
             else:
+                forced_end = True
                 final_text = await self._finish_max_steps(messages, client, session, stats)
+            if budget_hit:
+                forced_end = True
+                final_text = await self._finish_with_notice(
+                    messages,
+                    client,
+                    session,
+                    stats,
+                    f"本轮预算用尽（{budget_hit}）。请不要再调用工具，总结已完成的部分、未完成的部分与建议的下一步。",
+                )
 
             # 提前收工检测：用户要求改代码，但整轮没有产出任何提案
-            if wants_edit and stats.proposals == 0 and nudges < self._config.nudge_limit:
+            if wants_edit and stats.proposals == 0 and nudges < self._config.nudge_limit and not forced_end:
                 nudges += 1
                 self._emit("ui.tool", {
                     "sessionId": session.id, "name": "guard", "status": "error",
@@ -479,6 +536,8 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         session: Session,
         stats: TurnStats,
+        *,
+        allow_tools: bool = True,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None]:
         """一次模型调用。
 
@@ -489,7 +548,7 @@ class AgentLoop:
         model_name = str(session.model_config.get("model") or "")
         await self._compact(client, messages, session)
         try:
-            result = await self._stream_once(client, messages, session, stats)
+            result = await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
             if has_image_parts(messages):
                 remember(model_name, base_url, True)
             return result
@@ -515,7 +574,7 @@ class AgentLoop:
                     "msg": "当前模型不接受图片：本轮已改为文字描述，后续不再发送图片。",
                 },
             )
-            return await self._stream_once(client, messages, session, stats)
+            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
 
     async def _stream_once(
         self,
@@ -523,12 +582,14 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         session: Session,
         stats: TurnStats,
+        *,
+        allow_tools: bool = True,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None]:
         parts: list[str] = []
         calls: list[ToolCall] = []
         usage: dict[str, int] | None = None
 
-        async for delta in client.stream_chat(messages, tools=self._schemas):
+        async for delta in client.stream_chat(messages, tools=self._schemas if allow_tools else None):
             if delta.usage:
                 usage = delta.usage
             if delta.tool_calls:
@@ -631,16 +692,43 @@ class AgentLoop:
         stats: TurnStats,
     ) -> str:
         """达到步数上限：要求模型基于已有信息收尾（不再给工具）。"""
-        self._emit("ui.tool", {
-            "sessionId": session.id, "name": "guard", "status": "error",
-            "summary": f"已达步数上限（{self._config.max_steps}）",
-        })
-        messages.append({
-            "role": "user",
-            "content": "已达到本轮步数上限。请不要再调用工具，基于已有信息给出结论、未完成部分与下一步建议。",
-        })
-        answer, _calls, _usage = await self._stream(client, messages, session, stats)
+        return await self._finish_with_notice(
+            messages,
+            client,
+            session,
+            stats,
+            "已达到本轮步数上限。请不要再调用工具，基于已有信息给出结论、未完成部分与下一步建议。",
+        )
+
+    async def _finish_with_notice(
+        self,
+        messages: list[dict[str, Any]],
+        client: OpenAIClient,
+        session: Session,
+        stats: TurnStats,
+        notice: str,
+    ) -> str:
+        self._emit(
+            "ui.tool",
+            {
+                "sessionId": session.id,
+                "name": "guard",
+                "status": "error",
+                "summary": notice[:60],
+            },
+        )
+        messages.append({"role": "user", "content": notice})
+        answer, _calls, _usage = await self._stream(client, messages, session, stats, allow_tools=False)
         return answer
+
+    def _budget_reason(self, stats: TurnStats, started_at: float) -> str | None:
+        used = stats.input_tokens + stats.output_tokens
+        if used > self._config.max_turn_tokens:
+            return f"token {used} > {self._config.max_turn_tokens}"
+        elapsed = asyncio.get_running_loop().time() - started_at
+        if elapsed > self._config.max_turn_seconds:
+            return f"耗时 {elapsed:.0f}s > {self._config.max_turn_seconds:.0f}s"
+        return None
 
     def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:
         """读文件类工具成功后广播位置：壳用它做编辑器高亮 / 文件 chips。"""
@@ -658,7 +746,29 @@ class AgentLoop:
         self._notify("ui.read", params)
 
     def _emit_plan(self, session: Session, steps: list[dict[str, str]]) -> None:
+        self._plan = steps
         self._notify("ui.plan", {"sessionId": session.id, "steps": steps})
+
+    def _advance_plan(self, session: Session, path: str) -> None:
+        """propose_edit 成功后推断进度：计划里提到该文件的步骤标记完成。
+
+        只是**推断**，不覆盖模型自己用 update_plan 设定的状态。
+        """
+        if not self._plan or not path:
+            return
+        target = path.replace("\\", "/").lower()
+        base = target.rsplit("/", 1)[-1]
+        changed = False
+        for step in self._plan:
+            if step.get("status") == "done":
+                continue
+            text = str(step.get("text") or "").replace("\\", "/").lower()
+            if target in text or (base and base in text):
+                step["status"] = "done"
+                changed = True
+                break
+        if changed:
+            self._notify("ui.plan", {"sessionId": session.id, "steps": self._plan})
 
     # ───────────────────────── 子代理 ─────────────────────────
 

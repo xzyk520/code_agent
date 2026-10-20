@@ -480,6 +480,33 @@
           "default": "function",
           "markdownDescription": "Keep/Undo 的分组粒度。"
         },
+        "beeCode.agent.largeTaskSteps": {
+          "type": "number",
+          "scope": "window",
+          "order": 45,
+          "default": 24,
+          "minimum": 1,
+          "maximum": 60,
+          "markdownDescription": "意图分析判定为「大任务」时使用的步数上限（普通任务用 `beeCode.agent.maxSteps`）。"
+        },
+        "beeCode.agent.maxTurnTokens": {
+          "type": "number",
+          "scope": "window",
+          "order": 46,
+          "default": 200000,
+          "minimum": 10000,
+          "maximum": 2000000,
+          "markdownDescription": "单轮 token 预算（输入 + 输出累计）。用尽后 agent 会收尾并报告未完成部分。"
+        },
+        "beeCode.agent.maxTurnSeconds": {
+          "type": "number",
+          "scope": "window",
+          "order": 47,
+          "default": 900,
+          "minimum": 60,
+          "maximum": 7200,
+          "markdownDescription": "单轮墙钟预算（秒）。超时后 agent 会收尾并报告未完成部分。"
+        },
         "beeCode.agent.maxSteps": {
           "type": "number",
           "default": 30

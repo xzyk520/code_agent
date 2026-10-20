@@ -46,6 +46,7 @@ import type {
   RunParams,
   RunResult,
   UiDeltaParams,
+  PlanStep,
   UiIntentParams,
   UiPlanParams,
   UiReadParams,
@@ -105,6 +106,8 @@ class Shell {
   private turnIntent?: { intent: string; mode: Mode };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
+  /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
+  private turnPlan: PlanStep[] = [];
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
@@ -322,6 +325,7 @@ class Shell {
     );
     this.persisted = existing.length;
     this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
+    this.panel.setPlan(this.sessions.meta(this.sessionId)?.plan);
     await this.loadSummary(existing.length);
 
     const meta = this.sessions.meta(this.sessionId);
@@ -494,6 +498,7 @@ class Shell {
       tools: [...this.turnTools],
       files: [...this.turnFiles],
       observations: [...this.turnObservations],
+      ...(this.turnPlan.length > 0 ? { plan: this.turnPlan } : {}),
       ts: Date.now(),
       messageIndex: all.length,
     });
@@ -566,6 +571,7 @@ class Shell {
       this.sessions.meta(picked.id)?.mode ?? this.panel.getMode(),
     );
     this.persisted = messages.length;
+    this.panel.setPlan(this.sessions.meta(picked.id)?.plan);
     await this.loadSummary(messages.length);
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
@@ -613,6 +619,9 @@ class Shell {
         modelConfig: this.config.model,
         maxSteps: this.config.maxSteps,
         toolTimeoutMs: this.config.toolTimeoutMs,
+        largeTaskSteps: this.config.largeTaskSteps,
+        maxTurnTokens: this.config.maxTurnTokens,
+        maxTurnSeconds: this.config.maxTurnSeconds,
         checkpointEnabled: this.config.checkpointEnabled,
         ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),
         subagentConfig: {
@@ -733,12 +742,14 @@ class Shell {
     this.turnTools.clear();
     this.turnObservations.length = 0;
     this.turnFiles.clear();
+    this.turnPlan = [];
     this.turn = "thinking";
     this.turnDetail = undefined;
     void this.sessions.updateStatus(this.sessionId, "thinking");
 
     try {
       const core = await this.ensureCore();
+      const meta = this.sessions.meta(this.sessionId);
       // 历史是**裁剪过**的：摘要 + 最近 N 条，而不是整份 transcript
       const ctx = await this.modelContext();
       const params: ChatSendParams = {
@@ -750,6 +761,8 @@ class Shell {
         // 本轮用户消息已经通过 text 单独传，别在 history 里重复一次
         history: stripTrailingUser(ctx.history, userText),
         summary: ctx.summary,
+        // 上一轮未完成的计划：跨轮延续（全部完成就不带了）
+        ...(pendingPlan(meta?.plan) ? { plan: pendingPlan(meta?.plan) } : {}),
       };
       await core.chatSend(params);
     } catch (err) {
@@ -832,6 +845,9 @@ class Shell {
 
     if (result.applied) {
       this.log.info(`提案已应用 ${id}`);
+      this.panel.planStepDone(dto.path);
+      const plan = this.panel.getPlan();
+      if (plan) this.sessions.updatePlan(this.sessionId, plan);
       return true;
     }
     this.log.warn(`提案未应用 ${id}（${dto.path}）：${result.message ?? "未知原因"}`);
@@ -1549,6 +1565,10 @@ class Shell {
       // 轮次记录也截断到同一位置；摘要随之截断（已覆盖的轮次按 messageIndex 对齐）
       await this.turns.truncate(this.sessionId, snapshot.line);
       await this.truncateSummary(snapshot.line);
+      const keptTurns = await this.turns.list(this.sessionId);
+      const lastPlan = keptTurns[keptTurns.length - 1]?.plan;
+      this.panel.setPlan(lastPlan);
+      this.sessions.updatePlan(this.sessionId, lastPlan);
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
       await this.noteRollback(picked.id, picked.label, true);
@@ -1678,7 +1698,10 @@ class Shell {
         return;
       }
       case "ui.plan": {
-        this.panel.planEvent(params as UiPlanParams);
+        const p = params as UiPlanParams;
+        this.turnPlan = p.steps;
+        this.panel.planEvent(p);
+        this.sessions.updatePlan(this.sessionId, p.steps);
         return;
       }
       case "ui.subagent": {
@@ -1885,6 +1908,12 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
     return history.slice(0, -1);
   }
   return history;
+}
+
+/** 未完成的计划（全部 done 就没必要再带给模型） */
+function pendingPlan(plan: PlanStep[] | undefined): PlanStep[] | undefined {
+  if (!plan || plan.length === 0) return undefined;
+  return plan.some((step) => step.status !== "done") ? plan : undefined;
 }
 
 /** 权限拒绝：用 PathPolicyError 这个 name，让壳的 rpcCodeFor 映射成 DENIED(-32013) */

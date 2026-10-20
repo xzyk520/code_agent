@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { Mode } from "./protocol";
+import type { Mode, PlanStep } from "./protocol";
 
 /** 一条已落盘的消息（追加写，永不修改） */
 export interface StoredMessage {
@@ -25,6 +25,8 @@ export interface SessionMeta {
   /** 上一次崩溃/重载时停在哪个阶段（见 docs §9.3） */
   status?: TurnStatus;
   statusDetail?: string;
+  /** 最近一次计划（跨轮延续 + 重载后恢复面板） */
+  plan?: PlanStep[];
 }
 
 const INDEX_FILE = "index.json";
@@ -167,6 +169,15 @@ export class SessionStore {
     const entry = this.meta(id);
     if (!entry) return;
     entry.title = title.slice(0, 80);
+    this.scheduleIndexWrite();
+  }
+
+  /** 记录/更新本会话的计划（用于跨轮延续与重载恢复） */
+  updatePlan(id: string, plan: PlanStep[] | undefined): void {
+    const entry = this.meta(id);
+    if (!entry) return;
+    entry.plan = plan;
+    entry.updatedAt = Date.now();
     this.scheduleIndexWrite();
   }
 

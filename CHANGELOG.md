@@ -7,6 +7,12 @@
 
 ### Added
 
+- **长任务可靠性（协议 v25）**：
+  - 大任务自动放宽步数（`agent.largeTaskSteps`，默认 24）；单轮新增 token/墙钟预算（200k / 900s），用尽后禁工具收尾
+  - 计划持久化：`ui.plan` 落 `turns.jsonl` + `session meta`；重载恢复面板，下一轮作为 system 注入未完成步骤
+  - 计划推断：`propose_edit` 成功 → 提到该文件的步骤标 done；接受提案 → 面板/元数据同步勾选
+  - `needs_proposal` 轮次开始时自动建检查点，长任务中途可回滚
+
 - **摘要自动持久化**：`<sessions>/<sessionId>.summary.json` 保存 `{covered, coveredMessageIndex, lines}`
   - 会话重载/切换后直接读回摘要，不再重新调用模型计算
   - 聊天回滚时按 `messageIndex` 截断摘要行；会话被外部截短则整体丢弃重算

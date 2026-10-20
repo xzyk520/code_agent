@@ -35,6 +35,9 @@ export interface ShellConfig {
   apiKeyId: string;
   maxSteps: number;
   toolTimeoutMs: number;
+  largeTaskSteps: number;
+  maxTurnTokens: number;
+  maxTurnSeconds: number;
   granularity: "function" | "change" | "file";
   checkpointEnabled: boolean;
   checkpointRetention: number;
@@ -107,6 +110,9 @@ export function readConfig(): ConfigReadResult {
       contextWindow: reader.num("model.contextWindow", 32_768, 4_096, 2_000_000),
     },
     maxSteps: reader.num("agent.maxSteps", 30, 1, 500),
+    largeTaskSteps: reader.num("agent.largeTaskSteps", 24, 1, 60),
+    maxTurnTokens: reader.num("agent.maxTurnTokens", 200_000, 10_000, 2_000_000),
+    maxTurnSeconds: reader.num("agent.maxTurnSeconds", 900, 60, 7_200),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),
     granularity: reader.oneOf("review.granularity", "function", ["function", "change", "file"] as const),
     checkpointEnabled: reader.bool("checkpoint.enabled", true),

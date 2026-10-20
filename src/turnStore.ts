@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { Mode } from "./protocol";
+import type { Mode, PlanStep } from "./protocol";
 
 /**
  * 轮次记录：一轮 = 意图分析结果 + 用户输入 + AI 回答 + 用过的工具 + 改动的文件。
@@ -26,6 +26,8 @@ export interface TurnRecord {
   files: string[];
   /** 工具观察摘要（name: summary），供模型总结时参考 */
   observations: string[];
+  /** 本轮最后的计划（跨轮延续用） */
+  plan?: PlanStep[];
   ts: number;
   /** 写完这一轮时，会话 JSONL 的条数（回滚截断用） */
   messageIndex: number;
