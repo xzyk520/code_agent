@@ -855,6 +855,8 @@ chat.send { attachments, focus: {path, line, startLine, endLine, kind, symbol} }
 **点击跳转**：chip 是按钮，点击后用 `resolveTarget` 解析路径 → 打开（预览模式，不污染标签页）→
 光标放到起始行、滚动到范围居中。webview 消息按不可信处理：只接受工作区相对路径，
 拒绝绝对路径与 `..`，行号必须有限（`parseOpenRead` 有单测覆盖）。
+跳转后会在编辑器里**重新画一次读取范围高亮**（6 秒后消失）——chip 可能已经存在很久，
+实时高亮早过期了，重画才能让人看清"当时读的是哪一段"。
 
 ---
 

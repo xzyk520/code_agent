@@ -986,6 +986,12 @@ class Shell {
       editor.selection = new vscode.Selection(range.start, range.start);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       this.log.debug(`跳转到 ${path}:${start + 1}-${end + 1}`);
+
+      // 跳转后重新画一次高亮：面板 chip 可能已经存在很久，实时高亮早就过期了。
+      // addRead 自带 6 秒定时清除，且会去重（同一范围不会重复叠加）。
+      if (this.config.focus.highlight) {
+        this.focusHighlight.addRead({ path, startLine: start + 1, endLine: end + 1 });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn(`打开 ${path} 失败：${message}`);
