@@ -31,6 +31,8 @@
     stop: must("stop", HTMLButtonElement),
     acceptAll: must("acceptAll", HTMLButtonElement),
     modeBadge: must("mode-badge", HTMLElement),
+    cost: must("cost", HTMLElement),
+    trajectory: must("trajectory", HTMLElement),
     reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
   };
@@ -81,12 +83,14 @@
    * @param {string} role
    * @param {string} text
    * @param {string} [extraClass]
+   * @param {string} [id]
    * @returns {HTMLElement}
    */
-  function addMessage(role, text, extraClass) {
+  function addMessage(role, text, extraClass, id) {
     const node = document.createElement("div");
     node.className = "msg " + role + (extraClass ? " " + extraClass : "");
     node.textContent = text;
+    if (id) node.dataset.messageId = id;
     el.messages.appendChild(node);
     el.messages.scrollTop = el.messages.scrollHeight;
     return node;
@@ -309,6 +313,72 @@
     setTimeout(() => chip.classList.remove("flash"), 1_200);
   }
 
+  /** 右侧会话轨迹：按意图列出每一轮，点击跳到对应消息 */
+  /** @type {Array<{ id: string, mode: string, intent: string }>} */
+  let trajectoryItems = [];
+
+  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown }} item */
+  function appendTrajectoryButton(item) {
+    const id = typeof item.id === "string" ? item.id : "";
+    if (!id) return;
+    const mode = typeof item.mode === "string" ? item.mode : "chat";
+    const intent = typeof item.intent === "string" ? item.intent : "";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "trajectory-item mode-" + mode;
+    button.dataset.target = id;
+    button.title = intent;
+    const dot = document.createElement("span");
+    dot.className = "trajectory-dot";
+    dot.textContent = mode === "builder" ? "◆" : mode === "debugger" ? "●" : "○";
+    const label = document.createElement("span");
+    label.className = "trajectory-label";
+    label.textContent = intent || "（未记录意图）";
+    button.append(dot, label);
+    button.addEventListener("click", () => {
+      const node = Array.from(el.messages.querySelectorAll("[data-message-id]")).find(
+        (candidate) => /** @type {HTMLElement} */ (candidate).dataset.messageId === id,
+      );
+      if (!(node instanceof HTMLElement)) return;
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      node.classList.remove("trajectory-flash");
+      void node.offsetWidth;
+      node.classList.add("trajectory-flash");
+      setTimeout(() => node.classList.remove("trajectory-flash"), 1_400);
+    });
+    el.trajectory.appendChild(button);
+  }
+
+  /** @param {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} items */
+  function renderTrajectory(items) {
+    trajectoryItems = [];
+    el.trajectory.textContent = "";
+    for (const item of items) {
+      if (typeof item.id !== "string") continue;
+      trajectoryItems.push({
+        id: item.id,
+        mode: typeof item.mode === "string" ? item.mode : "chat",
+        intent: typeof item.intent === "string" ? item.intent : "",
+      });
+      appendTrajectoryButton(item);
+    }
+    el.trajectory.scrollTop = el.trajectory.scrollHeight;
+  }
+
+  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown }} item */
+  function addTrajectoryItem(item) {
+    const id = typeof item.id === "string" ? item.id : "";
+    if (!id || trajectoryItems.some((existing) => existing.id === id)) return;
+    trajectoryItems.push({
+      id,
+      mode: typeof item.mode === "string" ? item.mode : "chat",
+      intent: typeof item.intent === "string" ? item.intent : "",
+    });
+    appendTrajectoryButton(item);
+    el.trajectory.scrollTop = el.trajectory.scrollHeight;
+  }
+
   /**
    * 计划清单：同一轮内反复 update_plan 时复用同一个节点。
    * @type {HTMLElement | null}
@@ -465,8 +535,10 @@
         state = { mode: next.mode, busy: next.busy };
         el.messages.textContent = "";
         for (const item of next.messages || []) {
-          addMessage(item.role, item.text);
+          addMessage(item.role, item.text, undefined, item.id);
         }
+        el.trajectory.textContent = "";
+        trajectoryItems = [];
         clearStreaming();
         subagents.clear();
         planNode = null;
@@ -496,16 +568,12 @@
           // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
           streamingNode.textContent = message.text;
           clearStreaming();
-        subagents.clear();
-        planNode = null;
-        readChips.clear();
-        el.reads.textContent = "";
           setMessagesBusy(false);   // 流式结束：现在可以播报了
           announce("助手回复完成，共 " + message.text.length + " 字");
           break;
         }
         if (message.role === "user") clearStreaming();
-        addMessage(message.role, message.text);
+        addMessage(message.role, message.text, undefined, message.id);
         if (message.role === "system") announce("系统消息：" + message.text);
         break;
       }
@@ -535,6 +603,18 @@
 
       case "reads": {
         renderRead(/** @type {{ path?: unknown, startLine?: unknown, endLine?: unknown }} */ (msg.item));
+        break;
+      }
+      case "cost": {
+        el.cost.textContent = String(msg.text ?? "");
+        break;
+      }
+      case "trajectory": {
+        renderTrajectory(/** @type {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} */ (msg.items) || []);
+        break;
+      }
+      case "trajectoryItem": {
+        addTrajectoryItem(/** @type {{ id?: unknown, mode?: unknown, intent?: unknown }} */ (msg.item));
         break;
       }
       case "plan": {

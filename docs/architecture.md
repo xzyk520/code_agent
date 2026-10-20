@@ -673,6 +673,19 @@ system_prompt(mode) → loop
 
 | 机制 | 行为 |
 | --- | --- |
+| 计划模板 | `large + needs_proposal` 时内核**预置** 4 步骨架（读 → 改 → 测 → 总结），模型可直接沿用或 `update_plan` 重写 |
+| 步数放宽 | `scale=large` 时用 `beeCode.agent.largeTaskSteps`（默认 24），普通任务用 `agent.maxSteps` |
+| 计划持久化 | `ui.plan` 写入 `turns.jsonl` 与 `session meta`；重载后面板恢复，下一轮作为 system 注入未完成步骤 |
+| 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
+| 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
+| 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
+| 轮预算 | `agent.maxTurnTokens`（默认 200k）与 `agent.maxTurnSeconds`（默认 900s）；用尽后**禁用工具**要求模型收尾，并跳过"没提案"追问 |
+
+收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
+
+
+| 机制 | 行为 |
+| --- | --- |
 | 步数放宽 | `scale=large` 时用 `beeCode.agent.largeTaskSteps`（默认 24），普通任务用 `agent.maxSteps` |
 | 计划持久化 | `ui.plan` 写入 `turns.jsonl` 与 `session meta`；重载后面板恢复，下一轮作为 system 注入未完成步骤 |
 | 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
@@ -1426,7 +1439,18 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - ⚠️ **不要承诺多文件原子性**：文件系统没有跨文件事务。"全部接受"是逐个文件写入，中途失败就停在那个文件并如实报告——不会出现"一半写了一半没写却没提示"。
 - 会话结束时仍有待审提案：默认**保留**并提示（可在面板里继续接受/拒绝）。
 
-### 11.6 子代理的可视化（已实现）
+### 11.6 右侧轨迹与任务成本（已实现）
+
+面板右侧是一列**会话轨迹**：每一轮一条，显示意图分析给出的 `intent` 与模式图标。
+点击任意一条会平滑滚动到对应的用户消息并短暂高亮——长会话不必再翻历史。
+
+- 数据来自 `turns.jsonl` 的 `{intent, mode, userMessageId}`；
+- 新轮次在 `ui.intent` 到达时即时追加（不必等轮次结束）；
+- 重载/切换会话/聊天回滚后由 `refreshTrajectory()` 重建；
+- 顶部 header 同时显示**任务级成本**：本轮累计 token、耗时；超过预算 80% 显示「⚠ 接近预算」。
+
+### 11.7 子代理的可视化（已实现）
+
 
 子代理的过程不推流（避免把主对话刷满），而是在面板里渲染成**一张可折叠卡片**：
 

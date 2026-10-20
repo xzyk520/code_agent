@@ -28,6 +28,8 @@ export interface TurnRecord {
   observations: string[];
   /** 本轮最后的计划（跨轮延续用） */
   plan?: PlanStep[];
+  /** 本轮用户消息的 id（轨迹跳转用） */
+  userMessageId?: string;
   ts: number;
   /** 写完这一轮时，会话 JSONL 的条数（回滚截断用） */
   messageIndex: number;

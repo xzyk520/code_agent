@@ -108,6 +108,8 @@ class Shell {
   private readonly turnObservations: string[] = [];
   /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
   private turnPlan: PlanStep[] = [];
+  /** 本轮用户消息 id（右侧轨迹跳转用） */
+  private turnUserMessageId: string | undefined;
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
@@ -327,6 +329,7 @@ class Shell {
     this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
     this.panel.setPlan(this.sessions.meta(this.sessionId)?.plan);
     await this.loadSummary(existing.length);
+    await this.refreshTrajectory();
 
     const meta = this.sessions.meta(this.sessionId);
     const status = meta?.status ?? "idle";   // 未写过的状态一律当 idle，别误报"被中断"
@@ -401,6 +404,15 @@ class Shell {
     };
     await this.summaries.save(this.sessionId, { covered: lines.length, coveredMessageIndex, lines });
     this.log.info(`摘要随聊天回滚截断到 ${lines.length} 轮`);
+  }
+
+  /** 从轮次记录重建右侧轨迹（重载/切换会话/回滚后用） */
+  private async refreshTrajectory(): Promise<void> {
+    const turns = await this.turns.list(this.sessionId);
+    const items = turns
+      .filter((turn) => typeof turn.userMessageId === "string" && turn.userMessageId.length > 0)
+      .map((turn) => ({ id: turn.userMessageId as string, mode: turn.mode, intent: turn.intent }));
+    this.panel.setTrajectory(items);
   }
 
   /** 从磁盘恢复摘要；会话被外部截断时丢弃（避免摘要覆盖不存在的轮次） */
@@ -499,6 +511,7 @@ class Shell {
       files: [...this.turnFiles],
       observations: [...this.turnObservations],
       ...(this.turnPlan.length > 0 ? { plan: this.turnPlan } : {}),
+      ...(this.turnUserMessageId ? { userMessageId: this.turnUserMessageId } : {}),
       ts: Date.now(),
       messageIndex: all.length,
     });
@@ -573,6 +586,7 @@ class Shell {
     this.persisted = messages.length;
     this.panel.setPlan(this.sessions.meta(picked.id)?.plan);
     await this.loadSummary(messages.length);
+    await this.refreshTrajectory();
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
   }
@@ -734,7 +748,10 @@ class Shell {
     if (trimmed.length === 0 && effectiveAttachments.length === 0) return;
 
     const userText = trimmed || defaultInstruction(mode);
-    this.panel.addMessage({ id: `u_${Date.now()}`, role: "user", text: userText });
+    const userMessageId = `u_${Date.now()}`;
+    this.turnUserMessageId = userMessageId;
+    this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
+    this.panel.setCost("");
     this.remember("user", userText);
     this.setBusy(true);
     this.assistantBuffer = "";
@@ -1569,6 +1586,7 @@ class Shell {
       const lastPlan = keptTurns[keptTurns.length - 1]?.plan;
       this.panel.setPlan(lastPlan);
       this.sessions.updatePlan(this.sessionId, lastPlan);
+      await this.refreshTrajectory();
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
       await this.noteRollback(picked.id, picked.label, true);
@@ -1695,6 +1713,13 @@ class Shell {
           p.reused ? "沿用上轮意图" : "",
         ].filter(Boolean);
         this.panel.setHint(`${label}${flags.length ? `（${flags.join("，")}）` : ""} · ${p.reason ?? ""}`);
+        if (this.turnUserMessageId) {
+          this.panel.addTrajectoryItem({
+            id: this.turnUserMessageId,
+            mode: p.mode,
+            intent: p.intent || p.reason || "（未记录意图）",
+          });
+        }
         return;
       }
       case "ui.plan": {
@@ -1723,6 +1748,14 @@ class Shell {
         const p = params as UiUsageParams;
         const cost = typeof p.costUsd === "number" ? ` · $${p.costUsd.toFixed(4)}` : "";
         this.usage = `${p.inputTokens ?? 0}→${p.outputTokens ?? 0} tok${cost}`;
+        const tokens = (p.inputTokens ?? 0) + (p.outputTokens ?? 0);
+        const seconds = (p.elapsedMs ?? 0) / 1000;
+        const nearTokens = tokens > this.config.maxTurnTokens * 0.8;
+        const nearTime = seconds > this.config.maxTurnSeconds * 0.8;
+        const fmtTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+        this.panel.setCost(
+          `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens || nearTime ? " · ⚠ 接近预算" : ""}`,
+        );
         this.updateStatus();
         return;
       }

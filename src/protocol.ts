@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 25;
+export const PROTOCOL_VERSION = 26;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -573,7 +573,14 @@ export interface UiReadParams {
   tool?: string;
 }
 
-export interface UiUsageParams { sessionId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number }
+export interface UiUsageParams {
+  sessionId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  /** 本轮已耗时（毫秒），用于面板实时显示成本 */
+  elapsedMs?: number;
+}
 /** 提案集合变化（只有元数据，正文用 `proposal.read` 按需拉取） */
 export interface ProposalChangedParams {
   added?: ProposalDto[];

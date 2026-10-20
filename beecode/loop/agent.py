@@ -289,6 +289,29 @@ class AgentLoop:
                     }
                 )
 
+        # 大任务且需要产出：预置一份计划骨架，模型可以直接沿用/改写
+        if (
+            intent is not None
+            and intent.needs_proposal
+            and intent.scale == "large"
+            and not plan
+            and effective_mode != "chat"
+        ):
+            template = [
+                {"text": "阅读相关文件，确认改动范围", "status": "doing"},
+                {"text": "实现改动（propose_edit）", "status": "pending"},
+                {"text": "运行测试 / 构建验证", "status": "pending"},
+                {"text": "总结改动与未完成项", "status": "pending"},
+            ]
+            self._emit_plan(session, template)
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "已预置一份计划骨架（读 → 改 → 测 → 总结）。如不适用，用 update_plan 重写；"
+                    "每完成一步请更新状态。",
+                }
+            )
+
         stats = TurnStats()
         if intent is not None and intent.usage:
             stats.input_tokens += int(intent.usage.get("inputTokens") or 0)
@@ -317,6 +340,7 @@ class AgentLoop:
             while stats.steps < max_steps:
                 stats.steps += 1
                 answer, calls, usage = await self._stream(client, messages, session, stats)
+                self._emit_usage(session, stats, started_at)
                 budget_hit = self._budget_reason(stats, started_at)
                 if budget_hit:
                     break
@@ -412,6 +436,7 @@ class AgentLoop:
                 "sessionId": session.id,
                 "inputTokens": stats.input_tokens or _estimate_input(messages),
                 "outputTokens": stats.output_tokens or estimate_tokens(final_text),
+                "elapsedMs": int((asyncio.get_running_loop().time() - started_at) * 1000),
             },
         )
         return stats
@@ -720,6 +745,17 @@ class AgentLoop:
         messages.append({"role": "user", "content": notice})
         answer, _calls, _usage = await self._stream(client, messages, session, stats, allow_tools=False)
         return answer
+
+    def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
+        self._notify(
+            "ui.usage",
+            {
+                "sessionId": session.id,
+                "inputTokens": stats.input_tokens,
+                "outputTokens": stats.output_tokens,
+                "elapsedMs": int((asyncio.get_running_loop().time() - started_at) * 1000),
+            },
+        )
 
     def _budget_reason(self, stats: TurnStats, started_at: float) -> str | None:
         used = stats.input_tokens + stats.output_tokens

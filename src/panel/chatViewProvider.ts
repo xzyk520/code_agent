@@ -180,6 +180,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "plan", ...params });
   }
 
+  /** 任务级成本（本轮 token / 耗时） */
+  setCost(text: string): void {
+    this.post({ type: "cost", text });
+  }
+
+  /** 会话轨迹：按意图列出每一轮，点击跳转到对应消息 */
+  setTrajectory(items: Array<{ id: string; mode: Mode; intent: string }>): void {
+    this.post({ type: "trajectory", items });
+  }
+
+  addTrajectoryItem(item: { id: string; mode: Mode; intent: string }): void {
+    this.post({ type: "trajectoryItem", item });
+  }
+
   /** 重载/切换会话时恢复计划 */
   setPlan(plan: PlanStep[] | undefined): void {
     this.state.plan = plan;
@@ -338,12 +352,16 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
     <div class="modes">
       <span id="mode-badge" class="mode-badge">Chat</span>
     </div>
+    <span id="cost" class="cost"></span>
     <button id="stop" class="stop" title="停止">■</button>
   </header>
 
   <section id="attachments" class="attachments"></section>
   <section id="reads" class="reads" aria-label="agent 最近读取的文件"></section>
-  <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
+  <div class="conversation">
+    <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
+    <aside id="trajectory" class="trajectory" aria-label="会话轨迹"></aside>
+  </div>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="proposals" class="proposals hidden">
     <div class="proposals-head">
