@@ -16,8 +16,12 @@ import { toWorkspaceRelative } from "./paths";
  */
 export class FocusHighlighter implements vscode.Disposable {
   private readonly decoration: vscode.TextEditorDecorationType;
+  /** agent 读取过的范围：可叠加，颜色比"用户光标"更淡 */
+  private readonly readDecoration: vscode.TextEditorDecorationType;
   private lastEditor: vscode.TextEditor | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private readTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly readState = new Map<string, { editor: vscode.TextEditor; ranges: vscode.Range[] }>();
   private disposed = false;
 
   constructor(
@@ -33,6 +37,62 @@ export class FocusHighlighter implements vscode.Disposable {
       overviewRulerLane: vscode.OverviewRulerLane?.Full ?? 4,
       backgroundColor: new vscode.ThemeColor("editor.selectionHighlightBackground"),
     });
+    this.readDecoration = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      borderWidth: "0 0 0 2px",
+      borderStyle: "solid",
+      borderColor: new vscode.ThemeColor("editorInfo.foreground"),
+      overviewRulerColor: new vscode.ThemeColor("editorInfo.foreground"),
+      overviewRulerLane: vscode.OverviewRulerLane?.Full ?? 4,
+      backgroundColor: new vscode.ThemeColor("editor.wordHighlightBackground"),
+    });
+  }
+
+  /**
+   * agent 通过工具读了某个文件。
+   *
+   * 返回 true = 编辑器打开着、范围已画；false = 文件没打开（或没给范围），
+   * 调用方应退化为"文件名高亮"（面板 chip）。
+   */
+  addRead(info: { path: string; startLine?: number; endLine?: number }): boolean {
+    if (this.disposed) return false;
+    if (!info.path || !info.startLine || !info.endLine) return false;
+    const editor = findEditor(info.path);
+    if (!editor) return false;
+
+    const start = Math.max(0, info.startLine - 1);
+    const end = Math.max(0, Math.min(info.endLine - 1, editor.document.lineCount - 1));
+    const range = new vscode.Range(start, 0, end, editor.document.lineAt(end).text.length);
+    const key = editor.document.uri.fsPath;
+    const entry = this.readState.get(key) ?? { editor, ranges: [] };
+    // 同一范围重复读时只保留一条；总数封顶，避免装饰过多
+    if (!entry.ranges.some((r) => r.start.line === range.start.line && r.end.line === range.end.line)) {
+      entry.ranges.push(range);
+      if (entry.ranges.length > 12) entry.ranges.shift();
+    }
+    entry.editor.setDecorations(this.readDecoration, entry.ranges);
+    this.readState.set(key, entry);
+
+    if (this.readTimer) clearTimeout(this.readTimer);
+    this.readTimer = setTimeout(() => this.clearReads(), 6_000);
+    this.readTimer.unref?.();
+    return true;
+  }
+
+  /** 清掉所有"agent 读取"高亮 */
+  clearReads(): void {
+    if (this.readTimer) {
+      clearTimeout(this.readTimer);
+      this.readTimer = undefined;
+    }
+    for (const [key, entry] of this.readState) {
+      try {
+        entry.editor.setDecorations(this.readDecoration, []);
+      } catch {
+        // 编辑器已关闭
+      }
+      this.readState.delete(key);
+    }
   }
 
   /** 高亮某个 focus 范围；`focus` 为空等价于清除 */
@@ -92,7 +152,9 @@ export class FocusHighlighter implements vscode.Disposable {
     if (this.disposed) return;
     this.disposed = true;
     this.clear();
+    this.clearReads();
     this.decoration.dispose();
+    this.readDecoration.dispose();
   }
 }
 

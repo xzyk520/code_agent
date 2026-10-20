@@ -45,6 +45,7 @@ import type {
   UiDeltaParams,
   UiModeParams,
   UiPlanParams,
+  UiReadParams,
   UiSubagentParams,
   UiToolParams,
   UiUsageParams,
@@ -1357,6 +1358,18 @@ class Shell {
         }
         const p = params as UiToolParams;
         this.panel.setHint(`${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`);
+        return;
+      }
+      case "ui.read": {
+        const p = params as UiReadParams;
+        this.panel.readEvent(p);
+        const name = p.path.split("/").pop() || p.path;
+        const drawn = this.config.focus.highlight ? this.focusHighlight.addRead(p) : false;
+        this.panel.setHint(
+          drawn && p.startLine && p.endLine
+            ? `读取 ${name}:${p.startLine}-${p.endLine}`
+            : `读取 ${name}`,
+        );
         return;
       }
       case "ui.mode": {

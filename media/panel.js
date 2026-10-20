@@ -31,6 +31,7 @@
     stop: must("stop", HTMLButtonElement),
     acceptAll: must("acceptAll", HTMLButtonElement),
     autoBadge: must("auto-badge", HTMLElement),
+    reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
   };
 
@@ -279,6 +280,41 @@
     el.autoBadge.title = String(p.reason || "");
   }
 
+  /** agent 读过文件的 chip（同路径只保留一个，重复读时更新行号并闪烁） */
+  const readChips = new Map();
+
+  /** @param {{ path?: unknown, startLine?: unknown, endLine?: unknown }} item */
+  function renderRead(item) {
+    const path = typeof item.path === "string" ? item.path : "";
+    if (!path) return;
+    const name = path.split("/").pop() || path;
+    const start = typeof item.startLine === "number" ? item.startLine : undefined;
+    const end = typeof item.endLine === "number" ? item.endLine : undefined;
+
+    let chip = readChips.get(path);
+    if (!chip) {
+      chip = document.createElement("span");
+      chip.className = "read-chip";
+      el.reads.appendChild(chip);
+      readChips.set(path, chip);
+      // 只保留最近 8 个，避免占满一行
+      while (readChips.size > 8) {
+        const oldest = readChips.keys().next().value;
+        const node = readChips.get(oldest);
+        if (node) node.remove();
+        readChips.delete(oldest);
+      }
+    }
+    chip.textContent = start && end ? `${name}:${start}-${end}` : name;
+    chip.title = start && end ? `${path} 第 ${start}-${end} 行` : path;
+
+    // 重新触发动效：先移除再强制回流
+    chip.classList.remove("flash");
+    void chip.offsetWidth;
+    chip.classList.add("flash");
+    setTimeout(() => chip.classList.remove("flash"), 1_200);
+  }
+
   /**
    * 计划清单：同一轮内反复 update_plan 时复用同一个节点。
    * @type {HTMLElement | null}
@@ -446,6 +482,8 @@
         clearStreaming();
         subagents.clear();
         planNode = null;
+        readChips.clear();
+        el.reads.textContent = "";
         renderMode();
         renderBusy();
         renderAttachments(next.attachments || []);
@@ -471,6 +509,8 @@
           clearStreaming();
         subagents.clear();
         planNode = null;
+        readChips.clear();
+        el.reads.textContent = "";
           setMessagesBusy(false);   // 流式结束：现在可以播报了
           announce("助手回复完成，共 " + message.text.length + " 字");
           break;
@@ -505,6 +545,10 @@
       }
       case "mode": {
         renderModeBadge(/** @type {{ mode?: string, auto?: boolean, reason?: string }} */ (msg));
+        break;
+      }
+      case "reads": {
+        renderRead(/** @type {{ path?: unknown, startLine?: unknown, endLine?: unknown }} */ (msg.item));
         break;
       }
       case "plan": {

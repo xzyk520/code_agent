@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Mode, ProposalDto, UiModeParams, UiPlanParams, UiSubagentParams } from "../protocol";
+import type { Mode, ProposalDto, UiModeParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -157,6 +157,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "plan", ...params });
   }
 
+  /** agent 读了文件：面板加一个文件名 chip（编辑器里由 FocusHighlighter 画范围） */
+  readEvent(params: UiReadParams): void {
+    this.post({ type: "reads", item: params });
+  }
+
   setProposals(items: ProposalDto[]): void {
     this.state.proposals = items;
     this.post({ type: "proposals", items });
@@ -280,6 +285,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   </header>
 
   <section id="attachments" class="attachments"></section>
+  <section id="reads" class="reads" aria-label="agent 最近读取的文件"></section>
   <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="proposals" class="proposals hidden">

@@ -240,6 +240,7 @@ class AgentLoop:
                     stats.tool_calls += 1
                     if call.name == "propose_edit" and result.get("ok"):
                         stats.proposals += 1
+                    self._emit_read(session, call, result)
 
                     digest = _digest(result)
                     if digest in recent_results and len(recent_results) == recent_results.maxlen:
@@ -409,6 +410,21 @@ class AgentLoop:
         })
         answer, _calls, _usage = await self._stream_once(client, messages, session, stats)
         return answer
+
+    def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:
+        """读文件类工具成功后广播位置：壳用它做编辑器高亮 / 文件 chips。"""
+        if not result.get("ok", True) or result.get("error"):
+            return
+        path = result.get("path")
+        if not isinstance(path, str) or not path:
+            return
+        params: dict[str, Any] = {"sessionId": session.id, "path": path, "tool": call.name}
+        start = result.get("startLine")
+        end = result.get("endLine")
+        if isinstance(start, int) and isinstance(end, int):
+            params["startLine"] = start
+            params["endLine"] = end
+        self._notify("ui.read", params)
 
     def _emit_plan(self, session: Session, steps: list[dict[str, str]]) -> None:
         self._notify("ui.plan", {"sessionId": session.id, "steps": steps})

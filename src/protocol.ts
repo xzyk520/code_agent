@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -525,6 +525,17 @@ export interface PlanStep {
 export interface UiPlanParams {
   sessionId: string;
   steps: PlanStep[];
+}
+
+/** agent 读了一个文件（用于编辑器高亮 / 面板文件 chips） */
+export interface UiReadParams {
+  sessionId: string;
+  path: string;
+  /** 仅 read_file 有 */
+  startLine?: number;
+  endLine?: number;
+  /** 触发读取的工具名 */
+  tool?: string;
 }
 
 export interface UiUsageParams { sessionId?: string; inputTokens?: number; outputTokens?: number; costUsd?: number }

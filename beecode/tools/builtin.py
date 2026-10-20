@@ -86,6 +86,7 @@ async def file_outline(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
     symbols = await ctx.shell.outline(str(params["path"]))
     return _clip(
         {
+            "path": params["path"],
             "symbols": [
                 {"name": s.name, "kind": s.kind, "startLine": s.start_line, "endLine": s.end_line, "container": s.container}
                 for s in symbols
