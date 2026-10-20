@@ -7,6 +7,12 @@
 
 ### Added
 
+- **回滚可选范围（代码 / 代码+聊天）**：
+  - 每次创建检查点时同时快照聊天记录（`<globalStorage>/checkpoints/<id>.json`，含消息全文与条数）
+  - 回滚时选择「仅回滚代码」或「代码 + 聊天记录一起回滚」；前者追加【回滚通知】系统消息，后者截断会话 JSONL 到快照时刻
+  - 目标之后的代码快照与聊天快照**一并作废**（影子仓库 `update-ref HEAD` 回退 + 删除快照文件），新快照从目标点继续
+  - 回滚时清空待审提案，避免基于旧代码误点「接受」
+
 - **意图识别改用主模型**（不再硬编码关键词）：
   - 非流式分类调用 + `response_format: json_schema` 强制输出 {mode, scale, needs_proposal, reason}
   - `mode` 固定 chat / builder / debugger；非法值会带着错误信息要求模型重试（最多 2 次）

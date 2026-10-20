@@ -122,6 +122,37 @@ export class SessionStore {
     }
   }
 
+  /**
+   * 把会话截断到前 `messageCount` 条（回滚聊天记录用）。
+   *
+   * JSONL 是追加写的；截断时整份重写（先写临时文件再 rename），
+   * 避免写到一半崩掉把整个会话弄坏。
+   */
+  async truncate(id: string, messageCount: number): Promise<StoredMessage[]> {
+    const messages = await this.open(id);
+    const kept = messages.slice(0, Math.max(0, Math.floor(messageCount)));
+    const file = this.fileOf(id);
+    const body = kept.map((m) => JSON.stringify(m)).join("\n") + (kept.length > 0 ? "\n" : "");
+    const tmp = `${file}.tmp`;
+    try {
+      await fs.promises.writeFile(tmp, body, "utf8");
+      await fs.promises.rename(tmp, file);
+    } catch (err) {
+      this.logger.warn(`会话截断失败: ${err instanceof Error ? err.message : String(err)}`);
+      await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
+    }
+    this.ensureIndex();
+    const entry = this.index?.find((m) => m.id === id);
+    if (entry) {
+      entry.messageCount = kept.length;
+      entry.updatedAt = Date.now();
+      this.scheduleIndexWrite();
+    }
+    this.logger.info(`会话已截断到 ${kept.length} 条（${id}）`);
+    return kept;
+  }
+
   /** 记录"上一轮停在哪"，供重载后判断能否继续 */
   async updateStatus(id: string, status: SessionMeta["status"], detail?: string): Promise<void> {
     const entry = this.meta(id);

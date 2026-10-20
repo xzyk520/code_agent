@@ -85,26 +85,51 @@ export class CheckpointAdapter implements vscode.Disposable {
 
   /** 从 git 历史读（不依赖内存），重载窗口后仍能列出旧检查点 */
   async list(): Promise<CheckpointRecord[]> {
+    return this.serialize(() => this.listInner());
+  }
+
+  private async listInner(): Promise<CheckpointRecord[]> {
+    if (!this.available) return [];
+    try {
+      await this.ensureRepo();
+      // retention=0 表示「不压缩」，此时不能用 `-n 0`（会返回空列表），给个显示上限
+      const limit = this.retention > 0 ? this.retention : LIST_LIMIT_WHEN_UNBOUNDED;
+      const out = await this.git(["log", `--format=%H%x09%ct%x09%s`, "-n", String(limit)]);
+      return out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => {
+          const [id = "", ts = "0", ...rest] = line.split("\t");
+          return { id, label: rest.join("\t"), createdAt: Number(ts) * 1000 };
+        })
+        .filter((record) => record.id.length > 0);
+    } catch {
+      // 仓库还没建 / 还没有任何 commit：没有检查点
+      return [];
+    }
+  }
+
+  /**
+   * 把影子仓库的 HEAD 移回指定检查点，让"更新的快照"作废。
+   *
+   * 语义（对应 README §10.5 的回滚）：
+   *   - 目标检查点本身保持不变
+   *   - 比它更新的检查点从历史上"消失"（分支指针回退，后续提交从目标点继续）
+   *   - 返回被作废的 id，供调用方删除对应的聊天快照
+   */
+  async rewind(id: string): Promise<{ voided: string[] }> {
     return this.serialize(async () => {
-      if (!this.available) return [];
-      try {
-        await this.ensureRepo();
-        // retention=0 表示「不压缩」，此时不能用 `-n 0`（会返回空列表），给个显示上限
-        const limit = this.retention > 0 ? this.retention : LIST_LIMIT_WHEN_UNBOUNDED;
-        const out = await this.git(["log", `--format=%H%x09%ct%x09%s`, "-n", String(limit)]);
-        return out
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0)
-          .map((line) => {
-            const [id = "", ts = "0", ...rest] = line.split("\t");
-            return { id, label: rest.join("\t"), createdAt: Number(ts) * 1000 };
-          })
-          .filter((record) => record.id.length > 0);
-      } catch {
-        // 仓库还没建 / 还没有任何 commit：没有检查点
-        return [];
+      if (!this.available) throw new Error("检查点未启用");
+      const records = await this.listInner();
+      const index = records.findIndex((record) => record.id === id);
+      if (index < 0) throw new Error("检查点不存在（可能已被历史压缩）");
+      const voided = records.slice(0, index).map((record) => record.id);
+      if (voided.length > 0) {
+        await this.git(["update-ref", "HEAD", id]);
+        this.logger.info(`检查点回退：作废 ${voided.length} 个后续快照（目标 ${id.slice(0, 8)}）`);
       }
+      return { voided };
     });
   }
 
