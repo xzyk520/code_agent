@@ -25,8 +25,9 @@ INTENT_SCHEMA: dict[str, Any] = {
         "scale": {"type": "string", "enum": ["small", "large"]},
         "needs_proposal": {"type": "boolean"},
         "reason": {"type": "string"},
+        "intent": {"type": "string"},
     },
-    "required": ["mode", "scale", "needs_proposal", "reason"],
+    "required": ["mode", "scale", "needs_proposal", "reason", "intent"],
     "additionalProperties": False,
 }
 
@@ -36,7 +37,8 @@ _SYSTEM = """你是 Bee Code 的意图分类器。只输出 JSON 对象，不要
 - mode: "chat" | "builder" | "debugger"
 - scale: "small" | "large"
 - needs_proposal: boolean（这一轮是否应该产出文件修改提案）
-- reason: 一句话中文说明
+- reason: 一句话中文说明（为什么这么判）
+- intent: 一句话概括"用户想达成什么"（用于后续总结，不要写实现细节）
 
 判定规则：
 - chat：解释代码、回答问题、讨论方案，不需要改动文件
@@ -55,6 +57,8 @@ class Intent:
     scale: str
     needs_proposal: bool
     reason: str
+    #: 一句话用户意图（持久化，供后续按轮总结使用）
+    intent: str = ""
     usage: dict[str, int] | None = None
     #: 是否走了降级（模型不配合 / 接口不支持结构化输出）
     degraded: bool = False
@@ -65,7 +69,7 @@ class Intent:
 
 
 def _fallback(reason: str, usage: dict[str, int] | None = None) -> Intent:
-    return Intent("chat", "small", False, f"意图识别失败，按 Chat 处理（{reason}）", usage, degraded=True)
+    return Intent("chat", "small", False, f"意图识别失败，按 Chat 处理（{reason}）", "", usage, degraded=True)
 
 
 def _is_format_rejection(message: str) -> bool:
@@ -126,7 +130,17 @@ def _parse(content: str) -> tuple[Intent | None, str]:
     raw_needs = data.get("needs_proposal")
     needs = bool(raw_needs) if isinstance(raw_needs, bool) else mode != "chat"
     reason = str(data.get("reason") or "").strip()[:200]
-    return Intent(mode=mode, scale=scale, needs_proposal=needs, reason=reason or "模型判定"), ""
+    intent_text = str(data.get("intent") or "").strip()[:200]
+    return (
+        Intent(
+            mode=mode,
+            scale=scale,
+            needs_proposal=needs,
+            reason=reason or "模型判定",
+            intent=intent_text,
+        ),
+        "",
+    )
 
 
 async def classify(

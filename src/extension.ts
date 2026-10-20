@@ -23,6 +23,7 @@ import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
 import { FocusHighlighter } from "./focusDecoration";
 import { CheckpointChatIndex } from "./checkpointChatIndex";
+import { TurnStore } from "./turnStore";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -44,7 +45,7 @@ import type {
   RunParams,
   RunResult,
   UiDeltaParams,
-  UiModeParams,
+  UiIntentParams,
   UiPlanParams,
   UiReadParams,
   UiSubagentParams,
@@ -89,7 +90,6 @@ class Shell {
   /** 已落盘的消息条数（面板里的 vs 磁盘上的对齐用） */
   private persisted = 0;
   /** 早前轮次的机械摘要（喂给模型的 L1） */
-  private summary: string | undefined;
   /** 本轮助手输出（ui.delta 累积；chatSend 结束后整段落盘） */
   private assistantBuffer = "";
   private acceptAllCancelled = false;
@@ -99,6 +99,12 @@ class Shell {
   private readonly runner: ReturnType<typeof createRunAdapter>;
   private readonly focusHighlight: FocusHighlighter;
   private readonly chatIndex: CheckpointChatIndex;
+  private readonly turns: TurnStore;
+  private turnIntent?: { intent: string; mode: Mode };
+  private readonly turnTools = new Set<string>();
+  private readonly turnFiles = new Set<string>();
+  /** 模型摘要缓存：covered = 已覆盖的轮次数 */
+  private summaryCache?: { covered: number; text: string };
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
@@ -132,6 +138,7 @@ class Shell {
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
     this.focusHighlight = new FocusHighlighter(this.log);
     this.chatIndex = new CheckpointChatIndex(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
+    this.turns = new TurnStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
@@ -258,7 +265,6 @@ class Shell {
       }),
     );
 
-    this.panel.setMode(this.config.modeDefault);
     this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions, this.focusHighlight);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
@@ -358,12 +364,67 @@ class Shell {
    */
   private async modelContext(): Promise<{ summary?: string; history: ChatMessage[] }> {
     const all = await this.sessions.open(this.sessionId);
-    const built = buildContext(all, this.summary);
-    if (built.summary) this.summary = built.summary;
-    if (built.folded > 0) {
-      this.log.debug(`上下文裁剪：折叠 ${built.folded} 条，约 ${built.estimatedTokens} tokens`);
+    // 机械裁剪负责"取最近 8 条 + 兜底摘要"；模型摘要负责"更早轮次的可读总结"
+    const built = buildContext(all, undefined);
+    if (built.folded === 0) return { summary: built.summary, history: built.messages };
+
+    const summary = await this.modelSummary(all.length);
+    return { summary: summary ?? built.summary, history: built.messages };
+  }
+
+  /**
+   * 用模型给"被折叠的轮次"生成摘要。
+   *
+   * 输入是壳侧持久化的轮次记录（意图 / 回答 / 工具 / 文件），
+   * 内核按 schema 输出 `{pairs:[{intent, summary}]}`，这里拼成一段文本。
+   * 失败或 mock 内核返回空 → 退回机械摘要。
+   */
+  private async modelSummary(totalMessages: number): Promise<string | undefined> {
+    const turns = await this.turns.list(this.sessionId);
+    // 只有"完全落在最近 8 条之外"的轮次才算已折叠
+    const cutoff = Math.max(0, totalMessages - 8);
+    const covered = turns.filter((turn) => turn.messageIndex <= cutoff);
+    if (covered.length === 0) return undefined;
+    if (this.summaryCache && this.summaryCache.covered >= covered.length) return this.summaryCache.text;
+
+    try {
+      const core = this.core ?? (await this.ensureCore());
+      const result = await core.contextSummarize({
+        turns: covered.map((turn) => ({
+          intent: turn.intent,
+          assistant: turn.assistant,
+          tools: turn.tools,
+          files: turn.files,
+        })),
+      });
+      if (result.summary.trim()) {
+        this.summaryCache = { covered: covered.length, text: result.summary };
+        this.log.info(`模型摘要：覆盖 ${covered.length} 轮，${result.summary.length} 字符`);
+        return result.summary;
+      }
+      this.log.debug("模型摘要为空，退回机械摘要");
+    } catch (err) {
+      this.log.warn(`模型摘要失败（退回机械摘要）：${err instanceof Error ? err.message : String(err)}`);
     }
-    return { summary: built.summary, history: built.messages };
+    return this.summaryCache?.text;
+  }
+
+  /** 一轮结束时落盘"意图 + 回答 + 工具 + 文件"，供后续按意图总结 */
+  private async appendTurn(userText: string, assistant: string, fallbackMode: Mode): Promise<void> {
+    const all = await this.sessions.open(this.sessionId);
+    await this.turns.append(this.sessionId, {
+      intent: this.turnIntent?.intent || userText.replace(/\s+/g, " ").trim().slice(0, 120),
+      mode: this.turnIntent?.mode ?? fallbackMode,
+      userText: userText.slice(0, 400),
+      assistant: assistant.slice(0, 1200),
+      tools: [...this.turnTools],
+      files: [...this.turnFiles],
+      ts: Date.now(),
+      messageIndex: all.length,
+    });
+    this.turnIntent = undefined;
+    this.turnTools.clear();
+    this.turnFiles.clear();
   }
 
   /** 「继续上次的操作」：把历史带上，让内核接着上下文做 */
@@ -381,7 +442,8 @@ class Shell {
     await this.sessions.flush();
     this.sessionId = newSessionId();
     await this.context.globalState.update(SESSION_KEY, this.sessionId);
-    this.summary = undefined;
+    this.summaryCache = undefined;
+    this.turnIntent = undefined;
     this.turn = "idle";
     this.turnDetail = undefined;
     this.persisted = 0;
@@ -417,7 +479,8 @@ class Shell {
     await this.sessions.flush();
     this.sessionId = picked.id;
     await this.context.globalState.update(SESSION_KEY, this.sessionId);
-    this.summary = undefined;
+    this.summaryCache = undefined;
+    this.turnIntent = undefined;
     this.persisted = 0;
     const messages = await this.sessions.open(picked.id);
     this.panel.restore(
@@ -587,6 +650,9 @@ class Shell {
     this.remember("user", userText);
     this.setBusy(true);
     this.assistantBuffer = "";
+    this.turnIntent = undefined;
+    this.turnTools.clear();
+    this.turnFiles.clear();
     this.turn = "thinking";
     this.turnDetail = undefined;
     void this.sessions.updateStatus(this.sessionId, "thinking");
@@ -613,13 +679,17 @@ class Shell {
         text: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      if (this.assistantBuffer.trim()) {
-        const text = this.assistantBuffer;
+      const assistantText = this.assistantBuffer;
+      if (assistantText.trim()) {
         // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
-        this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text });
-        this.remember("assistant", text);
+        this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text: assistantText });
+        this.remember("assistant", assistantText);
         this.assistantBuffer = "";
       }
+      // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
+      await this.appendTurn(userText, assistantText, mode).catch((err: unknown) => {
+        this.log.warn(`轮次记录失败：${err instanceof Error ? err.message : String(err)}`);
+      });
       this.setBusy(false);
       this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
       void this.sessions.updateStatus(this.sessionId, this.turn);
@@ -1386,7 +1456,7 @@ class Shell {
       const snapshot = await this.chatIndex.load(picked.id);
       if (!snapshot || snapshot.sessionId !== this.sessionId) {
         void vscode.window.showWarningMessage("Bee Code: 聊天快照不可用（可能属于别的会话），本次只回滚了代码。");
-        this.noteRollback(picked.id, picked.label, false);
+        await this.noteRollback(picked.id, picked.label, false);
         return;
       }
       // 快照只存行号：截断 JSONL 到那一行，消息全文仍然只有一份
@@ -1396,29 +1466,43 @@ class Shell {
         this.sessions.meta(this.sessionId)?.mode,
       );
       this.persisted = kept.length;
-      // 下一轮 buildContext 会：最后 8 条原样 + 更早的机械摘要（这里不能预置 summary，否则会重复折叠）
-      this.summary = undefined;
+      // 轮次记录也截断到同一位置；摘要缓存失效，下一轮重新按意图总结
+      await this.turns.truncate(this.sessionId, snapshot.line);
+      this.summaryCache = undefined;
+      this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
-      this.noteRollback(picked.id, picked.label, true);
+      await this.noteRollback(picked.id, picked.label, true);
       void vscode.window.showInformationMessage(
         `Bee Code: 已回滚代码与聊天记录（截断到第 ${snapshot.line} 行，恢复 ${result.restored.length} 个文件）。`,
       );
       return;
     }
 
-    this.noteRollback(picked.id, picked.label, false);
+    await this.noteRollback(picked.id, picked.label, false);
     void vscode.window.showInformationMessage(
       `Bee Code: 已回滚 ${result.restored.length} 个文件（聊天记录保留）。`,
     );
   }
-  /** 回滚后写一条系统消息：让模型/用户都知道"磁盘已经不是上次讨论的样子了" */
-  private noteRollback(checkpointId: string, label: string, withChat: boolean): void {
+  /** 回滚后写一条系统消息，并把它记成一轮"意图"，让后续摘要能覆盖这次回滚 */
+  private async noteRollback(checkpointId: string, label: string, withChat: boolean): Promise<void> {
     const text = withChat
       ? `【回滚通知】已把代码与聊天记录一起回滚到检查点 ${checkpointId.slice(0, 8)}（${label}）。此前的对话记录已截断，请以当前文件内容为准。`
       : `【回滚通知】代码已回滚到检查点 ${checkpointId.slice(0, 8)}（${label}），聊天记录保留。` +
         "此前提到的文件改动可能已不在磁盘上；请以当前文件内容为准，需要时重新读取确认。";
     this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text });
     this.remember("system", text);
+    this.summaryCache = undefined;
+    const all = await this.sessions.open(this.sessionId);
+    await this.turns.append(this.sessionId, {
+      intent: `把代码回滚到检查点 ${checkpointId.slice(0, 8)}${withChat ? "（含聊天记录）" : ""}`,
+      mode: this.panel.getMode(),
+      userText: "",
+      assistant: text,
+      tools: [],
+      files: [],
+      ts: Date.now(),
+      messageIndex: all.length,
+    });
     this.log.info(`回滚通知已写入会话（${withChat ? "含聊天回滚" : "仅代码"}）`);
   }
   /**
@@ -1469,6 +1553,9 @@ class Shell {
       }
       case "ui.tool": {
         const tool = params as UiToolParams;
+        if (tool.status === "start" && tool.name !== "model" && tool.name !== "guard") {
+          this.turnTools.add(tool.name);
+        }
         if (tool.status === "start") {
           this.turn = "tool";
           this.turnDetail = tool.name;
@@ -1490,16 +1577,18 @@ class Shell {
         );
         return;
       }
-      case "ui.mode": {
-        const p = params as UiModeParams;
-        this.panel.modeEvent(p);
+      case "ui.intent": {
+        const p = params as UiIntentParams;
+        // 意图分析本身不展示（不产生消息）；面板只更新模式徽标与提示
+        this.turnIntent = { intent: p.intent, mode: p.mode };
+        this.panel.setMode(p.mode);
         const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
         const flags = [
           p.scale === "large" ? "大任务" : "",
           p.needsProposal ? "需产出提案" : "",
           p.degraded ? "降级判定" : "",
         ].filter(Boolean);
-        this.panel.setHint(`自动模式：${label}${flags.length ? `（${flags.join("，")}）` : ""}`);
+        this.panel.setHint(`${label}${flags.length ? `（${flags.join("，")}）` : ""} · ${p.reason ?? ""}`);
         return;
       }
       case "ui.plan": {
@@ -1529,7 +1618,9 @@ class Shell {
         return;
       }
       case "proposal.changed": {
-        this.applyProposalChange(params as ProposalChangedParams);
+        const changed = params as ProposalChangedParams;
+        for (const dto of changed.added ?? []) this.turnFiles.add(dto.path);
+        this.applyProposalChange(changed);
         this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
         void this.sessions.updateStatus(this.sessionId, "thinking");
         return;

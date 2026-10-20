@@ -30,15 +30,13 @@
     send: must("send", HTMLButtonElement),
     stop: must("stop", HTMLButtonElement),
     acceptAll: must("acceptAll", HTMLButtonElement),
-    autoBadge: must("auto-badge", HTMLElement),
+    modeBadge: must("mode-badge", HTMLElement),
     reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
   };
 
-  /** @type {NodeListOf<HTMLButtonElement>} */
-  const modeButtons = /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll(".mode"));
 
-  /** @typedef {"auto" | "chat" | "builder" | "debugger"} Mode */
+  /** @typedef {"chat" | "builder" | "debugger"} Mode */
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
@@ -251,33 +249,17 @@
       el.messages.scrollTop = el.messages.scrollHeight;
     }
   }
+  /** 模式完全由意图分析决定：这里只显示徽标 + 调整输入提示 */
   function renderMode() {
-    for (const button of modeButtons) {
-      button.classList.toggle("active", button.dataset.mode === state.mode);
-    }
+    const label = state.mode === "builder" ? "Builder" : state.mode === "debugger" ? "Debugger" : "Chat";
+    el.modeBadge.textContent = label;
+    el.modeBadge.title = "模式由意图分析自动选择";
     el.input.placeholder =
       state.mode === "builder"
         ? "描述要实现的改动…（Ctrl+Enter 发送）"
         : state.mode === "debugger"
           ? "描述报错/异常现象…（Ctrl+Enter 发送）"
-          : state.mode === "auto"
-            ? "直接说你想做什么，会自动判断模式…（Ctrl+Enter 发送）"
-            : "问点什么…（Ctrl+Enter 发送）";
-
-    // 只有 auto 模式才显示"自动：X"角标
-    if (state.mode !== "auto") el.autoBadge.hidden = true;
-  }
-
-  /** @param {{ mode?: string, auto?: boolean, reason?: string }} p */
-  function renderModeBadge(p) {
-    if (state.mode !== "auto" || !p.auto) {
-      el.autoBadge.hidden = true;
-      return;
-    }
-    const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
-    el.autoBadge.hidden = false;
-    el.autoBadge.textContent = "自动：" + label;
-    el.autoBadge.title = String(p.reason || "");
+          : "直接说你想做什么（模式会自动判断）…（Ctrl+Enter 发送）";
   }
 
   /** agent 读过文件的 chip（同路径只保留一个，重复读时更新行号并闪烁） */
@@ -464,12 +446,6 @@
   el.acceptAll.addEventListener("click", () => post({ type: "acceptAll" }));
   el.rejectAll.addEventListener("click", () => post({ type: "rejectAll" }));
 
-  for (const button of modeButtons) {
-    button.addEventListener("click", () => {
-      const mode = button.dataset.mode;
-      if (mode === "chat" || mode === "builder" || mode === "debugger") post({ type: "mode", mode: mode });
-    });
-  }
 
   el.input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -555,10 +531,7 @@
         if (items.length > 0) announce("待审提案 " + items.length + " 个");
         break;
       }
-      case "mode": {
-        renderModeBadge(/** @type {{ mode?: string, auto?: boolean, reason?: string }} */ (msg));
-        break;
-      }
+
       case "reads": {
         renderRead(/** @type {{ path?: unknown, startLine?: unknown, endLine?: unknown }} */ (msg.item));
         break;

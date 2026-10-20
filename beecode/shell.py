@@ -470,6 +470,7 @@ class ShellClient:
             sandbox=str(result.get("sandbox", "none")),
             killed=bool(result.get("killed", False)),
         )
+
     async def confirm(self, question: str, options: list[dict[str, str]], detail: str | None = None) -> str | None:
         result = await self._call(
             "confirm.ask",

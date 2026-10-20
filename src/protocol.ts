@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -344,6 +344,24 @@ export interface RunResult {
   killed: boolean;
 }
 
+/** 一轮用于总结的输入 */
+export interface TurnSummaryInput {
+  intent: string;
+  assistant?: string;
+  tools?: string[];
+  files?: string[];
+}
+
+export interface ContextSummarizeParams {
+  turns: TurnSummaryInput[];
+}
+
+export interface ContextSummarizeResult {
+  summary: string;
+  pairs: Array<{ intent: string; summary: string }>;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
 export interface SecretsGetParams { key: string }
 export interface SecretsGetResult { value: string | null }
 
@@ -361,6 +379,7 @@ export interface ShellMethodParams {
   "diff.open": DiffOpenParams;
   "confirm.ask": ConfirmAskParams;
   "secrets.get": SecretsGetParams;
+  "context.summarize": ContextSummarizeParams;
   "run": RunParams;
 }
 
@@ -378,6 +397,7 @@ export interface ShellMethodResults {
   "diff.open": DiffOpenResult;
   "confirm.ask": ConfirmAskResult;
   "secrets.get": SecretsGetResult;
+  "context.summarize": ContextSummarizeResult;
   "run": RunResult;
 }
 
@@ -385,7 +405,7 @@ export type ShellMethod = keyof ShellMethodParams;
 
 // ────────────────────── 壳 → 内核（内核实现） ──────────────────────
 
-export type Mode = "chat" | "builder" | "debugger" | "auto";
+export type Mode = "chat" | "builder" | "debugger";
 
 export interface ModelConfigDto {
   /** 视觉能力：auto=按模型名猜；on/off=用户显式声明 */
@@ -507,16 +527,15 @@ export interface UiSubagentParams {
   error?: string;
 }
 
-/** auto 模式下内核选择了哪个模式（面板显示"自动：Builder"） */
-export interface UiModeParams {
+/** 意图分析结果：模式与用户意图（面板只显示模式徽标，不显示分析内容） */
+export interface UiIntentParams {
   sessionId: string;
   mode: "chat" | "builder" | "debugger";
-  auto: boolean;
+  /** 一句话用户意图（会被持久化进轮次记录，供模型总结） */
+  intent: string;
   reason?: string;
   scale?: "small" | "large";
-  /** 分类器判定这一轮应产出提案 */
   needsProposal?: boolean;
-  /** 分类走了降级（结构化输出不被支持 / 模型不配合） */
   degraded?: boolean;
 }
 

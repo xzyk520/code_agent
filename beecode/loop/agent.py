@@ -136,26 +136,23 @@ class AgentLoop:
         )
 
         # 统一会话记忆：模式只影响"这轮怎么干"，不影响历史。
-        requested_mode = str(session.mode)
+        # 每一轮都先做意图分析（用 chat 模式的结构化调用），再据此选模式与守卫策略。
         client = self._client_factory(session)
-
-        # auto 模式：让主模型自己做意图分类（结构化输出），不再靠关键词硬编码
         intent: Intent | None = None
-        effective_mode = requested_mode
-        if requested_mode == "auto":
+        effective_mode = str(session.mode)
+        if system_override is None:
             try:
                 intent = await classify(client, text, history, log=self._log)
             except Exception as exc:  # noqa: BLE001 - 分类器不该拖垮整轮
                 self._log(f"意图识别异常：{exc}")
-                intent = Intent("chat", "small", False, f"意图识别异常，按 Chat 处理（{exc}）", degraded=True)
+                intent = Intent("chat", "small", False, f"意图识别异常，按 Chat 处理（{exc}）", "", degraded=True)
             effective_mode = intent.mode
-
             self._notify(
-                "ui.mode",
+                "ui.intent",
                 {
                     "sessionId": session.id,
                     "mode": effective_mode,
-                    "auto": True,
+                    "intent": intent.intent or text[:120],
                     "reason": intent.reason,
                     "scale": intent.scale,
                     "needsProposal": intent.needs_proposal,
@@ -163,10 +160,9 @@ class AgentLoop:
                 },
             )
             self._log(
-                f"auto 模式：{effective_mode}（{intent.reason}，规模 {intent.scale}，"
+                f"意图：{effective_mode}（{intent.reason}，规模 {intent.scale}，"
                 f"需要提案 {intent.needs_proposal}{'，降级' if intent.degraded else ''}）"
             )
-
         messages = session.build_request_messages(
             system_override or system_prompt(effective_mode),
             history=history,
@@ -209,11 +205,7 @@ class AgentLoop:
         recent_results: deque[str] = deque(maxlen=3)
         nudges = 0
         # builder/debugger 默认要产出提案；auto 模式下完全由分类器决定
-        wants_edit = (
-            intent.needs_proposal
-            if intent is not None
-            else effective_mode in ("builder", "debugger")
-        )
+        wants_edit = intent.needs_proposal if intent is not None else effective_mode in ("builder", "debugger")
 
         # 大任务：在用户消息后追加"先制定计划"的指令（模型仍可自行判断要不要用）
         if intent is not None and intent.should_plan and effective_mode != "chat":

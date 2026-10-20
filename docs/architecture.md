@@ -631,31 +631,43 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 
 > 设计要点：守卫要「先提醒、再停止」。直接硬停会让用户觉得模型「卡住了」；先插入一条系统提示纠正策略，往往能自愈。
 
-### 7.4 auto 模式：模型做意图识别（已实现）
+### 7.4 意图分析驱动一切（已实现）
 
-三种模式**共享同一会话记忆**：历史与摘要在壳侧按 `sessionId` 存储，与模式无关；
-模式只决定"这一轮怎么干"（系统提示词侧重、守卫策略），不决定"记得什么"。
+**没有 auto 模式，也没有手动模式**：每一轮提问都先用主模型做一次结构化意图分类，
+拿到的 `mode` 直接决定这一轮怎么干；面板只显示一个模式徽标，不显示分析内容。
 
 ```
-用户输入（mode = auto）
+用户输入（面板不再传模式）
+      │
+      ▼  非流式分类调用（chat 语义，temperature=0）
+{ mode, scale, needs_proposal, reason, intent }
       │
       ▼
-用主模型做一次"结构化分类"（不流式，temperature=0）
-      │  response_format = json_schema
-      │  → {mode, scale, needs_proposal, reason}
-      ▼
-ui.mode {mode, reason, scale, needsProposal, degraded}  → 面板「自动：Builder（需产出提案）」
+ui.intent {mode, intent, reason, scale, needsProposal, degraded}   ← 面板只更新徽标
       │
-      ├─ needs_proposal → 本轮结束前若没有提案，触发"提前收工"追问
-      ├─ scale=large + 非 chat → 追加指令：先 update_plan
+      ├─ intent 写入轮次记录（供后续模型摘要）
+      ├─ needs_proposal → 本轮没提案就追问（防"只说不做"）
+      ├─ scale=large → 提示先 update_plan
       ▼
-system_prompt(effective_mode) → loop 照常跑
+system_prompt(mode) → loop
 ```
 
-#### 分类器契约（`beecode/router.py`）
+分类器契约（`beecode/router.py`）：
 
 | 字段 | 取值 | 用途 |
 | --- | --- | --- |
+| `mode` | `chat` / `builder` / `debugger` | 选提示词；决定守卫语气 |
+| `scale` | `small` / `large` | `large` 才建议计划 |
+| `needs_proposal` | bool | builder/debugger 默认 true |
+| `intent` | 一句话 | 持久化，供摘要按意图总结 |
+| `reason` | 一句话 | 面板提示用 |
+
+降级：服务端不支持 `json_schema` → `json_object` → 纯文本解析；输出非法时带着错误要求
+模型重试（最多 2 次）；仍失败 → 退回 chat 并标记 `degraded`（面板提示"降级判定"）。
+
+**为什么删掉 auto 模式**：既然每轮都要分类，再保留一个"自动/手动"开关只会让 UI 与真实
+决策不一致。按钮删掉、徽标常显，用户始终能看到这一轮被判定成了什么。
+--- | --- | --- |
 | `mode` | `chat` / `builder` / `debugger` | 选提示词；决定守卫语气 |
 | `scale` | `small` / `large` | `large` 才建议计划 |
 | `needs_proposal` | bool | **防止"只说不做"**：builder/debugger 默认 true |
@@ -991,47 +1003,39 @@ chat.send { attachments, focus: {path, line, startLine, endLine, kind, symbol} }
 
 ```
 L0 系统提示 / 模式提示                         固定 ~1k tokens
-L1 早前对话摘要（contextBuilder 机械摘要）       ≤ 3k（占预算一半）
+L1 早前对话摘要（模型按"意图"生成）              ≤ 3k（占预算一半）
 L2 最近 N 条逐字（默认 8 条）                    余下预算
 L3 当前轮附件 / 检索结果（内核自己拼）           单独预算，不进 history
 ```
 
-实现是纯函数 `src/contextBuilder.ts`：
+实现分两段：
 
-```ts
-const { summary, messages, folded, estimatedTokens } = buildContext(all, previousSummary, { recentMessages: 8, maxTokens: 6000 });
+1. **机械裁剪**（`src/contextBuilder.ts`，纯函数）：切出"最近 8 条"，其余折叠；
+   token 估算 CJK≈1/字、ASCII≈1/4；超预算先截摘要再从最旧的逐字消息丢。
+2. **模型摘要**（`src/turnStore.ts` + 内核 `context.summarize`）：把被折叠的轮次
+   交给主模型，按意图逐条总结成一句话。
+
+模型摘要的输入/输出：
+
+```jsonc
+// 输入（壳侧持久化的轮次记录）
+{ "turns": [
+  { "intent": "修复配置崩溃", "assistant": "…", "tools": ["read_file","propose_edit"], "files": ["src/config.ts"] }
+]}
+
+// 输出（结构化 schema 约束）
+{ "pairs": [
+  { "intent": "修复配置崩溃",
+    "summary": "调用了 read_file、propose_edit，改动了 src/config.ts，修复了空配置导致的崩溃" }
+]}
 ```
 
-- **token 估算**：CJK ≈ 1 token/字，ASCII ≈ 1 token/4 字符（不追求精确，只要量级对）。
-- **压缩顺序**：先折叠旧消息进摘要 → 摘要超预算就截断摘要 → 仍超就从最旧的逐字消息开始丢（允许丢到空，当前用户输入由 `text` 单独传）。
-- **摘要不用模型**：这一层在同步路径上跑（面板一刷新就要算），而且重载后可能没有可用模型。机械摘要保留三类锚点：**用户要求过什么、涉及哪些文件、出过什么错**。内核以后可以用 LLM 摘要替换，接口不变。
+句子必须覆盖三要素：**调用了什么工具 / 改动了哪些文件 / 实现了什么需求**。
+壳把 `pairs` 拼成 `- 意图：总结` 的文本作为 L1；失败或 mock 内核返回空时退回机械摘要。
 
-#### 重载后给模型的上下文
-
-不重放整份 transcript，走同一条 `buildContext`：
-
-```
-[摘要] 早前对话摘要 · 22 条消息
-       用户先后要求：请改 src/config/parse.ts…；加个测试…
-       涉及文件：src/config/parse.ts, src/config/parse.test.ts
-[逐字] 最近 8 条
-[当前] 用户这次的输入（text）
-```
-
-三个好处：
-
-1. **成本可控**：重载不会因为历史长而突然爆 token；
-2. **信息不丢**：文件路径、用户意图、错误都在摘要里；
-3. **一致**：正常轮次和重载恢复走同一个函数，不会出现"两条路径行为不同"的 bug。
-
-#### 什么时候换成模型摘要
-
-当内核有了 `chat.send` 的真实循环后，把 `summarize()` 换成一次小模型调用（或用主模型在压缩点插入一个 "summarize" 回合），产出 `compactSummary` 写回会话索引。触发阈值建议：**上下文用到 75%** 时压缩（Claude Code 是接近上限才压，Codex 有 65% 的可配置值；越早压越贵，越晚压越容易在一次工具输出后超限）。
-
-#### 已知取舍
-
-| 取舍 | 说明 |
-| --- | --- |
+轮次记录存 `<sessions>/<id>.turns.jsonl`（一行一轮），并带 `messageIndex` 与 JSONL 对齐——
+聊天回滚时按同一行号截断，摘要缓存同时失效。
+--- | --- |
 | 机械摘要不"理解"内容 | 它只抽锚点；复杂推理的结论会丢。等有模型摘要再补 |
 | 只按条数裁剪 | 不看语义重要性；一条超长的工具输出可能挤掉多条用户指令（缓解：工具输出在适配器层已有上限） |
 | 单一预算 | 不区分模型窗口大小（31k vs 200k）；后续可按模型配置缩放 |

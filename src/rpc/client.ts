@@ -9,6 +9,8 @@ import {
   RpcError,
   rpcCodeFor,
   type ChatSendParams,
+  type ContextSummarizeParams,
+  type ContextSummarizeResult,
   type InitializeParams,
   type InitializeResult,
   type JsonRpcErrorObject,
@@ -128,6 +130,10 @@ export class PythonCore implements CoreApi {
 
   chatSend(params: ChatSendParams): Promise<void> {
     return this.request("chat.send", params, CHAT_TIMEOUT_MS).then(() => undefined);
+  }
+
+  contextSummarize(params: ContextSummarizeParams): Promise<ContextSummarizeResult> {
+    return this.request("context.summarize", params, 180_000).then((r) => r as ContextSummarizeResult);
   }
 
   proposalRead(params: ProposalReadParams): Promise<ProposalReadResult> {

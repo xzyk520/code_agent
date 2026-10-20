@@ -1,6 +1,8 @@
 import type * as vscode from "vscode";
 import type {
   ChatSendParams,
+  ContextSummarizeParams,
+  ContextSummarizeResult,
   InitializeParams,
   InitializeResult,
   JsonRpcId,
@@ -43,6 +45,9 @@ export interface CoreApi extends vscode.Disposable {
    * 只有用户真的要看 diff 或接受时才需要它。
    */
   proposalRead(params: ProposalReadParams): Promise<ProposalReadResult>;
+
+  /** 按轮次让内核用模型生成摘要（上下文压缩用） */
+  contextSummarize(params: ContextSummarizeParams): Promise<ContextSummarizeResult>;
 
   /**
    * 告知内核用户对某个提案的决定。

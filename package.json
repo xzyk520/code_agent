@@ -416,15 +416,6 @@
           "default": true,
           "markdownDescription": "发送时在编辑器里用虚线框高亮 agent 实际读取的代码范围（5 秒后自动消失）。"
         },
-        "beeCode.mode.default": {
-          "type": "string",
-          "scope": "window",
-          "order": 40,
-          "enum": ["auto", "chat", "builder", "debugger"],
-          "enumDescriptions": ["自动判断（推荐）", "强制聊天", "强制生成改动", "强制调试"],
-          "default": "auto",
-          "markdownDescription": "面板启动时的模式。`auto` 会按提问意图自动选择，面板显示「自动：Builder」；手动点模式按钮可覆盖。"
-        },
         "beeCode.subagent.enabled": {
           "type": "boolean",
           "scope": "window",

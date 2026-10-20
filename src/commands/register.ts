@@ -188,11 +188,10 @@ async function attachSelection(
     deps.highlightFocus(focus);
   }
 
-  deps.panel.setMode(mode);
   deps.panel.reveal();
   if (added === 0) {
     deps.panel.setHint("没有可附加的代码（光标不在文件里？）");
     return;
   }
-  deps.panel.setHint(`已附加 ${added} 段（${functions} 个完整函数）· ${mode}`);
+  deps.panel.setHint(`已附加 ${added} 段（${functions} 个完整函数）· 模式由意图分析决定`);
 }

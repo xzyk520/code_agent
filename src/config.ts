@@ -41,7 +41,6 @@ export interface ShellConfig {
   permissions: PermissionsConfig;
   subagent: SubagentConfig;
   /** 面板初始模式（auto = 自动判断） */
-  modeDefault: "auto" | "chat" | "builder" | "debugger";
   focus: FocusConfig;
 }
 
@@ -121,7 +120,6 @@ export function readConfig(): ConfigReadResult {
       requireTrust: reader.bool("permissions.requireTrust", true),
       fullAccess: reader.bool("permissions.fullAccess", false),
     },
-    modeDefault: reader.oneOf("mode.default", "auto", ["auto", "chat", "builder", "debugger"] as const),
     focus: {
       autoAttach: reader.bool("focus.autoAttach", true),
       fallbackLines: reader.num("focus.fallbackLines", 30, 5, 200),

@@ -7,6 +7,8 @@ import type {
   InitializeResult,
   ModelReloadParams,
   ProposalDecideParams,
+  ContextSummarizeParams,
+  ContextSummarizeResult,
   ProposalReadParams,
   ProposalReadResult,
 } from "../protocol";
@@ -107,6 +109,11 @@ export class MockCore implements CoreApi {
       ],
     });
     this.notify("ui.usage", { sessionId: params.sessionId, inputTokens: 1234, outputTokens: 256 });
+  }
+
+  async contextSummarize(_params: ContextSummarizeParams): Promise<ContextSummarizeResult> {
+    // mock 没有模型：返回空摘要，壳会自动退回机械摘要
+    return { summary: "", pairs: [] };
   }
 
   async proposalRead(params: ProposalReadParams): Promise<ProposalReadResult> {

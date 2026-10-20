@@ -34,10 +34,11 @@ from .ipc import (
     RequestContext,
     RpcError,
 )
-from .llm import ModelError
+from .llm import ModelError, OpenAIClient
 from .loop import AgentLoop, TurnConfig
 from .session import Session
 from .shell import ShellClient
+from .summarize import summarize_turns
 
 #: 全局状态。真正复杂之后应该抽成 `Kernel` 类，现在够用。
 _state: dict[str, Any] = {
@@ -196,6 +197,20 @@ async def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, An
     return {"aborted": True}
 
 
+async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    """按轮次做模型摘要（壳在压缩上下文时调用）。"""
+    turns = list(params.get("turns") or [])
+    config = _state.get("model_config") or {}
+    client = OpenAIClient(
+        base_url=str(config.get("baseUrl") or ""),
+        model=str(config.get("model") or ""),
+        api_key=_state.get("api_key"),
+    )
+    result = await summarize_turns(client, turns, log=_log)
+    _log(f"context.summarize：{len(turns)} 轮 → {len(result.get('pairs') or [])} 条")
+    return result
+
+
 # ───────────────────────── 提案 ─────────────────────────
 
 
@@ -304,6 +319,7 @@ async def _serve() -> None:
     peer.register("proposal.read", _on_proposal_read)
     peer.register("proposal.decide", _on_proposal_decide)
     peer.register("session.abort", _on_abort)
+    peer.register("context.summarize", _on_context_summarize)
 
     _log(f"beecode {__version__} 已启动，等待壳的 initialize…")
     await peer.run()

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Mode, ProposalDto, UiModeParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
+import type { Mode, ProposalDto, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -172,10 +172,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "subagent", ...params });
   }
 
-  /** auto 模式的选择结果（面板显示"自动：Builder"） */
-  modeEvent(params: UiModeParams): void {
-    this.post({ type: "mode", ...params });
-  }
 
   /** 计划清单（大任务时由 update_plan 产生） */
   planEvent(params: UiPlanParams): void {
@@ -273,12 +269,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (target) this.handlers.onOpenRead(target.path, target.startLine, target.endLine);
         return;
       }
-      case "mode":
-        if (msg.mode === "builder" || msg.mode === "debugger" || msg.mode === "chat") {
-          this.state.mode = msg.mode;
-          this.pushStatus();
-        }
-        return;
+
       default:
         // 未知消息一律忽略，不报错、不回显
         return;
@@ -313,12 +304,8 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
 </head>
 <body>
   <header class="bar">
-    <div class="modes" role="tablist">
-      <button data-mode="auto" class="mode">Auto</button>
-      <button data-mode="chat" class="mode">Chat</button>
-      <button data-mode="builder" class="mode">Builder</button>
-      <button data-mode="debugger" class="mode">Debugger</button>
-      <span id="auto-badge" class="mode-badge" hidden></span>
+    <div class="modes">
+      <span id="mode-badge" class="mode-badge">Chat</span>
     </div>
     <button id="stop" class="stop" title="停止">■</button>
   </header>
