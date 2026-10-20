@@ -1,57 +1,43 @@
-"""判断当前模型能不能看图。
+"""视觉能力判定：显式设置优先，其次"试过才知道"。
 
-三种来源（优先级从高到低）：
-  1. 用户显式设置 `beeCode.model.supportsVision`: "on" / "off"
-  2. 模型名启发式（覆盖主流视觉模型命名）
-  3. 默认关闭（保守：宁可把图片省略成文字提示，也不让请求 400）
+不再枚举模型名（`gpt-4o` / `qwen-vl` …）——那种名单永远滞后于新模型，
+也挡不住私有部署改名。现在的策略：
 
-为什么不探测 `/models`：OpenAI 兼容端点返回的元数据里几乎没有模态信息，
-问了也白问；真正可靠的只有"用户告诉我们"或"厂商命名约定"。
+  1. 用户显式 `supportsVision: "on" / "off"` → 直接采信（唯一 100% 可靠的来源）
+  2. 之前被服务端拒绝过（缓存为 False）→ 不再发图片
+  3. 之前带图成功过（缓存为 True）→ 继续发图片
+  4. 都没记录 → **乐观**：先带图发；如果服务端明确说"不支持图片"，
+     由调用方剥掉图片重试，并把 False 写进缓存
+
+缓存按 `baseUrl + model` 记，换网关或换模型自然失效；进程内有效
+（内核重启后重新学习，避免把一次临时故障记成永久结论）。
 """
 
 from __future__ import annotations
 
-#: 模型名里出现这些片段就认为支持图像
-_VISION_HINTS = (
-    "gpt-4o",
-    "gpt-4.1",
-    "gpt-5",
-    "o3",
-    "o4",
-    "claude-3",
-    "claude-4",
-    "claude-sonnet",
-    "claude-opus",
-    "gemini",
-    "qwen-vl",
-    "qwen2-vl",
-    "qwen2.5-vl",
-    "qwen3-vl",
-    "glm-4v",
-    "glm-4.5v",
-    "llava",
-    "pixtral",
-    "internvl",
-    "minicpm-v",
-    "phi-3-vision",
-    "phi-4-multimodal",
-    "moondream",
-    "cogvlm",
-    "internlm-xcomposer",
-    "step-1v",
-    "yi-vl",
-)
+#: (baseUrl, model) → 是否支持图片
+_CACHE: dict[tuple[str, str], bool] = {}
 
 
-def supports_vision(model: str, setting: str | None) -> bool:
-    """`setting` 取 "on" / "off" / "auto"（或空）。"""
+def resolve_vision(model: str, setting: str | None, base_url: str) -> bool | None:
+    """返回 True/False；`None` 表示"还不知道"（调用方应乐观地先试）。"""
     normalized = (setting or "auto").strip().lower()
     if normalized in ("on", "true", "yes", "1"):
         return True
     if normalized in ("off", "false", "no", "0"):
         return False
+    return _CACHE.get((base_url.strip(), model.strip()))
 
-    name = (model or "").strip().lower()
-    if not name:
-        return False
-    return any(hint in name for hint in _VISION_HINTS)
+
+def remember(model: str, base_url: str, supported: bool) -> None:
+    """记录一次学习结果（发送成功 / 被服务端拒绝后调用）。"""
+    _CACHE[(base_url.strip(), model.strip())] = supported
+
+
+def forget(base_url: str | None = None) -> None:
+    """清空缓存（测试用；将来也可以在模型配置变更时调用）。"""
+    if base_url is None:
+        _CACHE.clear()
+        return
+    for key in [k for k in _CACHE if k[0] == base_url.strip()]:
+        _CACHE.pop(key, None)

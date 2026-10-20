@@ -27,11 +27,19 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..llm import ChatDelta, ModelError, OpenAIClient, ToolCall, estimate_tokens
-from ..llm.vision import supports_vision
+from ..llm import (
+    ChatDelta,
+    ModelCapabilityError,
+    ModelError,
+    OpenAIClient,
+    ToolCall,
+    estimate_tokens,
+    remember,
+    resolve_vision,
+)
 from ..prompts import system_prompt
 from ..router import Intent, classify
-from ..session import Session
+from ..session import Session, has_image_parts, strip_image_parts
 from ..shell import ShellClient
 from ..tools import Tool, ToolContext, build_tools, tool_schemas
 
@@ -121,11 +129,16 @@ class AgentLoop:
         system_override: str | None = None,
         focus: dict[str, Any] | None = None,
     ) -> TurnStats:
-        vision = supports_vision(
-            str(session.model_config.get("model") or ""),
-            session.model_config.get("supportsVision"),  # type: ignore[arg-type]
+        # —— 视觉能力：显式设置 > 服务端反馈（缓存） > 乐观尝试 ——
+        base_url = str(session.model_config.get("baseUrl") or "")
+        model_name = str(session.model_config.get("model") or "")
+        resolved = resolve_vision(model_name, session.model_config.get("supportsVision"), base_url)  # type: ignore[arg-type]
+        vision = True if resolved is None else resolved
+        self._log(
+            f"视觉输入：{'开' if vision else '关'}"
+            f"（{model_name}；来源：{session.model_config.get('supportsVision') or 'auto'}"
+            f"{'，已缓存' if resolved is not None else '，未知→先试'}）"
         )
-        self._log(f"视觉模型：{'是' if vision else '否'}（{session.model_config.get('model', '')}）")
 
         # 统一会话记忆：模式只影响"这轮怎么干"，不影响历史。
         # auto 模式下先做意图/规模识别，再选提示词与守卫策略。
@@ -205,7 +218,7 @@ class AgentLoop:
         try:
             while stats.steps < self._config.max_steps:
                 stats.steps += 1
-                answer, calls, usage = await self._stream_once(client, messages, session, stats)
+                answer, calls, usage = await self._stream(client, messages, session, stats)
                 if not calls:
                     nudged = self._maybe_nudge(answer, session, effective_mode, nudges)
                     if nudged is not None:
@@ -265,7 +278,7 @@ class AgentLoop:
                     "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
                                "如果不需要改，请明确说明原因。",
                 })
-                answer, calls, _usage = await self._stream_once(client, messages, session, stats)
+                answer, calls, _usage = await self._stream(client, messages, session, stats)
                 if calls:
                     messages.append(_assistant_tool_message(answer, calls))
                     for call in calls:
@@ -274,7 +287,7 @@ class AgentLoop:
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
-                    answer, _calls, _usage = await self._stream_once(client, messages, session, stats)
+                    answer, _calls, _usage = await self._stream(client, messages, session, stats)
                 final_text = answer
         finally:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
@@ -292,6 +305,49 @@ class AgentLoop:
         return stats
 
     # ───────────────────────── 模型调用 ─────────────────────────
+
+    async def _stream(
+        self,
+        client: OpenAIClient,
+        messages: list[dict[str, Any]],
+        session: Session,
+        stats: TurnStats,
+    ) -> tuple[str, list[ToolCall], dict[str, int] | None]:
+        """一次模型调用。
+
+        视觉能力不靠模型名猜：服务端如果明确拒绝图片，就剥掉图片重试一次，
+        并把"该模型不支持图片"记进缓存（后续轮次直接不带图）。
+        """
+        base_url = str(session.model_config.get("baseUrl") or "")
+        model_name = str(session.model_config.get("model") or "")
+        try:
+            result = await self._stream_once(client, messages, session, stats)
+            if has_image_parts(messages):
+                remember(model_name, base_url, True)
+            return result
+        except ModelCapabilityError as exc:
+            if not has_image_parts(messages):
+                raise
+            strip_image_parts(messages)
+            remember(model_name, base_url, False)
+            self._log(f"模型拒绝图片，省略后重试：{exc}")
+            self._emit(
+                "ui.tool",
+                {
+                    "sessionId": session.id,
+                    "name": "guard",
+                    "status": "error",
+                    "summary": "模型不接受图片，已省略图片重试",
+                },
+            )
+            self._notify(
+                "log",
+                {
+                    "level": "warn",
+                    "msg": "当前模型不接受图片：本轮已改为文字描述，后续不再发送图片。",
+                },
+            )
+            return await self._stream_once(client, messages, session, stats)
 
     async def _stream_once(
         self,
@@ -408,7 +464,7 @@ class AgentLoop:
             "role": "user",
             "content": "已达到本轮步数上限。请不要再调用工具，基于已有信息给出结论、未完成部分与下一步建议。",
         })
-        answer, _calls, _usage = await self._stream_once(client, messages, session, stats)
+        answer, _calls, _usage = await self._stream(client, messages, session, stats)
         return answer
 
     def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:

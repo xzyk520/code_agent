@@ -383,7 +383,33 @@ class ChatMessage(BaseModel):
 
 **工具调用降级方案**（`supportsTools: false` 时）：提示词里给出严格 JSON 输出协议，要求模型只输出一个 `json` 代码块，内容形如 `{"tool":"read_file","args":{...}}`；内核把它解析成「伪 tool_call」后照常走同一套执行与审批链路，解析失败时重试并附带「上一次格式错误」的纠正提示。这样连最朴素的本地模型也能跑 Builder。
 
-### 5.6 错误处理
+### 5.6 视觉能力：不靠模型名猜（已实现）
+
+判断"这个模型能不能收图片"有三种来源，按可靠性排序：
+
+| 来源 | 可靠性 | 说明 |
+| --- | --- | --- |
+| `beeCode.model.supportsVision: on/off` | 100% | 只有用户知道自己连的是什么；作为**覆盖**，不参与猜测 |
+| 服务端反馈（缓存） | 高 | 带图成功过 → True；被明确拒绝过 → False；按 `baseUrl + model` 记 |
+| 未记录 | — | **乐观**：先带图发 |
+
+自愈流程：
+
+```
+模型返回 400/415/422 且错误里出现 image / vision / modality / image_url …
+        │
+        ├─ 剥掉消息里的 image_url，换成「【图片已省略：当前模型不接受图像输入】」
+        ├─ 缓存 False（后续轮次直接不带图）
+        ├─ ui.tool(guard, error) 提示用户 + log 一条 warn
+        └─ 重试一次（成功即继续本轮）
+```
+
+为什么不再枚举模型名：名单永远滞后于新模型，也挡不住私有部署改名（`--served-model-name`）；
+而"试一次"的代价只是一次请求往返，且失败后永久记住。
+
+边界：只认**明确的图片拒绝**（`400/415/422` + 相关措辞），参数错误、额度不足等 400 不会被误判成"没视觉"。
+缓存只在进程内有效（内核重启后重新学习），避免把一次临时故障记成永久结论。
+### 5.7 错误处理
 
 | 情况 | 策略 |
 | --- | --- |
@@ -1499,7 +1525,7 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | `beeCode.subagent.model` | 空 = 沿用主代理 | 建议填便宜/快的模型 |
 | `beeCode.subagent.apiKeyId` | `beeCode.apiKey.subagent` | SecretStorage 键名 |
 | `beeCode.subagent.maxSteps` | `8` | 上限 12 |
-| `beeCode.subagent.supportsVision` | `auto` | 子代理的视觉能力判定 |
+| `beeCode.subagent.supportsVision` | `auto` | 子代理的视觉能力（`auto` = 先试，被拒后自愈） |
 
 密钥解析顺序：`SecretStorage` → 环境变量 `BEE_CODE_SUBAGENT_API_KEY` → **主代理密钥**。
 

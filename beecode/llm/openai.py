@@ -28,6 +28,37 @@ class ModelError(RuntimeError):
     """模型调用失败。`message` 会直接显示给用户，所以要写人话。"""
 
 
+class ModelCapabilityError(ModelError):
+    """服务端明确表示"不支持这种输入"（目前用于图片）。
+
+    调用方应该剥掉图片重试一次，并把"该模型不支持图片"记下来。
+    """
+
+    def __init__(self, message: str, *, status: int, body: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+#: 服务端拒绝图片时常见的措辞（只认这些，别把所有 400 都当成"没视觉"）
+_IMAGE_REJECT_HINTS = (
+    "image",
+    "vision",
+    "multimodal",
+    "modality",
+    "image_url",
+    "content type",
+    "unsupported content",
+)
+
+
+def _is_image_rejection(status: int, body: str) -> bool:
+    if status not in (400, 415, 422):
+        return False
+    lowered = body.lower()
+    return any(hint in lowered for hint in _IMAGE_REJECT_HINTS)
+
+
 @dataclass(slots=True)
 class ToolCall:
     """模型请求的一次工具调用（分片已经拼好）。"""
@@ -112,6 +143,12 @@ class OpenAIClient:
                 async with client.stream("POST", self.chat_url, json=payload, headers=headers) as response:
                     if response.status_code >= 400:
                         body = (await response.aread()).decode("utf-8", "replace")[:500]
+                        if _is_image_rejection(response.status_code, body):
+                            raise ModelCapabilityError(
+                                f"模型不接受图片输入（HTTP {response.status_code}）：{body[:200]}",
+                                status=response.status_code,
+                                body=body,
+                            )
                         raise ModelError(_explain_http_error(response.status_code, body))
 
                     calls: dict[int, dict[str, str]] = {}

@@ -65,7 +65,7 @@ bee-code/
 │  ├─ llm/openai.py              # ✅ OpenAI 兼容流式客户端（SSE、错误翻译、token 估算）
 │  ├─ loop/agent.py              # ✅ M2 工具循环：tool_calls → 执行 → 回灌 + 守卫 + 视觉感知
 │  ├─ tools/builtin.py           # ✅ 9 个内置工具（读/搜/符号/诊断/提案/执行）
-│  ├─ llm/vision.py              # ✅ 视觉能力判定（auto 按模型名，on/off 可强制）
+│  ├─ llm/vision.py              # ✅ 视觉能力判定（on/off 显式；auto=先试，被拒后自愈并缓存）
 │  ├─ prompts/__init__.py        # ◐ 三模式系统提示（短版，待按 §6 扩写）
 │  ├─ ipc.py                     # ✅ JSON-RPC 对端：分发、超时、$·cancelRequest、BOM 容错
 │  ├─ contract.py                # ✅ 读 protocol/contract.json，发 RPC 前校验方法名与参数

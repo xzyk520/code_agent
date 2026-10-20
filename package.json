@@ -307,9 +307,9 @@
           "scope": "window",
           "order": 5,
           "enum": ["auto", "on", "off"],
-          "enumDescriptions": ["按模型名自动判断", "强制当作视觉模型", "强制当作纯文本模型"],
+          "enumDescriptions": ["先带图尝试，被拒后自动降级并记住", "强制当作视觉模型", "强制当作纯文本模型"],
           "default": "auto",
-          "markdownDescription": "模型能否接收图片。`auto` 按模型名判断（gpt-4o / claude-3 / gemini / qwen-vl 等）；不是视觉模型时图片会降级成文字说明。"
+          "markdownDescription": "模型能否接收图片。`auto` = 先带图尝试；若服务端明确拒绝图片，自动改为文字描述并记住（不靠模型名枚举）。"
         },
         "beeCode.model.supportsTools": {
           "type": "boolean",
@@ -467,7 +467,7 @@
           "scope": "window",
           "order": 35,
           "enum": ["auto", "on", "off"],
-          "enumDescriptions": ["按模型名自动判断", "强制当作视觉模型", "强制当作纯文本模型"],
+          "enumDescriptions": ["先带图尝试，被拒后自动降级并记住", "强制当作视觉模型", "强制当作纯文本模型"],
           "default": "auto",
           "markdownDescription": "子代理模型能否接收图片。"
         },        "beeCode.review.granularity": {

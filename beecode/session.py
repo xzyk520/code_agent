@@ -148,5 +148,40 @@ def _format_user_content(
     return [{"type": "text", "text": text_part}, *images]
 
 
+def strip_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把多模态消息里的图片换成一行文字说明（用于"模型不支持图片"后的重试）。
+
+    就地修改并返回同一个列表，方便调用方直接复用。
+    """
+    note = "【图片已省略：当前模型不接受图像输入】"
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        texts: list[str] = []
+        had_image = False
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url":
+                had_image = True
+            elif part.get("type") == "text" and isinstance(part.get("text"), str):
+                texts.append(str(part["text"]))
+        if had_image:
+            joined = "\n\n".join([t for t in texts if t.strip()])
+            message["content"] = f"{joined}\n\n{note}".strip() if joined else note
+    return messages
+
+
+def has_image_parts(messages: list[dict[str, Any]]) -> bool:
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(part, dict) and part.get("type") == "image_url" for part in content):
+            return True
+    return False
+
+
 def new_session_id() -> str:
     return f"s_{uuid.uuid4().hex[:12]}"
