@@ -631,30 +631,51 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 
 > 设计要点：守卫要「先提醒、再停止」。直接硬停会让用户觉得模型「卡住了」；先插入一条系统提示纠正策略，往往能自愈。
 
-### 7.4 auto 模式：意图识别与共享记忆（已实现）
+### 7.4 auto 模式：模型做意图识别（已实现）
 
 三种模式**共享同一会话记忆**：历史与摘要在壳侧按 `sessionId` 存储，与模式无关；
-模式只决定"这一轮怎么干"（系统提示词侧重、守卫语气），不决定"记得什么"。
+模式只决定"这一轮怎么干"（系统提示词侧重、守卫策略），不决定"记得什么"。
 
 ```
 用户输入（mode = auto）
       │
       ▼
-router.classify(text, 最近 4 条历史)
-      │  → mode ∈ {chat, builder, debugger}
-      │  → scale ∈ {small, large}
+用主模型做一次"结构化分类"（不流式，temperature=0）
+      │  response_format = json_schema
+      │  → {mode, scale, needs_proposal, reason}
       ▼
-ui.mode {mode, reason, scale}  ← 面板显示「自动：Builder」
+ui.mode {mode, reason, scale, needsProposal, degraded}  → 面板「自动：Builder（需产出提案）」
       │
-      ├─ large + 非 chat → 追加 system 指令：先 update_plan 列 3-6 步
+      ├─ needs_proposal → 本轮结束前若没有提案，触发"提前收工"追问
+      ├─ scale=large + 非 chat → 追加指令：先 update_plan
       ▼
 system_prompt(effective_mode) → loop 照常跑
 ```
 
-识别规则（`beecode/router.py`，纯启发式）：
+#### 分类器契约（`beecode/router.py`）
 
-| 信号 | 判定 |
+| 字段 | 取值 | 用途 |
+| --- | --- | --- |
+| `mode` | `chat` / `builder` / `debugger` | 选提示词；决定守卫语气 |
+| `scale` | `small` / `large` | `large` 才建议计划 |
+| `needs_proposal` | bool | **防止"只说不做"**：builder/debugger 默认 true |
+| `reason` | 一句话 | 显示在面板 hint，便于用户理解为什么切了模式 |
+
+约束与降级：
+
+| 情况 | 行为 |
 | --- | --- |
+| 服务端不支持 `json_schema` | 降级 `json_object` → 再降级纯文本 + 正则抠 JSON |
+| 输出不是 JSON / mode 不在三类 | 带着错误信息要求模型重试（最多 2 次） |
+| 仍不合法 / 网络失败 | 退回 `chat`（`degraded=true`），并在 hint 标注"降级判定" |
+
+为什么用模型而不是关键词：模式判断依赖语气、上下文与隐含意图（"帮我看看这段为什么崩"
+和"这段在干嘛"字面相近，意图不同），关键词表既写不全也会误伤；而一次 non-streaming
+分类调用的成本约等于主回答的百分之一，换来的是准确的模式与提案预期。
+
+手动覆盖仍然有效：面板点 Chat/Builder/Debugger 时不再调用分类器，`mode` 不是 `auto`，
+builder/debugger 直接按"需要提案"处理。
+--- | --- |
 | 报错/异常/崩溃关键词（且无解释意图） | `debugger` |
 | 实现/新增/重构/修改/删除… | `builder` |
 | 解释/为什么/区别/原理… | `chat` |

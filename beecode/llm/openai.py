@@ -164,6 +164,63 @@ class OpenAIClient:
         except httpx.HTTPError as exc:
             raise ModelError(f"连接模型失败：{exc}") from exc
 
+    async def complete(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        response_format: dict[str, Any] | None = None,
+        temperature: float = 0.0,
+        timeout: float = 30.0,
+    ) -> tuple[str, dict[str, int] | None]:
+        """非流式补全（意图分类这类"要一段 JSON"的场景用）。
+
+        返回 (content, usage)。失败抛 ModelError；不处理图片能力（分类不需要图）。
+        """
+        if not self._model:
+            raise ModelError("未配置 model：请在命令面板运行「Bee Code: 配置模型」")
+        if not self._api_key:
+            raise ModelError("未配置 API Key：请在命令面板运行「Bee Code: 配置模型」")
+
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if response_format is not None:
+            payload["response_format"] = response_format
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            **self._extra_headers,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=CONNECT_TIMEOUT)) as client:
+                response = await client.post(self.chat_url, json=payload, headers=headers)
+                body = response.text
+                if response.status_code >= 400:
+                    raise ModelError(_explain_http_error(response.status_code, body[:500]))
+                data = json.loads(body)
+        except httpx.TimeoutException as exc:
+            raise ModelError(f"模型响应超时（{timeout:.0f}s）：{exc}") from exc
+        except httpx.HTTPError as exc:
+            raise ModelError(f"连接模型失败：{exc}") from exc
+
+        choices = data.get("choices") or []
+        content = ""
+        if choices:
+            content = str((choices[0].get("message") or {}).get("content") or "")
+        usage = data.get("usage")
+        usage_dict = None
+        if isinstance(usage, dict):
+            usage_dict = {
+                "inputTokens": int(usage.get("prompt_tokens") or 0),
+                "outputTokens": int(usage.get("completion_tokens") or 0),
+            }
+        return content, usage_dict
+
     async def close(self) -> None:
         """占位：目前每次请求自建连接池，无需显式关闭。"""
 

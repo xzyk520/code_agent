@@ -1,91 +1,194 @@
-"""意图与任务规模识别（auto 模式用）。
+"""意图识别：**用主模型自己判断**，不靠关键词硬编码。
 
-为什么用启发式而不是再调一次模型：
-  - 每次提问都多一次模型调用，延迟与成本都翻倍；
-  - 分类错了代价很小（只是换了提示词侧重，工具集相同），不值得付这个钱；
-  - 规则可读、可测、可调，出问题能一眼定位。
-
-边界：拿不准时归到 `chat`（最保守，不会自动进入"改代码"的语气）。
+输出被约束成三类（chat / builder / debugger）。优先用 JSON Schema 强制结构化；
+服务端不支持 `response_format` 时逐级降级（json_object → 纯文本 + 解析）。
+模型给了三类之外的值 → 带着错误信息要求它改，连续两次仍不合法就退回 chat
+（宁可答错也不让整轮对话失败）。
 """
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-Mode = str  # "chat" | "builder" | "debugger"
+from .llm.openai import ModelError, OpenAIClient
 
-_BUILD = re.compile(
-    r"(实现|添加|新增|创建|写一个|写个|生成|重构|改成|改为|换成|替换|删除|移除|"
-    r"加上|补上|补全|迁移|升级|接入|封装|抽出来|拆分|"
-    r"implement|add|create|refactor|rename|remove|migrate|upgrade|rewrite)",
-    re.IGNORECASE,
-)
-_DEBUG = re.compile(
-    r"(报错|错误|异常|崩溃|失败|不工作|没反应|不生效|无法|不能|挂了|白屏|"
-    r"bug|error|exception|crash|fail|broken|traceback)",
-    re.IGNORECASE,
-)
-_EXPLAIN = re.compile(
-    r"(解释|说明|讲解|介绍|什么意思|是什么|做什么|怎么理解|原理|为什么|区别|对比|"
-    r"explain|what is|why|how does|difference)",
-    re.IGNORECASE,
-)
-_LARGE = re.compile(
-    r"(整个|全部|所有|批量|全量|重构|迁移|架构|设计|模块|系统|框架|从零|端到端|"
-    r"多个文件|所有文件|整体|"
-    r"entire|whole|all files|architecture|refactor|migrate|end.to.end)",
-    re.IGNORECASE,
-)
-_FILE_HINT = re.compile(r"[\w\-/]+\.(ts|tsx|js|jsx|py|go|rs|java|kt|cs|cpp|c|h|md|json|yaml|yml)")
+MODES = ("chat", "builder", "debugger")
+
+INTENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "enum": list(MODES)},
+        "scale": {"type": "string", "enum": ["small", "large"]},
+        "needs_proposal": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["mode", "scale", "needs_proposal", "reason"],
+    "additionalProperties": False,
+}
+
+_SYSTEM = """你是 Bee Code 的意图分类器。只输出 JSON 对象，不要输出任何解释或 Markdown。
+
+字段：
+- mode: "chat" | "builder" | "debugger"
+- scale: "small" | "large"
+- needs_proposal: boolean（这一轮是否应该产出文件修改提案）
+- reason: 一句话中文说明
+
+判定规则：
+- chat：解释代码、回答问题、讨论方案，不需要改动文件
+- builder：新增/修改/重构/迁移代码，预期产出文件修改
+- debugger：报错、异常、崩溃、行为不符预期的定位与修复
+- builder 与 debugger **默认 needs_proposal=true**；只有用户明确表示"先讨论/不要改"时才 false
+- scale=large：涉及多个文件、架构调整、迁移、需求描述很长；否则 small
+"""
+
+_CORRECTION = "你的输出不合法：{error}。请只输出 JSON，且 mode 必须是 chat、builder、debugger 三者之一。"
 
 
 @dataclass(slots=True)
 class Intent:
-    mode: Mode
-    scale: str  # "small" | "large"
+    mode: str
+    scale: str
+    needs_proposal: bool
     reason: str
+    usage: dict[str, int] | None = None
+    #: 是否走了降级（模型不配合 / 接口不支持结构化输出）
+    degraded: bool = False
 
     @property
     def should_plan(self) -> bool:
         return self.scale == "large"
 
 
-def classify(text: str, history: list[dict[str, str]] | None = None) -> Intent:
-    """根据本轮输入 + 最近历史判断模式与规模。"""
-    question = (text or "").strip()
-    recent = " ".join(str(item.get("text") or "") for item in (history or [])[-4:])
-    haystack = f"{recent}\n{question}"
-
-    has_code = "```" in question or bool(_FILE_HINT.search(question))
-    debug_hit = bool(_DEBUG.search(question))
-    build_hit = bool(_BUILD.search(question))
-    explain_hit = bool(_EXPLAIN.search(question))
-
-    # 1) 明确的报错/异常 → debugger（即使同时出现"修改"）
-    if debug_hit and not explain_hit:
-        mode, reason = "debugger", "检测到报错/异常描述"
-    # 2) 明确的改代码意图（有代码块/文件名时更确定）
-    elif build_hit:
-        mode, reason = "builder", "检测到修改/实现类意图" + ("（附代码）" if has_code else "")
-    # 3) 解释类
-    elif explain_hit:
-        mode, reason = "chat", "检测到解释/问答意图"
-    else:
-        mode, reason = "chat", "未检测到明确动作意图，按问答处理"
-
-    scale = _scale(question, haystack)
-    return Intent(mode=mode, scale=scale, reason=reason)
+def _fallback(reason: str, usage: dict[str, int] | None = None) -> Intent:
+    return Intent("chat", "small", False, f"意图识别失败，按 Chat 处理（{reason}）", usage, degraded=True)
 
 
-def _scale(question: str, haystack: str) -> str:
-    """任务规模：长描述、涉及多个文件、或出现"整个/重构/迁移"等词 → large。"""
-    if len(question) >= 240:
-        return "large"
-    if len(_FILE_HINT.findall(question)) >= 3:
-        return "large"
-    if _LARGE.search(question) or _LARGE.search(haystack):
-        return "large"
-    if question.count("\n") >= 8:
-        return "large"
-    return "small"
+def _is_format_rejection(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        hint in lowered
+        for hint in ("response_format", "json_schema", "json schema", "strict", "unsupported parameter")
+    )
+
+
+def _user_prompt(text: str, history: list[dict[str, str]] | None) -> str:
+    lines: list[str] = []
+    recent = (history or [])[-4:]
+    if recent:
+        lines.append("最近对话（仅供参考）：")
+        for item in recent:
+            role = item.get("role") or "user"
+            body = str(item.get("text") or "")[:600]
+            lines.append(f"{role}: {body}")
+        lines.append("")
+    lines.append("当前用户消息：")
+    lines.append(text[:4000])
+    return "\n".join(lines)
+
+
+def _extract_json(content: str) -> tuple[dict[str, Any] | None, str]:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text).strip()
+    try:
+        value = json.loads(text)
+        return (value, "") if isinstance(value, dict) else (None, "输出不是 JSON 对象")
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return None, "输出里找不到 JSON 对象"
+        try:
+            value = json.loads(match.group(0))
+            return (value, "") if isinstance(value, dict) else (None, "输出不是 JSON 对象")
+        except json.JSONDecodeError:
+            return None, "JSON 解析失败"
+
+
+def _parse(content: str) -> tuple[Intent | None, str]:
+    data, error = _extract_json(content)
+    if data is None:
+        return None, error
+
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in MODES:
+        return None, f"mode={mode!r} 不在 chat/builder/debugger 之内"
+
+    scale = str(data.get("scale") or "small").strip().lower()
+    if scale not in ("small", "large"):
+        scale = "small"
+
+    raw_needs = data.get("needs_proposal")
+    needs = bool(raw_needs) if isinstance(raw_needs, bool) else mode != "chat"
+    reason = str(data.get("reason") or "").strip()[:200]
+    return Intent(mode=mode, scale=scale, needs_proposal=needs, reason=reason or "模型判定"), ""
+
+
+async def classify(
+    client: OpenAIClient,
+    text: str,
+    history: list[dict[str, str]] | None = None,
+    *,
+    log: Callable[[str], None] | None = None,
+) -> Intent:
+    """调一次主模型做意图分类。失败时退回 chat，绝不把异常抛给上层。"""
+    say = log or (lambda _m: None)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _SYSTEM},
+        {"role": "user", "content": _user_prompt(text, history)},
+    ]
+    formats: list[dict[str, Any] | None] = [
+        {"type": "json_schema", "json_schema": {"name": "intent", "strict": True, "schema": INTENT_SCHEMA}},
+        {"type": "json_object"},
+        None,
+    ]
+
+    usage_total: dict[str, int] | None = None
+    format_index = 0
+    validation_retries = 0
+
+    for attempt in range(4):
+        response_format = formats[min(format_index, len(formats) - 1)]
+        try:
+            content, usage = await client.complete(messages, response_format=response_format, timeout=25.0)
+        except ModelError as exc:
+            if response_format is not None and _is_format_rejection(str(exc)):
+                say(f"意图识别：服务端不支持 {response_format.get('type')}，降级重试")
+                format_index += 1
+                continue
+            say(f"意图识别失败：{exc}")
+            return _fallback(str(exc), usage_total)
+
+        if usage:
+            usage_total = (
+                usage
+                if usage_total is None
+                else {
+                    "inputTokens": usage_total.get("inputTokens", 0) + usage.get("inputTokens", 0),
+                    "outputTokens": usage_total.get("outputTokens", 0) + usage.get("outputTokens", 0),
+                }
+            )
+
+        intent, error = _parse(content)
+        if intent is not None:
+            intent.usage = usage_total
+            intent.degraded = attempt > 0 or format_index > 0
+            return intent
+
+        validation_retries += 1
+        say(f"意图识别：输出不合法（{error}），要求模型重试")
+        if validation_retries > 2:
+            return _fallback(error, usage_total)
+        messages = [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": _user_prompt(text, history)},
+            {"role": "assistant", "content": content[:500]},
+            {"role": "user", "content": _CORRECTION.format(error=error)},
+        ]
+
+    return _fallback("尝试次数用尽", usage_total)

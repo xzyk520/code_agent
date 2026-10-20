@@ -1403,7 +1403,12 @@ class Shell {
         const p = params as UiModeParams;
         this.panel.modeEvent(p);
         const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
-        this.panel.setHint(`自动模式：${label}${p.scale === "large" ? "（大任务，建议先计划）" : ""}`);
+        const flags = [
+          p.scale === "large" ? "大任务" : "",
+          p.needsProposal ? "需产出提案" : "",
+          p.degraded ? "降级判定" : "",
+        ].filter(Boolean);
+        this.panel.setHint(`自动模式：${label}${flags.length ? `（${flags.join("，")}）` : ""}`);
         return;
       }
       case "ui.plan": {

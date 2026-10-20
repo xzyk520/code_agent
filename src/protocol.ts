@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -514,6 +514,10 @@ export interface UiModeParams {
   auto: boolean;
   reason?: string;
   scale?: "small" | "large";
+  /** 分类器判定这一轮应产出提案 */
+  needsProposal?: boolean;
+  /** 分类走了降级（结构化输出不被支持 / 模型不配合） */
+  degraded?: boolean;
 }
 
 /** 计划（大任务时由 update_plan 工具产出） */

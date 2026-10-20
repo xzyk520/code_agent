@@ -7,6 +7,13 @@
 
 ### Added
 
+- **意图识别改用主模型**（不再硬编码关键词）：
+  - 非流式分类调用 + `response_format: json_schema` 强制输出 {mode, scale, needs_proposal, reason}
+  - `mode` 固定 chat / builder / debugger；非法值会带着错误信息要求模型重试（最多 2 次）
+  - 服务端不支持结构化输出时自动降级（json_object → 纯文本解析）
+  - `needs_proposal` 驱动「只说不做」守卫：builder/debugger 默认要求产出提案
+  - 分类 token 计入本轮用量；失败退回 chat 并标注「降级判定」（协议 v21）
+
 - **视觉能力不再靠枚举模型名**：
   - `supportsVision: auto` = 乐观先带图尝试；服务端明确拒绝（400/415/422 + image/vision/modality 等措辞）后
     自动剥掉图片重试一次，并记住「该 baseUrl+model 不支持图片」
