@@ -31,6 +31,7 @@ bee-code/
 │  ├─ contextBuilder.ts          # ✅ 上下文裁剪：摘要 + 最近 N 条 + token 预算
 │  ├─ checkpointChatIndex.ts     # ✅ 检查点 ↔ 聊天行号索引（只存行号，不复制消息）
 │  ├─ turnStore.ts               # ✅ 轮次记录（意图/回答/工具/文件），供模型摘要按轮总结
+│  ├─ summaryStore.ts            # ✅ 摘要持久化（重载直接读回，不重算）
 │  ├─ sessionStore.ts            # ✅ 会话仓库（JSONL 全量历史 + index.json），重载/切换会话
 │  ├─ paths.ts                   # ✅ 路径策略（越界 / 敏感文件 / 禁止目录）
 │  ├─ workspaceIgnore.ts         # ✅ 统一忽略规则（噪声目录 + .gitignore，fs/search/diagnostics 共用）

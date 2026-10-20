@@ -24,6 +24,7 @@ import { readFocusAtCursor, type FocusInfo } from "./focus";
 import { FocusHighlighter } from "./focusDecoration";
 import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { TurnStore } from "./turnStore";
+import { SummaryStore } from "./summaryStore";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -100,12 +101,13 @@ class Shell {
   private readonly focusHighlight: FocusHighlighter;
   private readonly chatIndex: CheckpointChatIndex;
   private readonly turns: TurnStore;
+  private readonly summaries: SummaryStore;
   private turnIntent?: { intent: string; mode: Mode };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
   private readonly turnFiles = new Set<string>();
-  /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加 */
-  private summaryCache?: { covered: number; text: string; lines: string[] };
+  /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
+  private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
@@ -140,6 +142,7 @@ class Shell {
     this.focusHighlight = new FocusHighlighter(this.log);
     this.chatIndex = new CheckpointChatIndex(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
     this.turns = new TurnStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
+    this.summaries = new SummaryStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
@@ -319,6 +322,7 @@ class Shell {
     );
     this.persisted = existing.length;
     this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
+    await this.loadSummary(existing.length);
 
     const meta = this.sessions.meta(this.sessionId);
     const status = meta?.status ?? "idle";   // 未写过的状态一律当 idle，别误报"被中断"
@@ -373,6 +377,51 @@ class Shell {
     return { summary: summary ?? built.summary, history: built.messages };
   }
 
+  /** 聊天回滚：摘要按"仍保留的轮次"截断，并同步落盘 */
+  private async truncateSummary(messageLine: number): Promise<void> {
+    const turns = (await this.turns.list(this.sessionId)).filter((turn) => turn.messageIndex <= messageLine);
+    const cache = this.summaryCache;
+    if (!cache) return;
+    const lines = cache.lines.slice(0, turns.length);
+    if (lines.length === 0) {
+      this.summaryCache = undefined;
+      await this.summaries.remove(this.sessionId);
+      return;
+    }
+    const coveredMessageIndex = turns[turns.length - 1]?.messageIndex ?? 0;
+    this.summaryCache = {
+      covered: lines.length,
+      coveredMessageIndex,
+      lines,
+      text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
+    };
+    await this.summaries.save(this.sessionId, { covered: lines.length, coveredMessageIndex, lines });
+    this.log.info(`摘要随聊天回滚截断到 ${lines.length} 轮`);
+  }
+
+  /** 从磁盘恢复摘要；会话被外部截断时丢弃（避免摘要覆盖不存在的轮次） */
+  private async loadSummary(totalMessages: number): Promise<void> {
+    const stored = await this.summaries.load(this.sessionId);
+    if (!stored || stored.lines.length === 0) {
+      this.summaryCache = undefined;
+      return;
+    }
+    if (stored.coveredMessageIndex > totalMessages) {
+      this.log.warn(`摘要记录覆盖 ${stored.coveredMessageIndex} 条，但会话只有 ${totalMessages} 条，丢弃旧摘要`);
+      this.summaryCache = undefined;
+      await this.summaries.remove(this.sessionId);
+      return;
+    }
+    const lines = stored.lines.slice(0, stored.covered);
+    this.summaryCache = {
+      covered: lines.length,
+      coveredMessageIndex: stored.coveredMessageIndex,
+      lines,
+      text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
+    };
+    this.log.info(`摘要已恢复：覆盖 ${lines.length} 轮（${this.sessionId}）`);
+  }
+
   /**
    * 用模型给"被折叠的轮次"生成摘要（增量）。
    *
@@ -418,8 +467,14 @@ class Shell {
         this.log.debug("模型摘要为空，退回机械摘要");
         return cached?.text;
       }
-      this.summaryCache = { covered: covered.length, text, lines };
-      this.log.info(`模型摘要：累计 ${covered.length} 轮（本次新增 ${fresh.length} 轮），${text.length} 字符`);
+      const coveredMessageIndex = covered[covered.length - 1]?.messageIndex ?? totalMessages;
+      this.summaryCache = { covered: covered.length, coveredMessageIndex, text, lines };
+      await this.summaries.save(this.sessionId, {
+        covered: covered.length,
+        coveredMessageIndex,
+        lines,
+      });
+      this.log.info(`模型摘要：累计 ${covered.length} 轮（本次新增 ${fresh.length} 轮），已持久化`);
       return text;
     } catch (err) {
       this.log.warn(`模型摘要失败（退回机械摘要）：${err instanceof Error ? err.message : String(err)}`);
@@ -511,6 +566,7 @@ class Shell {
       this.sessions.meta(picked.id)?.mode ?? this.panel.getMode(),
     );
     this.persisted = messages.length;
+    await this.loadSummary(messages.length);
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
   }
@@ -1490,9 +1546,9 @@ class Shell {
         this.sessions.meta(this.sessionId)?.mode,
       );
       this.persisted = kept.length;
-      // 轮次记录也截断到同一位置；摘要缓存失效，下一轮重新按意图总结
+      // 轮次记录也截断到同一位置；摘要随之截断（已覆盖的轮次按 messageIndex 对齐）
       await this.turns.truncate(this.sessionId, snapshot.line);
-      this.summaryCache = undefined;
+      await this.truncateSummary(snapshot.line);
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
       await this.noteRollback(picked.id, picked.label, true);
@@ -1515,7 +1571,6 @@ class Shell {
         "此前提到的文件改动可能已不在磁盘上；请以当前文件内容为准，需要时重新读取确认。";
     this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text });
     this.remember("system", text);
-    this.summaryCache = undefined;
     const all = await this.sessions.open(this.sessionId);
     await this.turns.append(this.sessionId, {
       intent: `把代码回滚到检查点 ${checkpointId.slice(0, 8)}${withChat ? "（含聊天记录）" : ""}`,

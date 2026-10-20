@@ -7,6 +7,11 @@
 
 ### Added
 
+- **摘要自动持久化**：`<sessions>/<sessionId>.summary.json` 保存 `{covered, coveredMessageIndex, lines}`
+  - 会话重载/切换后直接读回摘要，不再重新调用模型计算
+  - 聊天回滚时按 `messageIndex` 截断摘要行；会话被外部截短则整体丢弃重算
+  - 全程自动：没有手动「压缩」入口
+
 - **轮内压缩与工具观察化（协议 v24）**：
   - 每次模型调用前按 `contextWindow × 70%` 检查 token：旧工具结果折叠成 digest → 丢最早交换 → 模型摘要兜底
   - 新增设置 `beeCode.model.contextWindow`（默认 32768）；用服务端 `usage` EMA 校准估算系数
