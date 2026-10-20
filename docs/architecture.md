@@ -852,6 +852,10 @@ chat.send { attachments, focus: {path, line, startLine, endLine, kind, symbol} }
 
 这样"它先读了你的函数，又去看了别的文件"整个过程都可见；没打开的文件也不会打断编辑。
 
+**点击跳转**：chip 是按钮，点击后用 `resolveTarget` 解析路径 → 打开（预览模式，不污染标签页）→
+光标放到起始行、滚动到范围居中。webview 消息按不可信处理：只接受工作区相对路径，
+拒绝绝对路径与 `..`，行号必须有限（`parseOpenRead` 有单测覆盖）。
+
 ---
 
 ## 9. 选区快捷入口

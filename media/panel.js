@@ -293,8 +293,14 @@
 
     let chip = readChips.get(path);
     if (!chip) {
-      chip = document.createElement("span");
+      chip = document.createElement("button");
+      chip.type = "button";
       chip.className = "read-chip";
+      chip.addEventListener("click", () => {
+        const startLine = chip.dataset.start ? Number(chip.dataset.start) : undefined;
+        const endLine = chip.dataset.end ? Number(chip.dataset.end) : undefined;
+        post({ type: "openRead", path: chip.dataset.path, startLine, endLine });
+      });
       el.reads.appendChild(chip);
       readChips.set(path, chip);
       // 只保留最近 8 个，避免占满一行
@@ -306,7 +312,13 @@
       }
     }
     chip.textContent = start && end ? `${name}:${start}-${end}` : name;
-    chip.title = start && end ? `${path} 第 ${start}-${end} 行` : path;
+    chip.title = start && end ? `${path} 第 ${start}-${end} 行（点击打开）` : `${path}（点击打开）`;
+    chip.dataset.path = path;
+    if (start) chip.dataset.start = String(start);
+    else delete chip.dataset.start;
+    if (end) chip.dataset.end = String(end);
+    else delete chip.dataset.end;
+    chip.setAttribute("aria-label", `打开 ${path}${start && end ? ` 第 ${start} 到 ${end} 行` : ""}`);
 
     // 重新触发动效：先移除再强制回流
     chip.classList.remove("flash");

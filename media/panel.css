@@ -381,6 +381,9 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 
 .read-chip {
   padding: 1px 6px;
+  background: transparent;
+  cursor: pointer;
+  line-height: 1.4;
   border-radius: 10px;
   font-size: 0.76em;
   font-family: var(--vscode-editor-font-family, monospace);
@@ -388,6 +391,11 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
   white-space: nowrap;
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.read-chip:hover {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder, rgba(128, 128, 128, 0.6));
 }
 
 .read-chip.flash {

@@ -20,6 +20,29 @@ export interface AttachedContext {
   symbol?: string;
 }
 
+/**
+ * 校验 webview 发来的「打开读取的文件」请求。
+ *
+ * webview 消息不可信：只接受工作区相对路径，拒绝绝对路径与 `..`，
+ * 行号必须是有限数字（截断成整数），非法输入一律返回 undefined。
+ */
+export function parseOpenRead(raw: unknown): { path: string; startLine?: number; endLine?: number } | undefined {
+  const msg = (raw ?? {}) as { path?: unknown; startLine?: unknown; endLine?: unknown };
+  const path = typeof msg.path === "string" ? msg.path : "";
+  if (!path || path.length > 500) return undefined;
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.includes("..") || normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized)) return undefined;
+
+  const toLine = (value: unknown): number | undefined => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const line = Math.trunc(value);
+    return line > 0 && line < 10_000_000 ? line : undefined;
+  };
+  const startLine = toLine(msg.startLine);
+  const endLine = toLine(msg.endLine);
+  return { path, ...(startLine ? { startLine } : {}), ...(endLine ? { endLine } : {}) };
+}
+
 export interface PanelHandlers {
   onSend(text: string, mode: Mode, attachments: AttachedContext[]): void;
   onAccept(ids: string[]): void;
@@ -28,6 +51,8 @@ export interface PanelHandlers {
   onRejectAll(): void;
   onShowProposal(id: string): void;
   onAbort(): void;
+  /** 点击「已读取文件」chip：打开文件并定位到行范围 */
+  onOpenRead(path: string, startLine?: number, endLine?: number): void;
 }
 
 export interface PanelState {
@@ -193,7 +218,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** 前端消息必须过白名单；只接受 id / 纯文本，不接受路径 */
   private onMessage(raw: unknown): void {
-    const msg = raw as { type?: unknown; text?: unknown; ids?: unknown; mode?: unknown; id?: unknown };
+    const msg = raw as {
+      type?: unknown;
+      text?: unknown;
+      ids?: unknown;
+      mode?: unknown;
+      id?: unknown;
+      path?: unknown;
+      startLine?: unknown;
+      endLine?: unknown;
+    };
     const type = typeof msg.type === "string" ? msg.type : "";
 
     switch (type) {
@@ -234,6 +268,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "stop":
         this.handlers.onAbort();
         return;
+      case "openRead": {
+        const target = parseOpenRead(msg);
+        if (target) this.handlers.onOpenRead(target.path, target.startLine, target.endLine);
+        return;
+      }
       case "mode":
         if (msg.mode === "builder" || msg.mode === "debugger" || msg.mode === "chat") {
           this.state.mode = msg.mode;

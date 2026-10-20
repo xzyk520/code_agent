@@ -149,6 +149,7 @@ class Shell {
       onRejectAll: () => void this.rejectAllProposals(),
       onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
+      onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
     });
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -971,6 +972,26 @@ class Shell {
     return this.runner.run(params, ctx);
   }
 
+  /** 点击「已读取文件」chip：打开文件并把光标放到对应行范围 */
+  private async openRead(path: string, startLine?: number, endLine?: number): Promise<void> {
+    try {
+      const uri = resolveTarget(path);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+
+      if (startLine === undefined) return;
+      const start = Math.max(0, Math.min(startLine - 1, doc.lineCount - 1));
+      const end = Math.max(start, Math.min((endLine ?? startLine) - 1, doc.lineCount - 1));
+      const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
+      editor.selection = new vscode.Selection(range.start, range.start);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+      this.log.debug(`跳转到 ${path}:${start + 1}-${end + 1}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn(`打开 ${path} 失败：${message}`);
+      void vscode.window.showWarningMessage(`Bee Code: 无法打开 ${path}（${message}）`);
+    }
+  }
   private async pickFiles(): Promise<void> {
     const found = await vscode.workspace.findFiles("**/*", undefined, 3000);
     const items = found
