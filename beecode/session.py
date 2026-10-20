@@ -133,7 +133,14 @@ def _format_user_content(
         if item.get("untitled"):
             where += "（未保存）"
         body = item.get("text") or ""
-        blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
+        if item.get("kind") == "focus":
+            header = f"【光标附近的代码】{where}"
+            symbol = item.get("symbol")
+            if symbol:
+                header += f" · 函数 {symbol}"
+            blocks.append(f"{header}\n```\n{body}\n```")
+        else:
+            blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
 
     text_part = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
     if not images:

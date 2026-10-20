@@ -20,6 +20,7 @@ import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
 import { toWorkspaceRelative } from "./paths";
+import { readFocusAtCursor, type FocusInfo } from "./focus";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -30,6 +31,7 @@ import { SessionStore, type TurnStatus } from "./sessionStore";
 import { PROTOCOL_VERSION } from "./protocol";
 import type {
   Attachment,
+  FocusDto,
   ChatSendParams,
   InitializeParams,
   LogParams,
@@ -199,6 +201,7 @@ class Shell {
         void vscode.window.showInformationMessage("Bee Code: 已清除记住的确认选择。");
       },
       pickFiles: () => this.pickFiles(),
+      focus: { fallbackLines: this.config.focus.fallbackLines, maxLines: this.config.focus.maxLines },
       exportDiagnostics: () => this.exportDiagnostics(),
     });
     this.verifyCommands(registeredCommands);
@@ -530,7 +533,7 @@ class Shell {
 
   // ───────────────────────── 用户动作 ─────────────────────────
 
-  private async send(text: string, mode: Mode, attachments: AttachedContext[]): Promise<void> {
+  private async send(text: string, mode: Mode, attachments: AttachedContext[], autoFocus = true): Promise<void> {
     if (this.disposed) return;
     if (this.busy) {
       this.panel.setHint("上一轮还没结束（可点 ■ 停止）");
@@ -544,7 +547,27 @@ class Shell {
     }
 
     const trimmed = text.trim();
-    if (trimmed.length === 0 && attachments.length === 0) return;
+
+    // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
+    let effectiveAttachments = attachments;
+    let focus: FocusInfo | undefined;
+    if (autoFocus && attachments.length === 0 && this.config.focus.autoAttach) {
+      focus = await readFocusAtCursor({
+        fallbackLines: this.config.focus.fallbackLines,
+        maxLines: this.config.focus.maxLines,
+      }).catch((err: unknown) => {
+        this.log.debug(`读取光标位置失败: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      });
+      if (focus) {
+        effectiveAttachments = [toFocusContext(focus)];
+        this.log.info(
+          `自动附加光标代码：${focus.path}:${focus.startLine}-${focus.endLine}（${focus.kind}${focus.symbol ? ` ${focus.symbol}` : ""}）`,
+        );
+      }
+    }
+
+    if (trimmed.length === 0 && effectiveAttachments.length === 0) return;
 
     const userText = trimmed || defaultInstruction(mode);
     this.panel.addMessage({ id: `u_${Date.now()}`, role: "user", text: userText });
@@ -563,7 +586,8 @@ class Shell {
         sessionId: this.sessionId,
         mode,
         text: userText,
-        attachments: attachments.map(toAttachment),
+        attachments: effectiveAttachments.map(toAttachment),
+        ...(focus ? { focus: focusDto(focus) } : {}),
         // 本轮用户消息已经通过 text 单独传，别在 history 里重复一次
         history: stripTrailingUser(ctx.history, userText),
         summary: ctx.summary,
@@ -1524,6 +1548,7 @@ function toAttachment(context: AttachedContext): Attachment {
     ...(context.endLine ? { endLine: context.endLine } : {}),
     ...(context.text ? { text: context.text } : {}),
     kind: context.kind,
+    ...(context.symbol ? { symbol: context.symbol } : {}),
   };
 }
 
@@ -1556,5 +1581,30 @@ function localContext(): InboundRequestContext {
     throwIfCancelled() {
       /* 本地动作不可取消 */
     },
+  };
+}
+
+/** FocusInfo → 面板附件（kind=focus，内核据此生成"光标附近"标题） */
+function toFocusContext(info: FocusInfo): AttachedContext {
+  return {
+    path: info.path,
+    startLine: info.startLine,
+    endLine: info.endLine,
+    text: info.text,
+    kind: "focus",
+    ...(info.symbol ? { symbol: info.symbol } : {}),
+    ...(info.untitled ? { untitled: true } : {}),
+  };
+}
+
+/** FocusInfo → 协议里的 FocusDto（不含正文，正文走 attachment） */
+function focusDto(info: FocusInfo): FocusDto {
+  return {
+    path: info.path,
+    line: info.line,
+    startLine: info.startLine,
+    endLine: info.endLine,
+    kind: info.kind,
+    ...(info.symbol ? { symbol: info.symbol } : {}),
   };
 }

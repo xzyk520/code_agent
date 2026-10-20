@@ -384,7 +384,32 @@
           "order": 26,
           "default": true,
           "markdownDescription": "是否要求工作区被显式信任（不受信任时禁写、禁命令）。"
-        },        "beeCode.mode.default": {
+        },        "beeCode.focus.autoAttach": {
+          "type": "boolean",
+          "scope": "window",
+          "order": 41,
+          "default": true,
+          "markdownDescription": "发送消息时自动附上光标所在的**整个函数**（不在函数里则取上下若干行）。"
+        },
+        "beeCode.focus.fallbackLines": {
+          "type": "number",
+          "scope": "window",
+          "order": 42,
+          "default": 30,
+          "minimum": 5,
+          "maximum": 200,
+          "markdownDescription": "光标不在函数里时，向上/向下各取多少行。"
+        },
+        "beeCode.focus.maxLines": {
+          "type": "number",
+          "scope": "window",
+          "order": 43,
+          "default": 300,
+          "minimum": 20,
+          "maximum": 2000,
+          "markdownDescription": "函数超过这么多行就退化成「光标上下 N 行」，避免一次送几千行。"
+        },
+        "beeCode.mode.default": {
           "type": "string",
           "scope": "window",
           "order": 40,

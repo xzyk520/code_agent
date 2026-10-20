@@ -42,6 +42,17 @@ export interface ShellConfig {
   subagent: SubagentConfig;
   /** 面板初始模式（auto = 自动判断） */
   modeDefault: "auto" | "chat" | "builder" | "debugger";
+  focus: FocusConfig;
+}
+
+/** 光标附近代码的读取策略 */
+export interface FocusConfig {
+  /** 发送时自动附上光标所在的函数/代码块 */
+  autoAttach: boolean;
+  /** 不在函数里时，上下各取多少行 */
+  fallbackLines: number;
+  /** 函数超过这么多行就退化成代码块 */
+  maxLines: number;
 }
 
 /** 子代理配置：空字符串 = 沿用主代理 */
@@ -109,6 +120,11 @@ export function readConfig(): ConfigReadResult {
       fullAccess: reader.bool("permissions.fullAccess", false),
     },
     modeDefault: reader.oneOf("mode.default", "auto", ["auto", "chat", "builder", "debugger"] as const),
+    focus: {
+      autoAttach: reader.bool("focus.autoAttach", true),
+      fallbackLines: reader.num("focus.fallbackLines", 30, 5, 200),
+      maxLines: reader.num("focus.maxLines", 300, 20, 2_000),
+    },
     subagent: {
       enabled: reader.bool("subagent.enabled", true),
       baseUrl: reader.str("subagent.baseUrl", ""),

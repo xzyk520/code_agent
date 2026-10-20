@@ -167,6 +167,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             attachments=attachments,
             history=history,
             summary=summary if isinstance(summary, str) else None,
+            focus=params.get("focus") if isinstance(params.get("focus"), dict) else None,
         )
     )
     _tasks[session_id] = task

@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -427,6 +427,17 @@ export interface InitializeResult {
   coreVersion?: string;
 }
 
+/** 用户当前光标（或选区）所在位置；内核用它决定"先读哪里" */
+export interface FocusDto {
+  path: string;
+  /** 光标行（1-based） */
+  line: number;
+  startLine: number;
+  endLine: number;
+  kind: "function" | "block";
+  symbol?: string;
+}
+
 export interface Attachment {
   /** 未保存的临时文档（untitled:）：`path` 只是显示名，不能用来 fs.read */
   untitled?: boolean;
@@ -434,7 +445,9 @@ export interface Attachment {
   startLine?: number;
   endLine?: number;
   text?: string;
-  kind?: "selection" | "file" | "diagnostic";
+  kind?: "selection" | "file" | "diagnostic" | "focus";
+  /** focus 附件对应的符号名（显示用） */
+  symbol?: string;
 }
 
 /** 会话历史里的一条消息（重载后恢复上下文用；只带文本，不带工具调用细节） */
@@ -444,6 +457,8 @@ export interface ChatMessage {
 }
 
 export interface ChatSendParams {
+  /** 本轮光标位置（可选；壳会自动附上对应代码块） */
+  focus?: FocusDto;
   sessionId: string;
   mode: Mode;
   text: string;

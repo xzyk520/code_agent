@@ -15,7 +15,9 @@ export interface AttachedContext {
   startLine?: number;
   endLine?: number;
   text?: string;
-  kind: "selection" | "file" | "diagnostic";
+  kind: "selection" | "file" | "diagnostic" | "focus";
+  /** focus 附件对应的符号名 */
+  symbol?: string;
 }
 
 export interface PanelHandlers {

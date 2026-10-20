@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { ChatViewProvider } from "../panel/chatViewProvider";
 import type { Logger } from "../log";
 import { toWorkspaceRelative } from "../paths";
+import { readFocusForSelection } from "../focus";
 
 /** 命令只依赖这个接口，不依赖 extension.ts 的内部实现（避免循环依赖） */
 export interface CommandDeps {
@@ -41,6 +42,8 @@ export interface CommandDeps {
   /** 清除凭据库里保存的 API Key */
   clearModelKey(): Promise<void>;
   pickFiles(): Promise<void>;
+  /** 光标附近代码的读取策略（附加选区命令用） */
+  focus: { fallbackLines: number; maxLines: number };
   exportDiagnostics(): Promise<void>;
 }
 
@@ -150,42 +153,42 @@ async function attachSelection(
     return;
   }
 
-  const selections = editor.selections.filter((s) => !s.isEmpty);
-  if (selections.length === 0) {
-    deps.panel.setMode(mode);
-    deps.panel.reveal();
-    return;
-  }
-
-  const doc = editor.document;
-  // 协议里路径一律工作区相对：绝对路径会把用户名/目录结构带进 prompt
-  const untitled = doc.uri.scheme === "untitled";
-  const relPath = untitled ? doc.uri.path.replace(/^\//, "") : toWorkspaceRelative(doc.uri.fsPath);
+  const selections = editor.selections.length > 0 ? editor.selections : [editor.selection];
 
   const seen = new Set<string>();
   let added = 0;
+  let functions = 0;
   for (const selection of selections) {
-    // 稍微扩一点上下文：只给半截 if 块，模型很难判断
-    const startLine = Math.max(0, selection.start.line - 2);
-    const endLine = Math.min(doc.lineCount - 1, selection.end.line + 2);
-    const key = `${relPath}:${startLine}:${endLine}`;
+    // 有选区：整个选区落在同一函数里就扩成整个函数；没有选区：取光标所在的整个函数
+    const focus = await readFocusForSelection(editor, selection, {
+      fallbackLines: deps.focus.fallbackLines,
+      maxLines: deps.focus.maxLines,
+    });
+    if (!focus) continue;
+
+    const key = `${focus.path}:${focus.startLine}:${focus.endLine}`;
     if (seen.has(key)) continue;   // 多光标重叠时别重复附加
     seen.add(key);
 
-    const range = new vscode.Range(startLine, 0, endLine, doc.lineAt(endLine).text.length);
     deps.panel.addAttachment({
-      path: relPath,
-      startLine: startLine + 1,
-      endLine: endLine + 1,
-      text: doc.getText(range),
-      kind: "selection",
+      path: focus.path,
+      startLine: focus.startLine,
+      endLine: focus.endLine,
+      text: focus.text,
+      kind: "focus",
+      ...(focus.symbol ? { symbol: focus.symbol } : {}),
       // 未保存文档没有真实路径：标出来，内核就不会拿它去 fs.read
-      untitled: untitled || undefined,
+      untitled: focus.untitled,
     });
     added += 1;
+    if (focus.kind === "function") functions += 1;
   }
 
   deps.panel.setMode(mode);
   deps.panel.reveal();
-  deps.panel.setHint(`已附加 ${added} 段选区 · ${mode}`);
+  if (added === 0) {
+    deps.panel.setHint("没有可附加的代码（光标不在文件里？）");
+    return;
+  }
+  deps.panel.setHint(`已附加 ${added} 段（${functions} 个完整函数）· ${mode}`);
 }

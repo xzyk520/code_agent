@@ -7,6 +7,13 @@
 
 ### Added
 
+- **光标上下文（协议 v19）**：提问时自动附上光标所在的**整个函数**
+  - 用 LSP `DocumentSymbol` 找最内层函数；不在函数里则取上下 30 行（可配）
+  - 函数超过 `beeCode.focus.maxLines`（默认 300）自动退化，避免撑爆上下文
+  - 选区落在同一函数内时扩成整个函数；跨函数则保留选区 ±2 行
+  - `chat.send` 新增 `focus` 与 `attachment.kind = focus`；内核追加「先看附件，不足再搜」的系统提示
+  - 命令「附加选区」在没有选区时也取光标所在函数
+
 - **auto 模式与共享记忆（协议 v18）**：
   - 面板新增 `Auto` 模式（默认）：内核按提问意图自动选择 chat / builder / debugger，并推送 `ui.mode`
   - 意图识别为纯启发式（`beecode/router.py`），不额外调用模型；拿不准归 `chat`

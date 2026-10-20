@@ -119,6 +119,7 @@ class AgentLoop:
         history: list[dict[str, str]],
         summary: str | None,
         system_override: str | None = None,
+        focus: dict[str, Any] | None = None,
     ) -> TurnStats:
         vision = supports_vision(
             str(session.model_config.get("model") or ""),
@@ -154,6 +155,24 @@ class AgentLoop:
             attachments=attachments,
             vision=vision,
         )
+        # 光标位置作为一条 system 提示：告诉模型"先看这里，不够再搜"
+        if focus:
+            path = str(focus.get("path") or "")
+            line = focus.get("line")
+            start = focus.get("startLine")
+            end = focus.get("endLine")
+            symbol = focus.get("symbol")
+            note = f"用户当前光标在 {path}:{line}"
+            if start and end:
+                note += f"（已附上第 {start}-{end} 行"
+                note += f"，函数 {symbol}）" if symbol else "）"
+            messages.append(
+                {
+                    "role": "system",
+                    "content": note + "。优先基于附件回答；信息不足时再用 search_code / read_file 扩大范围。",
+                }
+            )
+
         client = self._client_factory(session)
         ctx = ToolContext(
             shell=self._shell,
