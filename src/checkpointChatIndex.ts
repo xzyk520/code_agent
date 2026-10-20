@@ -1,36 +1,28 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { StoredMessage } from "./sessionStore";
 
-/** 一份聊天记录快照：与某个代码检查点一一对应 */
-export interface ChatSnapshot {
-  id: string;
-  sessionId: string;
-  messageCount: number;
-  createdAt: number;
-  messages: StoredMessage[];
-}
-
+/**
+ * 检查点配套的「聊天记录快照」——**只存行号**，不复制消息。
+ *
+ * 会话本身就是 append-only JSONL（一行一条消息，见 `sessionStore.ts`），
+ * 所以"聊天记录在某一刻的样子"等价于"文件里有多少行"。存行号的好处：
+ *   - 快照文件只有几十字节，100 个检查点也不会膨胀
+ *   - 消息全文只有一份（会话 JSONL），不会出现"快照与现状不一致"
+ *   - 回滚聊天 = 把 JSONL 截断到那一行
+ *
+ * 目录布局：`<globalStorage>/checkpoints/<checkpointId>.json`
+ *   { id, sessionId, line, createdAt }
+ */
 export interface ChatSnapshotMeta {
   id: string;
   sessionId: string;
-  messageCount: number;
+  /** 快照时刻的消息条数（= JSONL 行数） */
+  line: number;
   createdAt: number;
 }
 
-/**
- * 检查点配套的「聊天记录快照」。
- *
- * 为什么单独存：影子 git 只管工作区文件；把会话 JSONL 塞进 git 会让历史体积翻倍，
- * 而且回滚聊天需要的是"消息条数 + 内容"，不是文件 diff。所以每份快照一个 JSON：
- *
- *   <globalStorage>/checkpoints/<checkpointId>.json
- *     { id, sessionId, messageCount, createdAt, messages: [...] }
- *
- * 生命周期与代码检查点绑定：代码检查点被"作废"时，对应快照也删除。
- */
-export class CheckpointChatStore {
+export class CheckpointChatIndex {
   constructor(
     private readonly dir: string,
     private readonly logger: Logger,
@@ -43,24 +35,23 @@ export class CheckpointChatStore {
   }
 
   private fileOf(id: string): string {
-    // id 是 git commit sha；仍做一次白名单校验，避免路径穿越
     const safe = /^[0-9a-f]{4,64}$/i.test(id) ? id : "";
     if (!safe) throw new Error(`非法的检查点 id：${id}`);
     return path.join(this.dir, `${safe}.json`);
   }
 
-  async save(id: string, sessionId: string, messages: StoredMessage[]): Promise<void> {
-    const payload: ChatSnapshot = {
+  /** 记录"这个检查点对应聊天记录的第几行" */
+  async save(id: string, sessionId: string, line: number): Promise<void> {
+    const meta: ChatSnapshotMeta = {
       id,
       sessionId,
-      messageCount: messages.length,
+      line: Math.max(0, Math.floor(line)),
       createdAt: Date.now(),
-      messages,
     };
     const target = this.fileOf(id);
     const tmp = `${target}.tmp`;
     try {
-      await fs.promises.writeFile(tmp, JSON.stringify(payload), "utf8");
+      await fs.promises.writeFile(tmp, JSON.stringify(meta), "utf8");
       await fs.promises.rename(tmp, target);
     } catch (err) {
       this.logger.warn(`聊天快照保存失败（${id.slice(0, 8)}）: ${err instanceof Error ? err.message : String(err)}`);
@@ -68,12 +59,26 @@ export class CheckpointChatStore {
     }
   }
 
-  async load(id: string): Promise<ChatSnapshot | undefined> {
+  async load(id: string): Promise<ChatSnapshotMeta | undefined> {
     try {
       const raw = await fs.promises.readFile(this.fileOf(id), "utf8");
-      const parsed = JSON.parse(raw) as ChatSnapshot;
-      if (!Array.isArray(parsed.messages)) return undefined;
-      return parsed;
+      const parsed = JSON.parse(raw) as Partial<ChatSnapshotMeta> & { messageCount?: number; messages?: unknown[] };
+      if (typeof parsed.id !== "string" || typeof parsed.sessionId !== "string") return undefined;
+      // 兼容旧格式（曾存过全文 + messageCount）：取条数当行号
+      const line =
+        typeof parsed.line === "number"
+          ? parsed.line
+          : typeof parsed.messageCount === "number"
+            ? parsed.messageCount
+            : Array.isArray(parsed.messages)
+              ? parsed.messages.length
+              : 0;
+      return {
+        id: parsed.id,
+        sessionId: parsed.sessionId,
+        line,
+        createdAt: Number(parsed.createdAt) || 0,
+      };
     } catch {
       return undefined;
     }
@@ -92,7 +97,7 @@ export class CheckpointChatStore {
     );
   }
 
-  /** 枚举已有快照的元信息（QuickPick 里标注"含聊天快照"） */
+  /** 枚举元信息（QuickPick 里标注"含聊天快照 · 第 N 行"） */
   async list(): Promise<ChatSnapshotMeta[]> {
     let names: string[];
     try {
@@ -103,19 +108,8 @@ export class CheckpointChatStore {
     const out: ChatSnapshotMeta[] = [];
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
-      try {
-        const raw = await fs.promises.readFile(path.join(this.dir, name), "utf8");
-        const parsed = JSON.parse(raw) as ChatSnapshot;
-        if (typeof parsed.id !== "string" || typeof parsed.sessionId !== "string") continue;
-        out.push({
-          id: parsed.id,
-          sessionId: parsed.sessionId,
-          messageCount: Number(parsed.messageCount) || 0,
-          createdAt: Number(parsed.createdAt) || 0,
-        });
-      } catch {
-        // 半份损坏的快照忽略
-      }
+      const meta = await this.load(name.slice(0, -5));
+      if (meta) out.push(meta);
     }
     return out;
   }

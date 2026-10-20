@@ -22,7 +22,7 @@ import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider
 import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
 import { FocusHighlighter } from "./focusDecoration";
-import { CheckpointChatStore } from "./checkpointChatStore";
+import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -98,7 +98,7 @@ class Shell {
   private readonly confirm: ReturnType<typeof createConfirmAdapter>;
   private readonly runner: ReturnType<typeof createRunAdapter>;
   private readonly focusHighlight: FocusHighlighter;
-  private readonly chatSnapshots: CheckpointChatStore;
+  private readonly chatIndex: CheckpointChatIndex;
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
@@ -131,7 +131,7 @@ class Shell {
     this.confirm = createConfirmAdapter(context, this.log);
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
     this.focusHighlight = new FocusHighlighter(this.log);
-    this.chatSnapshots = new CheckpointChatStore(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
+    this.chatIndex = new CheckpointChatIndex(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
@@ -670,7 +670,7 @@ class Shell {
         this.log.debug(`自动检查点 ${checkpoint.id.slice(0, 8)}（${dto.path}）`);
         // 代码快照的同时快照聊天记录：回滚时可以选"代码 + 聊天一起回"
         const messages = await this.sessions.open(this.sessionId);
-        await this.chatSnapshots.save(checkpoint.id, this.sessionId, messages);
+        await this.chatIndex.save(checkpoint.id, this.sessionId, messages.length);
       }
     }
 
@@ -1321,17 +1321,17 @@ class Shell {
       void vscode.window.showInformationMessage("Bee Code: 还没有检查点（写入前会自动创建）。");
       return;
     }
-    const snapshots = new Map((await this.chatSnapshots.list()).map((meta) => [meta.id, meta]));
+    const snapshots = new Map((await this.chatIndex.list()).map((meta) => [meta.id, meta]));
 
     const items = records.map((record) => {
       const snap = snapshots.get(record.id);
       return {
         label: record.id.slice(0, 8),
         description: new Date(record.createdAt).toLocaleString(),
-        detail: `${record.label}${snap ? ` · 含聊天快照（${snap.messageCount} 条）` : " · 无聊天快照"}`,
+        detail: `${record.label}${snap ? ` · 含聊天快照（第 ${snap.line} 行）` : " · 无聊天快照"}`,
         id: record.id,
         hasChat: Boolean(snap),
-        messageCount: snap?.messageCount ?? 0,
+        line: snap?.line ?? 0,
       };
     });
 
@@ -1351,7 +1351,7 @@ class Shell {
         {
           label: "代码 + 聊天记录一起回滚",
           description: picked.hasChat
-            ? `对话回到快照时刻（${picked.messageCount} 条消息）`
+            ? `对话回到快照时刻（第 ${picked.line} 行之前的记录）`
             : "该检查点没有聊天快照，只能回滚代码",
           value: "chat" as const,
           disabled: !picked.hasChat,
@@ -1373,7 +1373,7 @@ class Shell {
 
     const result = await this.checkpoint.restore({ id: picked.id });
     const { voided } = await this.checkpoint.rewind(picked.id);
-    await this.chatSnapshots.remove(voided);
+    await this.chatIndex.remove(voided);
     this.log.info(
       `回滚到 ${picked.id.slice(0, 8)}：恢复 ${result.restored.length} 个文件，作废 ${voided.length} 个后续快照`,
     );
@@ -1383,23 +1383,25 @@ class Shell {
     this.panel.setProposals(this.proposals.visible());
 
     if (restoreChat) {
-      const snapshot = await this.chatSnapshots.load(picked.id);
+      const snapshot = await this.chatIndex.load(picked.id);
       if (!snapshot || snapshot.sessionId !== this.sessionId) {
         void vscode.window.showWarningMessage("Bee Code: 聊天快照不可用（可能属于别的会话），本次只回滚了代码。");
         this.noteRollback(picked.id, picked.label, false);
         return;
       }
-      await this.sessions.truncate(this.sessionId, snapshot.messageCount);
+      // 快照只存行号：截断 JSONL 到那一行，消息全文仍然只有一份
+      const kept = await this.sessions.truncate(this.sessionId, snapshot.line);
       this.panel.restore(
-        snapshot.messages.map((m) => ({ id: m.id, role: m.role, text: m.text })),
+        kept.map((m) => ({ id: m.id, role: m.role, text: m.text })),
         this.sessions.meta(this.sessionId)?.mode,
       );
-      this.persisted = snapshot.messages.length;
+      this.persisted = kept.length;
+      // 下一轮 buildContext 会：最后 8 条原样 + 更早的机械摘要（这里不能预置 summary，否则会重复折叠）
       this.summary = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
       this.noteRollback(picked.id, picked.label, true);
       void vscode.window.showInformationMessage(
-        `Bee Code: 已回滚代码与聊天记录（${snapshot.messageCount} 条消息，${result.restored.length} 个文件）。`,
+        `Bee Code: 已回滚代码与聊天记录（截断到第 ${snapshot.line} 行，恢复 ${result.restored.length} 个文件）。`,
       );
       return;
     }
@@ -1409,7 +1411,6 @@ class Shell {
       `Bee Code: 已回滚 ${result.restored.length} 个文件（聊天记录保留）。`,
     );
   }
-
   /** 回滚后写一条系统消息：让模型/用户都知道"磁盘已经不是上次讨论的样子了" */
   private noteRollback(checkpointId: string, label: string, withChat: boolean): void {
     const text = withChat
