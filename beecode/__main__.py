@@ -153,6 +153,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
         config=TurnConfig(
             max_steps=int(_state.get("max_steps") or 12),
             tool_timeout_s=max(5.0, float(_state.get("tool_timeout_ms") or 60_000) / 1000.0),
+            context_window_tokens=int((_state.get("model_config") or {}).get("contextWindow") or 32_768),
         ),
         propose=_propose,
         log=_log,

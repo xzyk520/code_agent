@@ -7,6 +7,13 @@
 
 ### Added
 
+- **轮内压缩与工具观察化（协议 v24）**：
+  - 每次模型调用前按 `contextWindow × 70%` 检查 token：旧工具结果折叠成 digest → 丢最早交换 → 模型摘要兜底
+  - 新增设置 `beeCode.model.contextWindow`（默认 32768）；用服务端 `usage` EMA 校准估算系数
+  - 工具结果整形：`read_file` 头 120/尾 30、`run_command` stdout 头 100/尾 40、`search_code` 每条截 160 字/最多 50 条、
+    `list_files` 最多 200、`get_diagnostics` 计数 + 前 20 条
+  - 轮次记录新增 `observations`（工具名 + 一行结果），并传入模型摘要作为上下文
+
 - **意图与摘要的三个优化（协议 v23）**：
   - 连续追问（「继续/接着/好/ok」且无附件）沿用上一轮意图，不再调用分类器
   - 模型摘要改为**增量**：只总结新折叠的轮次并追加，摘要超预算时丢弃最旧的行

@@ -77,6 +77,12 @@ class TurnConfig:
     repeat_limit: int = 3
     #: 允许的"催促"次数（空响应 / 只说不做 / 提前收工）
     nudge_limit: int = 2
+    #: 模型上下文窗口（token）；轮内压缩按它的 ratio 触发
+    context_window_tokens: int = 32_768
+    #: 超过"窗口 × ratio"就开始压缩
+    compact_ratio: float = 0.7
+    #: 最近几条工具结果保留原文（更旧的替换成摘要）
+    keep_raw_tool_results: int = 3
 
 
 @dataclass(slots=True)
@@ -118,6 +124,12 @@ class AgentLoop:
         # 子代理没有 propose_edit，也没有 spawn_subagent（不允许无限嵌套）
         self._tools: dict[str, Tool] = build_tools(role, allow_spawn=self._spawn_enabled)
         self._schemas = tool_schemas(self._tools)
+        #: token 估算校准系数（用服务端 usage 反推，EMA 平滑）
+        self._calibration = 1.0
+        #: 本轮已做过"观察摘要"的消息（按对象 id 记，避免往协议消息里加字段）
+        self._digested: set[int] = set()
+        self._compact_notice_added = False
+        self._l3_used = False
 
     async def run_turn(
         self,
@@ -231,6 +243,9 @@ class AgentLoop:
             plan=(lambda steps: self._emit_plan(session, steps)),
         )
 
+        self._digested.clear()
+        self._compact_notice_added = False
+        self._l3_used = False
         stats = TurnStats()
         if intent is not None and intent.usage:
             stats.input_tokens += int(intent.usage.get("inputTokens") or 0)
@@ -346,6 +361,118 @@ class AgentLoop:
 
     # ───────────────────────── 模型调用 ─────────────────────────
 
+    # ───────────────────────── 轮内压缩 ─────────────────────────
+
+    def _estimate_messages_tokens(self, messages: list[dict[str, Any]], *, calibrate: bool = True) -> int:
+        raw = 0
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                raw += estimate_tokens(content)
+            elif isinstance(content, list):
+                raw += sum(estimate_tokens(str(part)) for part in content)
+            for call in message.get("tool_calls") or []:
+                raw += estimate_tokens(str((call.get("function") or {}).get("arguments") or ""))
+        return int(raw * (self._calibration if calibrate else 1.0))
+
+    async def _compact(
+        self,
+        client: OpenAIClient,
+        messages: list[dict[str, Any]],
+        session: Session,
+    ) -> None:
+        """轮内压缩：工具结果摘要 → 丢更早的交换 → 模型摘要（兜底）。"""
+        budget = max(2_000, int(self._config.context_window_tokens * self._config.compact_ratio))
+        if self._estimate_messages_tokens(messages) <= budget:
+            return
+
+        # ① 旧工具结果 → 观察摘要（保留最近 keep_raw_tool_results 条原文）
+        keep = max(0, self._config.keep_raw_tool_results)
+        positions = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        candidates = positions[:-keep] if keep and len(positions) > keep else ([] if keep else positions)
+        replaced = 0
+        for index in candidates:
+            if self._estimate_messages_tokens(messages) <= budget:
+                break
+            message = messages[index]
+            if id(message) in self._digested:
+                continue
+            raw = str(message.get("content") or "")
+            message["content"] = json.dumps(_digest_tool_content(raw), ensure_ascii=False)
+            self._digested.add(id(message))
+            replaced += 1
+        if replaced:
+            self._compact_log(session, f"把 {replaced} 条早期工具结果折叠为摘要")
+
+        # ①b 仍超预算：连"最近几条"也折叠（原文可随时重新读取）
+        if self._estimate_messages_tokens(messages) > budget:
+            extra = 0
+            for index in positions:
+                if self._estimate_messages_tokens(messages) <= budget:
+                    break
+                message = messages[index]
+                if id(message) in self._digested:
+                    continue
+                message["content"] = json.dumps(_digest_tool_content(str(message.get("content") or "")), ensure_ascii=False)
+                self._digested.add(id(message))
+                extra += 1
+            if extra:
+                self._compact_log(session, f"又折叠了 {extra} 条工具结果")
+
+        if self._estimate_messages_tokens(messages) <= budget:
+            return
+
+        # ② 丢掉更早的 assistant+tool 交换（保留当前用户消息及之后）
+        dropped = _drop_oldest_exchanges(messages)
+        if dropped:
+            self._compact_log(session, f"移除了 {dropped} 条更早的对话片段")
+
+        if self._estimate_messages_tokens(messages) <= budget:
+            return
+
+        # ③ 兜底：让模型把最早的一半过程压成一段（一轮最多一次）
+        if not self._l3_used:
+            self._l3_used = True
+            await self._l3_summarize(client, messages, session, budget)
+
+    async def _l3_summarize(
+        self,
+        client: OpenAIClient,
+        messages: list[dict[str, Any]],
+        session: Session,
+        budget: int,
+    ) -> None:
+        last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+        if last_user <= 2:
+            return
+        chunk = messages[1:last_user]
+        text = "\n".join(
+            f"{m.get('role')}: {_content_text(m)[:800]}" for m in chunk if _content_text(m).strip()
+        )[:12_000]
+        if not text.strip():
+            return
+        try:
+            summary, _usage = await client.complete(
+                [
+                    {
+                        "role": "system",
+                        "content": "把下面的 agent 执行过程压缩成不超过 200 字的中文要点：保留结论、涉及的文件、失败原因。只输出要点。",
+                    },
+                    {"role": "user", "content": text},
+                ],
+                timeout=45.0,
+            )
+        except ModelError as exc:
+            self._log(f"轮内摘要失败：{exc}")
+            return
+        note = {"role": "system", "content": f"【轮内压缩摘要】{summary.strip()[:600]}"}
+        messages[1:last_user] = [note]
+        self._compact_log(session, f"模型摘要替代了 {len(chunk)} 条早期消息")
+
+    def _compact_log(self, session: Session, detail: str) -> None:
+        self._log(f"轮内压缩：{detail}")
+        self._notify("log", {"level": "warn", "msg": f"上下文接近上限，已压缩：{detail}"})
+
     async def _stream(
         self,
         client: OpenAIClient,
@@ -360,6 +487,7 @@ class AgentLoop:
         """
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
+        await self._compact(client, messages, session)
         try:
             result = await self._stream_once(client, messages, session, stats)
             if has_image_parts(messages):
@@ -412,6 +540,12 @@ class AgentLoop:
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
             stats.output_tokens += int(usage.get("outputTokens") or 0)
+            # 用服务端 usage 校准估算系数（EMA），让轮内压缩的预算更接近真实
+            prompt_tokens = int(usage.get("inputTokens") or 0)
+            estimated = self._estimate_messages_tokens(messages, calibrate=False)
+            if prompt_tokens > 0 and estimated > 0:
+                ratio = prompt_tokens / estimated
+                self._calibration = min(2.0, max(0.5, self._calibration * 0.5 + ratio * 0.5))
         return "".join(parts), calls, usage
 
     # ───────────────────────── 工具执行 ─────────────────────────
@@ -439,7 +573,8 @@ class AgentLoop:
                 tool.fn(ctx, args), timeout=self._config.tool_timeout_s
             )
             elapsed = asyncio.get_running_loop().time() - started
-            self._emit_tool(session, call, "end", f"{elapsed:.1f}s")
+            brief = _brief_args(args)
+            self._emit_tool(session, call, "end", f"{brief + ' · ' if brief else ''}{elapsed:.1f}s")
             return result
         except asyncio.TimeoutError:
             message = (
@@ -585,6 +720,7 @@ class AgentLoop:
                 tool_timeout_s=self._config.tool_timeout_s,
                 repeat_limit=self._config.repeat_limit,
                 nudge_limit=1,
+                context_window_tokens=self._config.context_window_tokens,
             ),
             propose=None,
             client_factory=self._client_factory,
@@ -724,3 +860,68 @@ def _estimate_input(messages: list[dict[str, Any]]) -> int:
         elif isinstance(content, list):
             total += sum(estimate_tokens(str(part)) for part in content)
     return total
+
+def _content_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return ""
+
+
+def _digest_tool_content(raw: str) -> dict[str, Any]:
+    """把一条工具结果压成"观察摘要"：留指针与关键指标，不留正文。"""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {"digest": True, "tool": "unknown", "note": "结果已省略", "preview": raw[:120]}
+    if not isinstance(data, dict):
+        return {"digest": True, "tool": "unknown", "note": "结果已省略"}
+
+    if "exitCode" in data:
+        return {
+            "digest": True,
+            "tool": "run_command",
+            "exitCode": data.get("exitCode"),
+            "ok": data.get("ok"),
+            "note": "输出已省略（需要时重新运行）",
+        }
+    if "hits" in data:
+        return {"digest": True, "tool": "search_code", "hits": len(data.get("hits") or []), "note": "命中内容已省略"}
+    if "files" in data and "path" not in data:
+        return {"digest": True, "tool": "list_files", "count": len(data.get("files") or [])}
+    if "symbols" in data:
+        return {"digest": True, "tool": "file_outline", "path": data.get("path"), "symbols": len(data.get("symbols") or [])}
+    if data.get("path") and "lines" in data:
+        return {"digest": True, "tool": "read_file", "path": data.get("path"), "lines": data.get("lines"), "note": "内容已省略"}
+    if "locations" in data:
+        return {"digest": True, "tool": "find_references", "count": len(data.get("locations") or [])}
+    if "diagnostics" in data:
+        return {"digest": True, "tool": "get_diagnostics", "counts": data.get("counts"), "note": "明细已省略"}
+    preview = raw[:120]
+    return {"digest": True, "tool": "tool", "note": "结果已省略", "preview": preview}
+
+
+def _drop_oldest_exchanges(messages: list[dict[str, Any]]) -> int:
+    """删掉最早的 assistant+tool_calls 及其工具回复（保留首条 system 与当前用户消息之后）。"""
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    if last_user <= 1:
+        return 0
+    dropped = 0
+    index = 1
+    while index < last_user:
+        message = messages[index]
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            ids = {str(call.get("id")) for call in message["tool_calls"]}
+            del messages[index]
+            dropped += 1
+            last_user -= 1
+            while index < len(messages) and messages[index].get("role") == "tool" and str(messages[index].get("tool_call_id")) in ids:
+                del messages[index]
+                dropped += 1
+                last_user -= 1
+            continue
+        index += 1
+    return dropped
+

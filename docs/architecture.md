@@ -1042,6 +1042,24 @@ L3 当前轮附件 / 检索结果（内核自己拼）           单独预算，
 
 **会话标题**：每轮结束后用本次 `intent` 覆盖会话标题，比"第一条用户消息"更能概括当前会话。
 
+#### 轮内压缩（in-turn compaction）
+
+跨轮压缩管不到"同一轮里多次工具调用"——一次任务可能 10+ 次工具调用，结果全部堆在 `messages` 里。
+`AgentLoop._compact()` 在**每次模型调用前**检查 token，按三档处理：
+
+| 档 | 动作 | 说明 |
+| --- | --- | --- |
+| ① 观察摘要 | 旧工具结果替换成 digest（`{digest:true, tool, path/lines/exitCode, note}`） | 保留最近 3 条原文；仍超则连最近的一起折叠 |
+| ② 丢交换 | 删除最早的 `assistant(tool_calls)` + 其工具回复 | 保留当前用户消息及之后，tool_call 配对不破坏 |
+| ③ 模型兜底 | 把最早一半过程压成一段 system 摘要（一轮最多一次） | 仍不达标才用，成本最高 |
+
+预算 = `contextWindow × 0.7`（`beeCode.model.contextWindow`，默认 32k）；token 估算用服务端
+`usage.prompt_tokens` 做 EMA 校准（0.5–2.0），避免估算偏差导致预算失真。
+
+工具结果本身也已按"观察"整形：`read_file` 超过 150 行给头 120 + 尾 30 + 省略提示；
+`run_command` 给 stdout 头 100/尾 40、stderr 头 40/尾 10；`search_code` 每条命中截到 160 字、
+最多 50 条；`list_files` 最多 200；`get_diagnostics` 给严重度计数 + 前 20 条。
+
 轮次记录存 `<sessions>/<id>.turns.jsonl`（一行一轮），并带 `messageIndex` 与 JSONL 对齐——
 聊天回滚时按同一行号截断，摘要缓存同时失效。
 --- | --- |

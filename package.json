@@ -298,6 +298,15 @@
           "type": "number",
           "default": 0.2
         },
+        "beeCode.model.contextWindow": {
+          "type": "number",
+          "scope": "window",
+          "order": 6,
+          "default": 32768,
+          "minimum": 4096,
+          "maximum": 2000000,
+          "markdownDescription": "模型上下文窗口（token）。轮内压缩按「窗口 × 70%」触发，影响长任务能否继续。"
+        },
         "beeCode.model.maxOutputTokens": {
           "type": "number",
           "default": 8192

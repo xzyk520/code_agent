@@ -104,6 +104,7 @@ export function readConfig(): ConfigReadResult {
       maxOutputTokens: reader.num("model.maxOutputTokens", 8192, 1, 1_000_000),
       supportsTools: reader.bool("model.supportsTools", true),
       supportsVision: reader.oneOf("model.supportsVision", "auto", ["auto", "on", "off"] as const),
+      contextWindow: reader.num("model.contextWindow", 32_768, 4_096, 2_000_000),
     },
     maxSteps: reader.num("agent.maxSteps", 30, 1, 500),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),

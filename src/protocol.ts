@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -350,6 +350,8 @@ export interface TurnSummaryInput {
   assistant?: string;
   tools?: string[];
   files?: string[];
+  /** 一行一条观察（工具名 + 结果摘要），供总结时判断"做了什么" */
+  observations?: string[];
 }
 
 export interface ContextSummarizeParams {
@@ -415,6 +417,8 @@ export interface ModelConfigDto {
   temperature?: number;
   maxOutputTokens?: number;
   supportsTools?: boolean;
+  /** 模型上下文窗口（token）；轮内压缩按它计算预算 */
+  contextWindow?: number;
 }
 
 /** 子代理的模型配置（可选；省略则完全沿用主代理） */

@@ -102,6 +102,7 @@ class Shell {
   private readonly turns: TurnStore;
   private turnIntent?: { intent: string; mode: Mode };
   private readonly turnTools = new Set<string>();
+  private readonly turnObservations: string[] = [];
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加 */
   private summaryCache?: { covered: number; text: string; lines: string[] };
@@ -399,6 +400,7 @@ class Shell {
           assistant: turn.assistant,
           tools: turn.tools,
           files: turn.files,
+          observations: turn.observations,
         })),
       });
       const newLines = (result.pairs ?? []).map((pair) => `- ${pair.intent}：${pair.summary}`);
@@ -436,6 +438,7 @@ class Shell {
       assistant: assistant.slice(0, 1200),
       tools: [...this.turnTools],
       files: [...this.turnFiles],
+      observations: [...this.turnObservations],
       ts: Date.now(),
       messageIndex: all.length,
     });
@@ -443,6 +446,7 @@ class Shell {
     if (intent.trim().length > 0) this.sessions.rename(this.sessionId, intent.trim().slice(0, 40));
     this.turnIntent = undefined;
     this.turnTools.clear();
+    this.turnObservations.length = 0;
     this.turnFiles.clear();
   }
 
@@ -671,6 +675,7 @@ class Shell {
     this.assistantBuffer = "";
     this.turnIntent = undefined;
     this.turnTools.clear();
+    this.turnObservations.length = 0;
     this.turnFiles.clear();
     this.turn = "thinking";
     this.turnDetail = undefined;
@@ -1519,6 +1524,7 @@ class Shell {
       assistant: text,
       tools: [],
       files: [],
+      observations: [],
       ts: Date.now(),
       messageIndex: all.length,
     });
@@ -1574,6 +1580,11 @@ class Shell {
         const tool = params as UiToolParams;
         if (tool.status === "start" && tool.name !== "model" && tool.name !== "guard") {
           this.turnTools.add(tool.name);
+        }
+        if (tool.status !== "start" && tool.name !== "model" && tool.name !== "guard") {
+          const note = `${tool.name}${tool.summary ? `: ${tool.summary}` : ""}`;
+          this.turnObservations.push(note);
+          if (this.turnObservations.length > 12) this.turnObservations.shift();
         }
         if (tool.status === "start") {
           this.turn = "tool";

@@ -28,30 +28,61 @@ def _clip(value: Any) -> dict[str, Any]:
     }
 
 
+#: 读取大段文本时的"头 + 尾"策略（模型需要的是定位，不是全文）
+HEAD_LINES = 120
+TAIL_LINES = 30
+MAX_LINES = HEAD_LINES + TAIL_LINES + 20
+
+
+def _shape_text(text: str, *, head: int = HEAD_LINES, tail: int = TAIL_LINES) -> tuple[str, int]:
+    """把长文本压成"头 + 省略提示 + 尾"，返回 (文本, 省略行数)。"""
+    lines = text.splitlines()
+    if len(lines) <= head + tail + 10:
+        return text, 0
+    omitted = len(lines) - head - tail
+    shaped = "\n".join(
+        [*lines[:head], f"…（省略 {omitted} 行；需要时用 start_line/end_line 精确读取）…", *lines[-tail:]]
+    )
+    return shaped, omitted
+
+
+def _line_count(text: str) -> int:
+    return text.count("\n") + 1 if text else 0
+
+
 async def read_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.read_file(
         str(params["path"]),
         start_line=_int_or_none(params.get("start_line")),
         end_line=_int_or_none(params.get("end_line")),
     )
-    return _clip(
-        {
-            "path": params["path"],
-            "text": result.text,
-            "startLine": result.start_line,
-            "endLine": result.end_line,
-            "totalLines": result.total_lines,
-            "truncated": result.truncated,
-        }
-    )
+    shaped, omitted = _shape_text(result.text)
+    payload: dict[str, Any] = {
+        "path": params["path"],
+        "text": shaped,
+        "startLine": result.start_line,
+        "endLine": result.end_line,
+        "totalLines": result.total_lines,
+        "truncated": result.truncated or omitted > 0,
+    }
+    if omitted > 0:
+        payload["omittedLines"] = omitted
+        payload["note"] = f"中间省略 {omitted} 行；需要细节请指定更小的行范围"
+    return _clip(payload)
 
 
 async def list_files(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.list_files_result(
         glob=str(params.get("glob") or "**/*"),
-        max_results=int(params.get("max_results") or 500),
+        max_results=int(params.get("max_results") or 200),
     )
-    return _clip({"files": result.get("paths", []), "truncated": result.get("truncated", False)})
+    paths = list(result.get("paths", []))[:200]
+    return _clip(
+        {
+            "files": paths,
+            "truncated": bool(result.get("truncated")) or len(result.get("paths", [])) > len(paths),
+        }
+    )
 
 
 async def search_code(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +94,8 @@ async def search_code(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
             glob=_str_or_none(params.get("glob")),
             max_results=int(params.get("max_results") or 100),
         )
-        return _clip({"files": result.get("files", []), "truncated": result.get("truncated", False)})
+        files = list(result.get("files", []))[:100]
+        return _clip({"files": files, "truncated": bool(result.get("truncated")) or len(result.get("files", [])) > len(files)})
 
     hits = await ctx.shell.grep(
         query,
@@ -72,56 +104,62 @@ async def search_code(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         context_lines=0,
         max_results=int(params.get("max_results") or 50),
     )
-    return _clip(
-        {
-            "hits": [
-                {"path": h.path, "line": h.line, "col": h.col, "text": h.text, "count": h.count}
-                for h in hits
-            ]
-        }
-    )
-
+    rows = []
+    for hit in hits[:50]:
+        text = hit.text if len(hit.text) <= 160 else f"{hit.text[:157]}…"
+        rows.append({"path": hit.path, "line": hit.line, "col": hit.col, "text": text, "count": hit.count})
+    return _clip({"hits": rows, "total": len(hits), "truncated": len(hits) > len(rows)})
 
 async def file_outline(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     symbols = await ctx.shell.outline(str(params["path"]))
-    return _clip(
-        {
-            "path": params["path"],
-            "symbols": [
-                {"name": s.name, "kind": s.kind, "startLine": s.start_line, "endLine": s.end_line, "container": s.container}
-                for s in symbols
-            ]
-        }
-    )
+    rows = [
+        {"name": s.name, "kind": s.kind, "startLine": s.start_line, "endLine": s.end_line, "container": s.container}
+        for s in symbols
+    ][:200]
+    return _clip({"path": params["path"], "symbols": rows, "truncated": len(symbols) > len(rows)})
 
 
 async def find_symbol(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.symbols_search(
         str(params["query"]), max_results=int(params.get("max_results") or 30)
     )
-    return _clip({"symbols": result.get("symbols", []), "source": result.get("source"), "truncated": result.get("truncated")})
+    symbols = list(result.get("symbols", []))[:30]
+    return _clip({"symbols": symbols, "source": result.get("source"), "truncated": bool(result.get("truncated")) or len(result.get("symbols", [])) > len(symbols)})
 
 
 async def find_references(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.references_of_symbol(str(params["path"]), str(params["symbol"]))
-    return _clip({"locations": result.get("locations", []), "truncated": result.get("truncated", False)})
+    locations = list(result.get("locations", []))[:30]
+    return _clip({"locations": locations, "truncated": bool(result.get("truncated")) or len(result.get("locations", [])) > len(locations)})
 
 
 async def get_diagnostics(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.diagnostics_result(
         _str_or_none(params.get("path")), min_severity="warning", max_items=100
     )
+    raw_items = result.get("items", [])
+    counts: dict[str, int] = {}
+    for item in raw_items:
+        key = str(item.get("severity") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
     items = [
         {
             "path": d.get("path"),
             "severity": d.get("severity"),
             "code": d.get("code"),
-            "message": str(d.get("message") or "")[:300],
+            "message": str(d.get("message") or "")[:200],
             "line": (d.get("range") or {}).get("startLine"),
         }
-        for d in result.get("items", [])
+        for d in raw_items[:20]
     ]
-    return _clip({"diagnostics": items, "total": result.get("total"), "truncated": result.get("truncated")})
+    return _clip(
+        {
+            "counts": counts,
+            "diagnostics": items,
+            "total": result.get("total"),
+            "truncated": bool(result.get("truncated")) or len(raw_items) > len(items),
+        }
+    )
 
 
 async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
@@ -140,18 +178,23 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         cwd=_str_or_none(params.get("cwd")),
         timeout_ms=_int_or_none(params.get("timeout_ms")),
     )
-    return _clip(
-        {
-            "exitCode": result.exit_code,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "truncated": result.truncated,
-            "killed": result.killed,
-            "sandbox": result.sandbox,
-            "durationMs": result.duration_ms,
-            "ok": result.ok,
-        },
-    )
+    stdout, out_omitted = _shape_text(result.stdout, head=100, tail=40)
+    stderr, err_omitted = _shape_text(result.stderr, head=40, tail=10)
+    payload: dict[str, Any] = {
+        "exitCode": result.exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "truncated": result.truncated or out_omitted > 0 or err_omitted > 0,
+        "killed": result.killed,
+        "sandbox": result.sandbox,
+        "durationMs": result.duration_ms,
+        "ok": result.ok,
+    }
+    if out_omitted:
+        payload["stdoutOmittedLines"] = out_omitted
+    if err_omitted:
+        payload["stderrOmittedLines"] = err_omitted
+    return _clip(payload)
 
 
 async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:

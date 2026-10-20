@@ -43,7 +43,7 @@ SUMMARY_SCHEMA: dict[str, Any] = {
 }
 
 _SYSTEM = """你是对话历史压缩器。输入是一组"轮次"，每轮包含：用户意图（intent）、AI 的回答、
-调用过的工具（tools）、改动的文件（files）。
+调用过的工具（tools）、改动的文件（files）、工具观察（observations）。
 
 请为**每一轮**写一句中文总结，句子必须包含三部分信息：
 1. 调用了什么工具（没调用就写"未调用工具"）
@@ -87,6 +87,7 @@ def _prepare(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "assistant": _truncate(str(turn.get("assistant") or ""), 1200),
                 "tools": [str(t) for t in (turn.get("tools") or [])][:10],
                 "files": [str(f) for f in (turn.get("files") or [])][:10],
+                "observations": [str(o)[:200] for o in (turn.get("observations") or [])][:12],
             }
         )
     return prepared

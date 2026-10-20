@@ -24,6 +24,8 @@ export interface TurnRecord {
   tools: string[];
   /** 本轮产生提案涉及的文件（去重） */
   files: string[];
+  /** 工具观察摘要（name: summary），供模型总结时参考 */
+  observations: string[];
   ts: number;
   /** 写完这一轮时，会话 JSONL 的条数（回滚截断用） */
   messageIndex: number;
