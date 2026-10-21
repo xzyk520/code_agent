@@ -25,6 +25,7 @@ import { FocusHighlighter } from "./focusDecoration";
 import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { TurnStore } from "./turnStore";
 import { SummaryStore } from "./summaryStore";
+import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
@@ -113,6 +114,9 @@ class Shell {
   private turnUserMessageId: string | undefined;
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
+  /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
+  private readonly attachmentNotices: string[] = [];
+  private attachmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
@@ -172,11 +176,7 @@ class Shell {
       onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
-      onAttachmentNotice: (message) => {
-        this.log.warn(`附件提示：${message}`);
-        this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: message });
-        void vscode.window.showWarningMessage(`Bee Code: ${message}`);
-      },
+      onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments);
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -423,6 +423,32 @@ class Shell {
     };
     await this.summaries.save(this.sessionId, { covered: lines.length, coveredMessageIndex, lines });
     this.log.info(`摘要随聊天回滚截断到 ${lines.length} 轮`);
+  }
+
+  /** 附件限制提示先入队，250ms 内的多条合并成一条 toast + 一条系统消息 */
+  private queueAttachmentNotice(message: string): void {
+    if (!this.attachmentNotices.includes(message)) this.attachmentNotices.push(message);
+    if (this.attachmentNoticeTimer) clearTimeout(this.attachmentNoticeTimer);
+
+    this.attachmentNoticeTimer = setTimeout(() => this.flushAttachmentNotices(), 250);
+  }
+
+  private flushAttachmentNotices(): void {
+    if (this.attachmentNoticeTimer) {
+      clearTimeout(this.attachmentNoticeTimer);
+      this.attachmentNoticeTimer = undefined;
+    }
+    if (this.attachmentNotices.length === 0) return;
+    const notices = [...this.attachmentNotices];
+    this.attachmentNotices.length = 0;
+    const merged = mergeNotices(notices);
+    this.log.warn(`附件提示：${merged}`);
+    this.panel.addMessage({
+      id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      role: "system",
+      text: merged,
+    });
+    void vscode.window.showWarningMessage(`Bee Code: ${merged}`);
   }
 
   /** 从轮次记录重建右侧轨迹（重载/切换会话/回滚后用） */
@@ -764,10 +790,8 @@ class Shell {
     // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
     const clamped = clampAttachments(attachments, this.config.attachments);
     let effectiveAttachments = clamped.items;
-    for (const notice of clamped.notices) {
-      this.log.warn(`附件提示：${notice}`);
-      void vscode.window.showWarningMessage(`Bee Code: ${notice}`);
-    }
+    for (const notice of clamped.notices) this.queueAttachmentNotice(notice);
+    this.flushAttachmentNotices();
     let focus: FocusInfo | undefined;
     if (autoFocus && attachments.length === 0 && this.config.focus.autoAttach) {
       focus = await readFocusAtCursor({
