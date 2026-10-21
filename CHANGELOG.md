@@ -7,6 +7,9 @@
 
 ### Added
 
+- **子代理结论保留**：轮内压缩的 digest 识别 `spawn_subagent` 结果，
+  完整保留 `findings`（不截断），同时保留 steps/toolCalls/error
+
 - **摘要模型配置向导**：命令 `Bee Code: 配置摘要模型`，四步（端点/模型/密钥/测试），
   留空沿用主模型；密钥写 SecretStorage，保存后热更新内核
 - **摘要模型可指定**：`beeCode.summary.model/baseUrl/apiKeyId`；未配置沿用主模型，

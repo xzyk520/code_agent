@@ -1167,6 +1167,18 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"digest": True, "tool": "unknown", "note": "结果已省略"}
 
+    if "findings" in data:
+        # 子代理只回传最终结论；这是唯一不能丢的内容，完整保留
+        return {
+            "digest": True,
+            "tool": "spawn_subagent",
+            "ok": data.get("ok"),
+            "steps": data.get("steps"),
+            "toolCalls": data.get("toolCalls"),
+            "findings": str(data.get("findings") or ""),
+            **({"error": str(data["error"])} if data.get("error") else {}),
+            "note": "子代理结论完整保留",
+        }
     if data.get("tool") == "diagram" or ("kind" in data and "id" in data and "source" not in data):
         return {
             "digest": True,
