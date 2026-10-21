@@ -217,6 +217,8 @@ async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     lowered = source.lower()
     if "<script" in lowered or "javascript:" in lowered:
         raise ValueError("图里不能包含脚本或 javascript: 链接")
+    if "%%{" in source:
+        raise ValueError("不要使用 Mermaid init 指令（会覆盖安全/主题配置）")
     title = str(params.get("title") or "").strip()[:80]
     payload = {
         "id": f"d_{uuid.uuid4().hex[:8]}",
