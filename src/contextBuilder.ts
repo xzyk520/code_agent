@@ -66,7 +66,7 @@ export function buildContext(
   if (older.length > 0) summaryParts.push(summarize(older));
   let summary = summaryParts.filter((s) => s.trim().length > 0).join("\n\n") || undefined;
 
-  let kept = recent.map((m) => ({ role: m.role, text: m.text }) as ChatMessage);
+  let kept = recent.map((m) => ({ role: m.role, text: m.text, ...(m.diagrams ? { diagrams: m.diagrams } : {}) }) as ChatMessage);
   let folded = older.length;
 
   // 摘要本身可能就超预算：**保留最新的行**（越靠后越新），从最旧的行开始丢
@@ -78,10 +78,12 @@ export function buildContext(
   }
 
   // 仍超预算：从最旧的逐字消息开始丢（允许清空——当前用户输入由调用方单独传 text）
-  let tokens = (summary ? estimateTokens(summary) : 0) + kept.reduce((n, m) => n + estimateTokens(m.text), 0);
+  const messageTokens = (m: ChatMessage): number =>
+    estimateTokens(m.text) + (m.diagrams ?? []).reduce((sum, d) => sum + estimateTokens(d.source), 0);
+  let tokens = (summary ? estimateTokens(summary) : 0) + kept.reduce((n, m) => n + messageTokens(m), 0);
   while (tokens > budget.maxTokens && kept.length > 0) {
     const dropped = kept.shift();
-    if (dropped) tokens -= estimateTokens(dropped.text);
+    if (dropped) tokens -= messageTokens(dropped);
     folded += 1;
   }
 
@@ -118,6 +120,8 @@ export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
   const lines: string[] = [`[早前对话摘要 · ${messages.length} 条消息]`];
   if (asks.length > 0) lines.push(`用户先后要求：${asks.slice(-6).join("；")}`);
   if (files.size > 0) lines.push(`涉及文件：${[...files].join(", ")}`);
+  const diagrams = messages.reduce((n, m) => n + (m.diagrams?.length ?? 0), 0);
+  if (diagrams > 0) lines.push(`本轮生成图示：${diagrams} 张`);
   if (errors.length > 0) lines.push(`出现过的问题：${errors.join("；")}`);
 
   return clip(lines.join("\n"), maxChars);

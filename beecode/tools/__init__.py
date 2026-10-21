@@ -36,6 +36,8 @@ class ToolContext:
     spawn: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
     #: 更新计划（渲染到面板）
     plan: Callable[[list[dict[str, str]]], None] | None = None
+    #: 生成一张图（渲染到面板，并挂到本轮助手消息上）
+    diagram: Callable[[dict[str, Any]], None] | None = None
 
 
 ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -173,6 +175,23 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
             ),
         ),
         ToolSpec(
+            "diagram",
+            "把复杂代码结构画成图（Mermaid）。只在文字难以说清时使用。\n"
+            "kind: flowchart（控制流/架构）| sequence（调用时序）| class（类型关系）| state（状态机）| er（数据模型）。\n"
+            "source 传完整 Mermaid 源码，不要带 ```mermaid 围栏；节点 ≤ 20 个，标签 ≤ 40 字符；"
+            "不要写颜色/主题/click/外链。\n"
+            "图会渲染在回答里，图后必须给 3–5 行文字结论，不要只丢一张图。\n"
+            "如果语法没把握或渲染失败，改用 ASCII/Unicode 图，并在正文说明。",
+            _obj(
+                {
+                    "kind": {"type": "string", "enum": ["flowchart", "sequence", "class", "state", "er"]},
+                    "source": _str("完整 Mermaid 源码（不含围栏）"),
+                    "title": _str("可选：图标题"),
+                },
+                ["kind", "source"],
+            ),
+        ),
+        ToolSpec(
             "spawn_subagent",
             "派一个只读子代理去探索代码（独立上下文，只回传结论）。适合大范围搜索/阅读，"
             "避免污染主对话。子代理不能改文件、不能派孙代理。",
@@ -210,6 +229,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         "run_command": builtin.run_command,
         "spawn_subagent": builtin.spawn_subagent,
         "update_plan": builtin.update_plan,
+        "diagram": builtin.diagram,
     }
 
     names = [spec.name for spec in specs] if role == "main" else [n for n in READ_ONLY_TOOLS]

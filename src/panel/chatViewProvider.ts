@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Mode, PlanStep, ProposalDto, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
+import type { DiagramDto, Mode, PlanStep, ProposalDto, UiDiagramParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -8,6 +8,8 @@ export interface ChatMessageView {
   text: string;
   /** 回看用的思考内容（不进入模型上下文）；数组 = 按模型调用分段 */
   reasoning?: string | Array<{ round: number; text: string }>;
+  /** 助手回答里附带的图 */
+  diagrams?: DiagramDto[];
 }
 
 export interface AttachedContext {
@@ -183,6 +185,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   planEvent(params: UiPlanParams): void {
     this.state.plan = params.steps;
     this.post({ type: "plan", ...params });
+  }
+
+  /** 模型生成了一张图（前端懒加载 Mermaid 后渲染） */
+  diagramEvent(params: UiDiagramParams): void {
+    this.post({ type: "diagram", diagram: params.diagram });
   }
 
   /** 思考内容增量（按模型调用分段，不进上下文） */
@@ -388,11 +395,12 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   const nonce = makeNonce();
   const script = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.js"));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.css"));
+  const mermaid = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "vendor", "mermaid.min.js"));
   const csp = [
     "default-src 'none'",
     `img-src ${webview.cspSource} data:`,
-    `style-src ${webview.cspSource}`,
-    `script-src 'nonce-${nonce}'`,
+    `style-src ${webview.cspSource} 'unsafe-inline'`,
+    `script-src 'nonce-${nonce}' ${webview.cspSource}`,
   ].join("; ");
 
   return `<!DOCTYPE html>
@@ -404,7 +412,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
 <link rel="stylesheet" href="${style}" />
 <title>Bee Code</title>
 </head>
-<body>
+<body data-mermaid-uri="${mermaid}">
   <header class="bar">
     <div class="modes">
       <span id="mode-badge" class="mode-badge">Chat</span>

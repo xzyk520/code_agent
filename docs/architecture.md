@@ -634,6 +634,8 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
 | `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?` | 受权限/沙箱约束（§12.4），可能要用户批准 |
 | `spawn_subagent` | 派生 | `task`, `max_steps?` | 只读子代理（独立上下文），只回传结论；仅主代理可用 |
+| `update_plan` | 面板 | `steps[]` | 3-6 步计划；状态只由模型更新，收尾前要求把最后一步标 done |
+| `diagram` | 展示 | `kind`, `source`, `title?` | Mermaid 图（flowchart/sequence/class/state/er）；前端懒加载渲染，图挂到助手消息并参与摘要；单轮最多 3 张、8KB |
 
 > 与设计稿的差异：暂未提供 `apply_patch`（unified diff）与 `run_test`——前者留作后续（全文提案更简单、冲突检测更可靠），后者等命令执行稳定后再做。
 
@@ -1485,7 +1487,20 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - ⚠️ **不要承诺多文件原子性**：文件系统没有跨文件事务。"全部接受"是逐个文件写入，中途失败就停在那个文件并如实报告——不会出现"一半写了一半没写却没提示"。
 - 会话结束时仍有待审提案：默认**保留**并提示（可在面板里继续接受/拒绝）。
 
-### 11.6 右侧轨迹与任务成本（已实现）
+### 11.6 图（Mermaid，懒加载）
+
+`diagram` 工具把 Mermaid 源码经 `ui.diagram` 送到面板。前端**只在出现第一张图时**
+动态插入带 nonce 的 `<script>` 加载 `media/vendor/mermaid.min.js`；
+历史会话打开时同样按需加载；没有图的会话不付这份成本。
+
+- 图作为助手消息的 `diagrams` 字段**持久化**，重载后可重渲染；
+- 图会进入轮次记录与摘要（`diagrams: [{kind,title,source}]`）；
+- 渲染失败时显示错误 + 源码，模型可按工具描述退回 ASCII；
+- 限制：单轮 ≤3 张、源码 ≤8KB、节点建议 ≤20；`securityLevel:"strict"`，禁脚本/外链。
+- CSP：`script-src` 仍是 nonce；`style-src` 额外允许 `'unsafe-inline'`，因为 Mermaid
+  输出依赖内联 `style` 属性。Mermaid 本身跑在 strict 模式，模型源码不会直接变成 HTML。
+
+### 11.7 右侧轨迹与任务成本（已实现）
 
 面板右侧是一列**会话轨迹**：每一轮一条，显示意图分析给出的 `intent` 与模式图标。
 点击任意一条会平滑滚动到对应的用户消息并短暂高亮——长会话不必再翻历史。
@@ -1499,7 +1514,7 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - 轨迹顶部有搜索框：按意图文本过滤（大小写无关），长会话里可以只看"重构"相关；
 - 三种模式用不同颜色区分：Chat 蓝、Builder 绿、Debugger 红（圆点与左侧色条同步）。
 
-### 11.7 子代理的可视化（已实现）
+### 11.8 子代理的可视化（已实现）
 
 
 子代理的过程不推流（避免把主对话刷满），而是在面板里渲染成**一张可折叠卡片**：

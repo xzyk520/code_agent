@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
 from typing import Any
 
 from . import ToolContext
@@ -195,6 +197,41 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
     if err_omitted:
         payload["stderrOmittedLines"] = err_omitted
     return _clip(payload)
+
+
+async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """把 Mermaid 源码交给壳渲染，并挂到本轮助手消息上。"""
+    if ctx.diagram is None:
+        raise RuntimeError("当前 agent 不支持画图")
+    kind = str(params.get("kind") or "").strip().lower()
+    if kind not in {"flowchart", "sequence", "class", "state", "er"}:
+        raise ValueError("kind 必须是 flowchart / sequence / class / state / er")
+    source = str(params.get("source") or "").strip()
+    # 容忍模型把围栏也传进来
+    source = re.sub(r"^```[a-zA-Z]*\s*\n?", "", source)
+    source = re.sub(r"\n?```\s*$", "", source).strip()
+    if not source:
+        raise ValueError("source 不能为空")
+    if len(source) > 8_000:
+        raise ValueError(f"图太大（{len(source)} 字符）；请压缩到 8000 字符以内、节点 ≤ 20")
+    lowered = source.lower()
+    if "<script" in lowered or "javascript:" in lowered:
+        raise ValueError("图里不能包含脚本或 javascript: 链接")
+    title = str(params.get("title") or "").strip()[:80]
+    payload = {
+        "id": f"d_{uuid.uuid4().hex[:8]}",
+        "kind": kind,
+        "title": title,
+        "source": source,
+    }
+    ctx.diagram(payload)
+    return {
+        "ok": True,
+        "id": payload["id"],
+        "kind": kind,
+        "title": title,
+        "note": "已渲染。请在图后补充 3-5 行结论，不要只给一张图。",
+    }
 
 
 async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:

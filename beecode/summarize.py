@@ -43,12 +43,14 @@ SUMMARY_SCHEMA: dict[str, Any] = {
 }
 
 _SYSTEM = """你是对话历史压缩器。输入是一组"轮次"，每轮包含：用户意图（intent）、AI 的回答、
-调用过的工具（tools）、改动的文件（files）、工具观察（observations）。
+调用过的工具（tools）、改动的文件（files）、工具观察（observations）、
+生成的图（diagrams：kind/title/source）。
 
 请为**每一轮**写一句中文总结，句子必须包含三部分信息：
 1. 调用了什么工具（没调用就写"未调用工具"）
 2. 改动了哪些文件（没改动就写"未改动文件"）
 3. 实现了什么需求（对应用户意图）
+如果这轮画了图，在总结末尾补一句"并画了示意图：<主题>"。
 
 示例：
 {"pairs":[{"intent":"修复配置读取崩溃","summary":"调用了 read_file、propose_edit，改动了 src/config.ts，修复了空配置导致的崩溃"}]}
@@ -88,6 +90,15 @@ def _prepare(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tools": [str(t) for t in (turn.get("tools") or [])][:10],
                 "files": [str(f) for f in (turn.get("files") or [])][:10],
                 "observations": [str(o)[:200] for o in (turn.get("observations") or [])][:12],
+                "diagrams": [
+                    {
+                        "kind": str(d.get("kind") or "mermaid")[:20],
+                        "title": str(d.get("title") or "")[:100],
+                        "source": _truncate(str(d.get("source") or ""), 1200),
+                    }
+                    for d in (turn.get("diagrams") or [])[:4]
+                    if isinstance(d, dict)
+                ],
             }
         )
     return prepared

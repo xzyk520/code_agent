@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 30;
+export const PROTOCOL_VERSION = 31;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -352,6 +352,8 @@ export interface TurnSummaryInput {
   files?: string[];
   /** 一行一条观察（工具名 + 结果摘要），供总结时判断"做了什么" */
   observations?: string[];
+  /** 本轮生成的图（摘要时要提到图的主题） */
+  diagrams?: DiagramDto[];
 }
 
 export interface ContextSummarizeParams {
@@ -488,6 +490,8 @@ export interface Attachment {
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
+  /** 助手消息里附带的图（历史上下文里会转成 Mermaid 围栏） */
+  diagrams?: DiagramDto[];
 }
 
 /** 上一轮的意图分析结果（壳持久化，内核重启后仍能判断"是否延续"） */
@@ -572,6 +576,19 @@ export interface UiIntentParams {
 export interface PlanStep {
   text: string;
   status: "pending" | "doing" | "done";
+}
+
+/** 模型生成的一张图（Mermaid 源码；由前端渲染） */
+export interface DiagramDto {
+  id: string;
+  kind: string;
+  title?: string;
+  source: string;
+}
+
+export interface UiDiagramParams {
+  sessionId: string;
+  diagram: DiagramDto;
 }
 
 export interface UiPlanParams {

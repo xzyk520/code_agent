@@ -566,3 +566,54 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   opacity: 0.72;
   white-space: nowrap;
 }
+
+/* ───────────── 图（Mermaid，懒加载） ───────────── */
+.diagram-card {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06));
+}
+
+.diagram-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 0.82em;
+}
+
+.diagram-title {
+  font-weight: 600;
+}
+
+.diagram-kind {
+  margin-left: auto;
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
+.diagram-body {
+  overflow-x: auto;
+}
+
+.diagram-body svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-error {
+  color: var(--vscode-errorForeground, #f14c4c);
+  font-size: 0.82em;
+  margin-bottom: 4px;
+}
+
+.diagram-source {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  font-size: 0.78em;
+  white-space: pre-wrap;
+  background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.2));
+}

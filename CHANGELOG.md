@@ -7,6 +7,10 @@
 
 ### Added
 
+- **画图能力（Mermaid，懒加载）**：新增 `diagram` 工具；面板按需加载 Mermaid 渲染；
+  图作为助手消息的 `diagrams` 持久化，进入轮次记录与摘要；单轮 ≤3 张、源码 ≤8KB，失败回退源码/ASCII
+- **协议 v31**：新增 `DiagramDto` / `ui.diagram` / `ChatMessage.diagrams` / `TurnSummaryInput.diagrams`
+
 - **提示词要求计划收尾**：system prompt、计划模板、`update_plan` 描述和空转催促都明确要求
   「总结前把最后一步标 done」；内核不自动补标
 

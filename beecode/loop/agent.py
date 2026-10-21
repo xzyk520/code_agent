@@ -126,6 +126,8 @@ class AgentLoop:
         self._l3_used = False
         #: 本轮的当前计划（只由模型 update_plan 修改；内核不推断完成度）
         self._plan: list[dict[str, str]] | None = None
+        #: 本轮生成的图（挂到 assistant 消息上，参与摘要/历史）
+        self._diagrams: list[dict[str, Any]] = []
         #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
         self._replay_reasoning = False
         #: 本轮墙钟预算（按 scale 动态设置）
@@ -259,11 +261,14 @@ class AgentLoop:
             log=self._log,
             spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._spawn_enabled else None,
             plan=(lambda steps: self._emit_plan(session, steps)),
+            diagram=(lambda payload: self._emit_diagram(session, payload)),
         )
 
         self._digested.clear()
         self._compact_notice_added = False
         self._l3_used = False
+        self._plan = None
+        self._diagrams = []
         self._reasoning_by_msg.clear()
         self._budget_warned = False
         self._plan_nudged = False
@@ -463,7 +468,7 @@ class AgentLoop:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
 
         session.add_user(text, attachments)
-        session.add_assistant(final_text)
+        session.add_assistant(final_text, self._diagrams)
         self._notify(
             "ui.usage",
             {
@@ -898,6 +903,12 @@ class AgentLoop:
             params["startLine"] = start
             params["endLine"] = end
         self._notify("ui.read", params)
+
+    def _emit_diagram(self, session: Session, payload: dict[str, Any]) -> None:
+        if len(self._diagrams) >= 3:
+            raise RuntimeError("本轮最多画 3 张图；请合并或删减")
+        self._diagrams.append(payload)
+        self._notify("ui.diagram", {"sessionId": session.id, "diagram": payload})
 
     def _emit_plan(self, session: Session, steps: list[dict[str, str]]) -> None:
         self._plan = steps

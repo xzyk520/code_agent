@@ -47,9 +47,11 @@ import type {
   RunParams,
   RunResult,
   UiDeltaParams,
+  DiagramDto,
   PlanStep,
   UiIntentParams,
   UiPlanParams,
+  UiDiagramParams,
   UiReadParams,
   UiReasoningParams,
   UiSubagentParams,
@@ -108,6 +110,8 @@ class Shell {
   private turnIntent?: { intent: string; mode: Mode; scale?: "small" | "large"; needsProposal?: boolean; reason?: string };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
+  /** 本轮生成的图（挂到 assistant 消息 + turn record） */
+  private readonly turnDiagrams: DiagramDto[] = [];
   /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
@@ -334,7 +338,7 @@ class Shell {
     if (existing.length === 0) return;
 
     this.panel.restore(
-      existing.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
+      existing.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}), ...(m.diagrams ? { diagrams: m.diagrams } : {}) })),
       this.sessions.meta(this.sessionId)?.mode ?? this.panel.getMode(),
     );
     this.persisted = existing.length;
@@ -381,14 +385,16 @@ class Shell {
     role: "user" | "assistant" | "system",
     text: string,
     reasoning?: string | Array<{ round: number; text: string }>,
+    diagrams?: DiagramDto[],
   ): void {
-    if (!text.trim()) return;
+    if (!text.trim() && (!diagrams || diagrams.length === 0)) return;
     this.sessions.append(this.sessionId, {
       id: `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       role,
       text,
       ts: Date.now(),
       ...(reasoning ? { reasoning } : {}),
+      ...(diagrams && diagrams.length > 0 ? { diagrams } : {}),
     });
   }
 
@@ -532,6 +538,7 @@ class Shell {
           tools: turn.tools,
           files: turn.files,
           observations: turn.observations,
+          ...(turn.diagrams ? { diagrams: turn.diagrams } : {}),
         })),
       });
       const newLines = (result.pairs ?? []).map((pair) => `- ${pair.intent}：${pair.summary}`);
@@ -587,6 +594,7 @@ class Shell {
       files: [...this.turnFiles],
       observations: [...this.turnObservations],
       ...(this.turnPlan.length > 0 ? { plan: this.turnPlan } : {}),
+      ...(this.turnDiagrams.length > 0 ? { diagrams: [...this.turnDiagrams] } : {}),
       ...(this.turnUserMessageId ? { userMessageId: this.turnUserMessageId } : {}),
       ts: Date.now(),
       messageIndex: all.length,
@@ -596,6 +604,7 @@ class Shell {
     this.turnIntent = undefined;
     this.turnTools.clear();
     this.turnObservations.length = 0;
+    this.turnDiagrams.length = 0;
     this.turnFiles.clear();
   }
 
@@ -665,7 +674,7 @@ class Shell {
     this.persisted = 0;
     const messages = await this.sessions.open(picked.id);
     this.panel.restore(
-      messages.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
+      messages.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}), ...(m.diagrams ? { diagrams: m.diagrams } : {}) })),
       this.sessions.meta(picked.id)?.mode ?? this.panel.getMode(),
     );
     this.persisted = messages.length;
@@ -852,6 +861,7 @@ class Shell {
     this.turnIntent = undefined;
     this.turnTools.clear();
     this.turnObservations.length = 0;
+    this.turnDiagrams.length = 0;
     this.turnFiles.clear();
     this.turnPlan = [];
     this.turn = "thinking";
@@ -891,7 +901,7 @@ class Shell {
         const segments = [...this.reasoningSegments.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([round, text]) => ({ round, text }));
-        this.remember("assistant", assistantText, segments.length > 0 ? segments : undefined);
+        this.remember("assistant", assistantText, segments.length > 0 ? segments : undefined, this.turnDiagrams);
         this.assistantBuffer = "";
       }
       // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
@@ -1673,7 +1683,7 @@ class Shell {
       // 快照只存行号：截断 JSONL 到那一行，消息全文仍然只有一份
       const kept = await this.sessions.truncate(this.sessionId, snapshot.line);
       this.panel.restore(
-        kept.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
+        kept.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}), ...(m.diagrams ? { diagrams: m.diagrams } : {}) })),
         this.sessions.meta(this.sessionId)?.mode,
       );
       this.persisted = kept.length;
@@ -1861,6 +1871,12 @@ class Shell {
             intent: p.intent || p.reason || "（未记录意图）",
           });
         }
+        return;
+      }
+      case "ui.diagram": {
+        const p = params as UiDiagramParams;
+        this.turnDiagrams.push(p.diagram);
+        this.panel.diagramEvent(p);
         return;
       }
       case "ui.plan": {

@@ -58,8 +58,11 @@ class Session:
             content = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
         self.messages.append({"role": "user", "content": content})
 
-    def add_assistant(self, text: str) -> None:
-        self.messages.append({"role": "assistant", "content": text})
+    def add_assistant(self, text: str, diagrams: list[dict[str, Any]] | None = None) -> None:
+        message: dict[str, Any] = {"role": "assistant", "content": text}
+        if diagrams:
+            message["diagrams"] = list(diagrams)
+        self.messages.append(message)
 
     def add_system(self, text: str) -> None:
         self.messages.append({"role": "system", "content": text})
@@ -90,8 +93,17 @@ class Session:
         for item in history or []:
             role = item.get("role")
             text = item.get("text")
-            if role in ("user", "assistant", "system") and isinstance(text, str) and text:
-                out.append({"role": role, "content": text})
+            if role not in ("user", "assistant", "system") or not isinstance(text, str) or not text:
+                continue
+            diagrams = item.get("diagrams") or []
+            if role == "assistant" and diagrams:
+                fences = "\n\n".join(
+                    f"[图：{d.get('kind') or 'mermaid'} {d.get('title') or ''}]\n```mermaid\n{d.get('source') or ''}\n```"
+                    for d in diagrams
+                    if isinstance(d, dict) and d.get("source")
+                )
+                text = f"{text}\n\n{fences}".strip()
+            out.append({"role": role, "content": text})
         if user_text is not None or attachments:
             # 复用 add_user 的格式化逻辑，但**不写进会话历史**（避免重复：历史由壳维护）
             formatted = _format_user_content(user_text or "", attachments or [], vision=vision)

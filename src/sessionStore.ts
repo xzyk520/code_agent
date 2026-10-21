@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { LastIntentDto, Mode, PlanStep } from "./protocol";
+import type { DiagramDto, LastIntentDto, Mode, PlanStep } from "./protocol";
 
 /** 一条已落盘的消息（追加写，永不修改） */
 export interface StoredMessage {
@@ -11,6 +11,8 @@ export interface StoredMessage {
   ts: number;
   /** 仅用于回看：思考内容不进入模型上下文，也不参与摘要 */
   reasoning?: string | ReasoningSegment[];
+  /** 助手回答里附带的图（Mermaid 源码；重载后由前端懒加载渲染） */
+  diagrams?: DiagramDto[];
 }
 
 /** 一次模型调用的思考内容（用于分段回看） */

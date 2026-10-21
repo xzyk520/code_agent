@@ -41,7 +41,7 @@
 
 
   /** @typedef {"chat" | "builder" | "debugger"} Mode */
-  /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string }} ChatMessage */
+  /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
   /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, hint?: string }} PanelState */
@@ -313,6 +313,85 @@
     void chip.offsetWidth;
     chip.classList.add("flash");
     setTimeout(() => chip.classList.remove("flash"), 1_200);
+  }
+
+  /** ── Mermaid：只有出现图时才懒加载（历史会话打开 / 本轮新图） ── */
+  const SCRIPT_NONCE = document.currentScript && document.currentScript.nonce ? document.currentScript.nonce : "";
+  let mermaidPromise = null;
+  let diagramSeq = 0;
+
+  function getMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (mermaidPromise) return mermaidPromise;
+    mermaidPromise = new Promise((resolve, reject) => {
+      const uri = document.body.dataset.mermaidUri;
+      if (!uri) {
+        reject(new Error("缺少 Mermaid 资源"));
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = uri;
+      if (SCRIPT_NONCE) script.nonce = SCRIPT_NONCE;
+      script.onload = () => {
+        try {
+          window.mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            htmlLabels: false,
+            theme: "dark",
+            flowchart: { htmlLabels: false, useMaxWidth: true },
+          });
+          resolve(window.mermaid);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      script.onerror = () => reject(new Error("Mermaid 加载失败"));
+      document.head.appendChild(script);
+    });
+    return mermaidPromise;
+  }
+
+  /** @param {{ id?: string, kind?: string, title?: string, source?: string }} diagram */
+  function renderDiagramCard(diagram) {
+    if (!diagram || typeof diagram.source !== "string" || !diagram.source.trim()) return;
+    const card = document.createElement("div");
+    card.className = "msg diagram-card";
+    const head = document.createElement("div");
+    head.className = "diagram-head";
+    const title = document.createElement("span");
+    title.className = "diagram-title";
+    title.textContent = diagram.title || `${diagram.kind || "diagram"} 图`;
+    const kind = document.createElement("span");
+    kind.className = "diagram-kind";
+    kind.textContent = diagram.kind || "mermaid";
+    head.append(title, kind);
+    const body = document.createElement("div");
+    body.className = "diagram-body";
+    body.textContent = "正在加载渲染器…";
+    card.append(head, body);
+    el.messages.appendChild(card);
+    el.messages.scrollTop = el.messages.scrollHeight;
+
+    const seq = ++diagramSeq;
+    getMermaid()
+      .then((mermaid) => mermaid.render(`bee-diagram-${seq}`, diagram.source))
+      .then((result) => {
+        if (!card.isConnected) return;
+        body.textContent = "";
+        body.innerHTML = result && result.svg ? result.svg : "";
+      })
+      .catch((err) => {
+        if (!card.isConnected) return;
+        body.textContent = "";
+        const note = document.createElement("div");
+        note.className = "diagram-error";
+        note.textContent = "渲染失败：" + (err instanceof Error ? err.message : String(err));
+        const pre = document.createElement("pre");
+        pre.className = "diagram-source";
+        pre.textContent = diagram.source;
+        body.append(note, pre);
+      });
   }
 
   /** 思考内容：按"第几次模型调用"分段显示（只展示，不进上下文，但会随消息落盘） */
@@ -630,7 +709,8 @@
         el.messages.textContent = "";
         for (const item of next.messages || []) {
           if (item.reasoning) appendPersistedReasoning(item.reasoning);
-          addMessage(item.role, item.text, undefined, item.id);
+          if (item.text) addMessage(item.role, item.text, undefined, item.id);
+          for (const diagram of item.diagrams || []) renderDiagramCard(diagram);
         }
         el.trajectoryList.textContent = "";
         trajectoryItems = [];
@@ -670,7 +750,8 @@
         }
         if (message.role === "user") clearStreaming();
         if (message.reasoning) appendPersistedReasoning(message.reasoning);
-        addMessage(message.role, message.text, undefined, message.id);
+        if (message.text) addMessage(message.role, message.text, undefined, message.id);
+        for (const diagram of message.diagrams || []) renderDiagramCard(diagram);
         if (message.role === "system") announce("系统消息：" + message.text);
         break;
       }
@@ -702,6 +783,10 @@
 
       case "reads": {
         renderRead(/** @type {{ path?: unknown, startLine?: unknown, endLine?: unknown }} */ (msg.item));
+        break;
+      }
+      case "diagram": {
+        renderDiagramCard(/** @type {{ id?: string, kind?: string, title?: string, source?: string }} */ (msg.diagram));
         break;
       }
       case "reasoning": {

@@ -146,7 +146,8 @@
         "command": "beeCode.subagent.clearKey",
         "title": "清除子代理 API Key",
         "category": "Bee Code"
-      },      {
+      },
+      {
         "command": "beeCode.docker.redetect",
         "title": "重新检测 Docker 沙箱",
         "category": "Bee Code"
@@ -303,7 +304,11 @@
           "type": "string",
           "scope": "window",
           "order": 7,
-          "enum": ["auto", "always", "never"],
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
           "enumDescriptions": [
             "默认不回传；服务端报错要求 reasoning_content 时自动补上",
             "总是把思考内容随 assistant 消息回传",
@@ -329,8 +334,16 @@
           "type": "string",
           "scope": "window",
           "order": 5,
-          "enum": ["auto", "on", "off"],
-          "enumDescriptions": ["先带图尝试，被拒后自动降级并记住", "强制当作视觉模型", "强制当作纯文本模型"],
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "enumDescriptions": [
+            "先带图尝试，被拒后自动降级并记住",
+            "强制当作视觉模型",
+            "强制当作纯文本模型"
+          ],
           "default": "auto",
           "markdownDescription": "模型能否接收图片。`auto` = 先带图尝试；若服务端明确拒绝图片，自动改为文字描述并记住（不靠模型名枚举）。"
         },
@@ -343,7 +356,13 @@
           "type": "string",
           "scope": "window",
           "order": 20,
-          "enum": ["plan", "manual", "acceptEdits", "auto", "bypass"],
+          "enum": [
+            "plan",
+            "manual",
+            "acceptEdits",
+            "auto",
+            "bypass"
+          ],
           "enumDescriptions": [
             "只读：不允许改文件、不允许执行命令",
             "手动：写文件与执行命令都要确认（默认）",
@@ -358,7 +377,9 @@
           "type": "array",
           "scope": "window",
           "order": 21,
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "markdownDescription": "允许规则，例如 `Read(src/**)`、`Run(npm test *)`。优先级：deny > ask > allow。"
         },
@@ -366,7 +387,9 @@
           "type": "array",
           "scope": "window",
           "order": 22,
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "markdownDescription": "必须确认的规则，例如 `Edit(.github/**)`。"
         },
@@ -374,7 +397,9 @@
           "type": "array",
           "scope": "window",
           "order": 23,
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "markdownDescription": "禁止规则，例如 `Run(git push *)`、`Edit(.env*)`。**deny 永远优先**，allow 不能挖例外。"
         },
@@ -382,8 +407,16 @@
           "type": "string",
           "scope": "window",
           "order": 24,
-          "enum": ["off", "docker", "auto"],
-          "enumDescriptions": ["直接在宿主执行（仅策略约束）", "强制在 docker 容器内执行", "有 docker 就用，没有则直连"],
+          "enum": [
+            "off",
+            "docker",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "直接在宿主执行（仅策略约束）",
+            "强制在 docker 容器内执行",
+            "有 docker 就用，没有则直连"
+          ],
           "default": "off",
           "markdownDescription": "命令执行的隔离级别。docker 模式会以 `--network none --read-only` 运行，见文档 §12.4。"
         },
@@ -407,7 +440,8 @@
           "order": 26,
           "default": true,
           "markdownDescription": "是否要求工作区被显式信任（不受信任时禁写、禁命令）。"
-        },        "beeCode.attachments.maxCount": {
+        },
+        "beeCode.attachments.maxCount": {
           "type": "number",
           "scope": "window",
           "order": 48,
@@ -507,11 +541,20 @@
           "type": "string",
           "scope": "window",
           "order": 35,
-          "enum": ["auto", "on", "off"],
-          "enumDescriptions": ["先带图尝试，被拒后自动降级并记住", "强制当作视觉模型", "强制当作纯文本模型"],
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "enumDescriptions": [
+            "先带图尝试，被拒后自动降级并记住",
+            "强制当作视觉模型",
+            "强制当作纯文本模型"
+          ],
           "default": "auto",
           "markdownDescription": "子代理模型能否接收图片。"
-        },        "beeCode.review.granularity": {
+        },
+        "beeCode.review.granularity": {
           "type": "string",
           "enum": [
             "function",
@@ -585,6 +628,7 @@
     "@types/vscode": "1.90.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.24.0",
+    "mermaid": "^12.2.0",
     "typescript": "6.0.3"
   }
 }
