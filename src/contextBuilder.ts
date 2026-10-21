@@ -120,8 +120,17 @@ export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
   const lines: string[] = [`[早前对话摘要 · ${messages.length} 条消息]`];
   if (asks.length > 0) lines.push(`用户先后要求：${asks.slice(-6).join("；")}`);
   if (files.size > 0) lines.push(`涉及文件：${[...files].join(", ")}`);
-  const diagrams = messages.reduce((n, m) => n + (m.diagrams?.length ?? 0), 0);
-  if (diagrams > 0) lines.push(`本轮生成图示：${diagrams} 张`);
+  const diagramTitles = new Set<string>();
+  for (const message of messages) {
+    for (const diagram of message.diagrams ?? []) {
+      if (diagramTitles.size >= 5) break;
+      const label = (diagram.title || diagram.kind || "mermaid").trim();
+      if (label) diagramTitles.add(label);
+    }
+  }
+  if (diagramTitles.size > 0) {
+    lines.push(`涉及图示：${[...diagramTitles].join("、")}`);
+  }
   if (errors.length > 0) lines.push(`出现过的问题：${errors.join("；")}`);
 
   return clip(lines.join("\n"), maxChars);

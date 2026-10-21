@@ -1123,6 +1123,11 @@ def _digest(result: dict[str, Any]) -> str:
 
 
 def _brief_args(args: dict[str, Any]) -> str:
+    kind = args.get("kind")
+    if isinstance(kind, str) and kind in ("flowchart", "sequence", "class", "state", "er"):
+        title = str(args.get("title") or "").strip()
+        text = f"{kind}: {title}" if title else kind
+        return text if len(text) <= 60 else text[:57] + "..."
     for key in ("path", "query", "command", "glob"):
         value = args.get(key)
         if isinstance(value, str) and value:
