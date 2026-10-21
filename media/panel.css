@@ -700,3 +700,10 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   font-size: 0.74em;
   margin: -2px 0 6px 0;
 }
+
+.trace-usage {
+  text-align: right;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  padding: 2px 0;
+}

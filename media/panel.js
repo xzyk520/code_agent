@@ -391,6 +391,12 @@
       error.className = "trace-error";
       error.textContent = `错误：${turn.error}`;
       body.appendChild(error);
+      if (usage) {
+        const usageNode = document.createElement("div");
+        usageNode.className = "trace-usage";
+        usageNode.textContent = usage;
+        body.appendChild(usageNode);
+      }
     }
     card.append(summary, body);
     el.messages.appendChild(card);
