@@ -316,6 +316,7 @@
   }
 
   /** 一轮的轨迹卡片：默认折叠；外层摘要 + 内层步骤 + 完整内容三层 */
+  /** @param {{ inputTokens?: number, outputTokens?: number, elapsedMs?: number }} turn */
   function formatUsage(turn) {
     const tokens = (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0);
     const seconds = (turn.elapsedMs ?? 0) / 1000;
@@ -325,6 +326,7 @@
     return parts.join(" · ");
   }
 
+  /** @param {any} step */
   function traceStepNode(step) {
     const details = document.createElement("details");
     details.className = "trace-step";
@@ -368,6 +370,7 @@
     return details;
   }
 
+  /** @param {any} turn */
   function renderTraceCard(turn) {
     if (!turn) return;
     const card = document.createElement("details");
@@ -405,11 +408,14 @@
 
   /** ── Mermaid：只有出现图时才懒加载（历史会话打开 / 本轮新图） ── */
   const SCRIPT_NONCE = document.currentScript && document.currentScript.nonce ? document.currentScript.nonce : "";
+  /** @type {any} */
+  const win = window;
+  /** @type {Promise<any> | null} */
   let mermaidPromise = null;
   let diagramSeq = 0;
 
   function getMermaid() {
-    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (win.mermaid) return Promise.resolve(win.mermaid);
     if (mermaidPromise) return mermaidPromise;
     mermaidPromise = new Promise((resolve, reject) => {
       const uri = document.body.dataset.mermaidUri;
@@ -422,14 +428,14 @@
       if (SCRIPT_NONCE) script.nonce = SCRIPT_NONCE;
       script.onload = () => {
         try {
-          window.mermaid.initialize({
+          win.mermaid.initialize({
             startOnLoad: false,
             securityLevel: "strict",
             htmlLabels: false,
             theme: "dark",
             flowchart: { htmlLabels: false, useMaxWidth: true },
           });
-          resolve(window.mermaid);
+          resolve(win.mermaid);
         } catch (err) {
           reject(err);
         }
@@ -462,14 +468,15 @@
     el.messages.scrollTop = el.messages.scrollHeight;
 
     const seq = ++diagramSeq;
+    const source = diagram.source;
     getMermaid()
-      .then((mermaid) => mermaid.render(`bee-diagram-${seq}`, diagram.source))
-      .then((result) => {
+      .then((/** @type {any} */ mermaid) => mermaid.render(`bee-diagram-${seq}`, source))
+      .then((/** @type {any} */ result) => {
         if (!card.isConnected) return;
         body.textContent = "";
         body.innerHTML = result && result.svg ? result.svg : "";
       })
-      .catch((err) => {
+      .catch((/** @type {any} */ err) => {
         if (!card.isConnected) return;
         body.textContent = "";
         const note = document.createElement("div");
@@ -477,7 +484,7 @@
         note.textContent = "渲染失败：" + (err instanceof Error ? err.message : String(err));
         const pre = document.createElement("pre");
         pre.className = "diagram-source";
-        pre.textContent = diagram.source;
+        pre.textContent = source;
         body.append(note, pre);
       });
   }

@@ -31,6 +31,7 @@ export interface CommandDeps {
   testModel(): Promise<void>;
   /** 配置子代理（端点/模型/密钥，留空 = 沿用主代理） */
   configureSubagent(): Promise<void>;
+  configureSummary(): Promise<void>;
   /** 测试子代理端点连通性 */
   testSubagent(): Promise<void>;
   /** 清除子代理密钥 */
@@ -106,6 +107,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.dev.crashMock", () => deps.crashMock());
   register("beeCode.model.test", () => deps.testModel());
   register("beeCode.subagent.configure", () => deps.configureSubagent());
+  register("beeCode.summary.configure", () => deps.configureSummary());
   register("beeCode.subagent.test", () => deps.testSubagent());
   register("beeCode.subagent.clearKey", () => deps.clearSubagentKey());
   register("beeCode.workspace.trust", () => deps.toggleTrust());

@@ -42,6 +42,7 @@ npm run typecheck      # tsc --noEmit + 面板侧 checkJs，必须单独跑（es
 
 1. 用 VS Code 打开本仓库，按 **F5** → 新开一个「扩展开发宿主」窗口；
 2. 在新窗口里运行命令 **`Bee Code: 配置模型`**，依次填入 `base_url` / `model` / `api_key`（密钥写入 `SecretStorage`，不进 `settings.json`）；
+   摘要模型可单独配置：运行 **`Bee Code: 配置摘要模型`**（留空 = 沿用主模型）；
 3. 侧边栏点 Bee Code 图标打开面板。
 
 ### 只想调壳、不想碰内核？

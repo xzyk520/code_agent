@@ -228,6 +228,7 @@ class Shell {
       newSession: () => this.newSession(),
       testModel: () => this.testModel("main"),
       configureSubagent: () => this.configureSubagent(),
+      configureSummary: () => this.configureSummary(),
       testSubagent: () => this.testModel("subagent"),
       clearSubagentKey: () => this.clearSubagentKey(),
       redetectSandbox: () => this.redetectSandbox(),
@@ -1540,6 +1541,138 @@ class Shell {
         ...(subKey.key ? { subagentApiKey: subKey.key } : {}),
       })
       .catch(() => undefined);
+  }
+
+  /** 配置摘要模型：端点 → 模型 → 密钥 → 测试保存（留空 = 沿用主模型） */
+  private async configureSummary(): Promise<void> {
+    const main = this.config.model;
+    const current = this.config.summary;
+
+    const baseUrl = await vscode.window.showInputBox({
+      title: "Bee Code · 摘要模型 1/4 端点",
+      prompt: main.baseUrl
+        ? `留空 = 沿用主模型（${main.baseUrl}）`
+        : "OpenAI 兼容 base_url；留空 = 沿用主模型",
+      value: current.baseUrl,
+      ignoreFocusOut: true,
+    });
+    if (baseUrl === undefined) return;
+
+    const model = await vscode.window.showInputBox({
+      title: "Bee Code · 摘要模型 2/4 模型",
+      prompt: main.model
+        ? `留空 = 沿用主模型（${main.model}）；建议用便宜/快的模型`
+        : "留空 = 沿用主模型",
+      value: current.model,
+      ignoreFocusOut: true,
+    });
+    if (model === undefined) return;
+
+    const existing = await this.resolveSummaryKey();
+    const keyHint =
+      existing.source === "secret"
+        ? "已存在于凭据库：直接回车保持不变"
+        : existing.source === "env"
+          ? `当前使用环境变量 ${SUMMARY_API_KEY_ENV}：直接回车保持不变`
+          : existing.source === "main"
+            ? "留空 = 沿用主模型密钥"
+            : "留空则回退到主模型密钥";
+    const apiKey = await vscode.window.showInputBox({
+      title: "Bee Code · 摘要模型 3/4 API Key",
+      prompt: keyHint,
+      password: true,
+      ignoreFocusOut: true,
+      placeHolder: existing.source === "none" ? "留空 = 沿用主模型密钥" : "（回车保持不变）",
+      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? "看起来不像有效密钥" : undefined),
+    });
+    if (apiKey === undefined) return;
+
+    const effectiveBase = baseUrl.trim() || main.baseUrl;
+    const effectiveModel = model.trim() || main.model;
+    const testKey = apiKey.trim().length > 0 ? apiKey.trim() : existing.key;
+    const probe = await this.probeModels(effectiveBase, effectiveModel, testKey);
+    if (!probe.ok) {
+      const choice = await vscode.window.showWarningMessage(
+        `摘要模型连接测试失败：${probe.message}\n仍然保存配置吗？`,
+        { modal: true },
+        "仍然保存",
+      );
+      if (choice !== "仍然保存") return;
+    }
+
+    const cfg = vscode.workspace.getConfiguration("beeCode");
+    await cfg.update("summary.baseUrl", baseUrl.trim(), vscode.ConfigurationTarget.Global);
+    await cfg.update("summary.model", model.trim(), vscode.ConfigurationTarget.Global);
+    if (apiKey.trim().length > 0) {
+      await this.context.secrets.store(this.config.summary.apiKeyId, apiKey.trim());
+    }
+
+    this.config = readConfig().config;
+    this.log.info(
+      `摘要模型已配置：${this.config.summary.model || "（沿用主模型）"} @ ${this.config.summary.baseUrl || "（沿用主模型）"}`,
+    );
+    void vscode.window.showInformationMessage(
+      `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`,
+    );
+
+    // 只改密钥时配置监听不会触发，这里主动热更新一次
+    const sub = this.effectiveSubagent();
+    const [mainKey, subKey, summaryKey] = await Promise.all([
+      this.resolveApiKey(),
+      this.resolveSubagentKey(),
+      this.resolveSummaryKey(),
+    ]);
+    await this.core
+      ?.modelReload({
+        modelConfig: this.config.model,
+        ...(mainKey.key ? { apiKey: mainKey.key } : {}),
+        subagentConfig: {
+          enabled: sub.enabled,
+          baseUrl: sub.baseUrl,
+          model: sub.model,
+          maxSteps: sub.maxSteps,
+          supportsVision: sub.supportsVision,
+        },
+        ...(subKey.key ? { subagentApiKey: subKey.key } : {}),
+        summaryConfig: this.config.summary,
+        ...(summaryKey.key ? { summaryApiKey: summaryKey.key } : {}),
+      })
+      .catch(() => undefined);
+  }
+
+  /** GET /models 做连通性/模型自检；不需要真的发一次 chat 请求 */
+  private async probeModels(
+    baseUrl: string,
+    model: string,
+    key: string | undefined,
+  ): Promise<{ ok: boolean; message: string }> {
+    const url = this.modelsUrl(baseUrl);
+    if (!url) return { ok: false, message: "没有配置 base_url" };
+    if (!key) return { ok: false, message: "没有可用的 API Key" };
+    const started = Date.now();
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      const elapsed = Date.now() - started;
+      if (!response.ok) {
+        const body = (await response.text()).slice(0, 160);
+        return { ok: false, message: `HTTP ${response.status}（${elapsed}ms）：${body}` };
+      }
+      const data = (await response.json()) as { data?: Array<{ id?: string }> };
+      const ids = Array.isArray(data.data) ? data.data.map((m) => m.id).filter(Boolean) : [];
+      const hasModel = model ? ids.includes(model) : true;
+      return {
+        ok: hasModel,
+        message: hasModel
+          ? `连接正常（${elapsed}ms，${ids.length} 个模型）`
+          : `连接正常，但模型列表里没有 ${model}`,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, message };
+    }
   }
 
   /** 清除子代理密钥（环境变量与"沿用主代理"不归我们管） */

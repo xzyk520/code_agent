@@ -133,6 +133,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.summary.configure",
+        "title": "配置摘要模型",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.subagent.configure",
         "title": "配置子代理模型",
         "category": "Bee Code"
