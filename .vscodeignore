@@ -4,6 +4,7 @@ src/**
 node_modules/**
 docs/**
 tools/**
+media/icon-variants/**
 tests/**
 scripts/**
 webview/**
