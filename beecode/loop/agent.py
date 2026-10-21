@@ -124,7 +124,7 @@ class AgentLoop:
         self._digested: set[int] = set()
         self._compact_notice_added = False
         self._l3_used = False
-        #: 本轮的当前计划（update_plan 更新；propose_edit 成功时推断进度）
+        #: 本轮的当前计划（只由模型 update_plan 修改；内核不推断完成度）
         self._plan: list[dict[str, str]] | None = None
         #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
         self._replay_reasoning = False
@@ -410,7 +410,6 @@ class AgentLoop:
                     stats.tool_calls += 1
                     if call.name == "propose_edit" and result.get("ok"):
                         stats.proposals += 1
-                        self._advance_plan(session, str(result.get("path") or ""))
                     self._emit_read(session, call, result)
 
                     digest = _digest(result)
@@ -433,9 +432,6 @@ class AgentLoop:
                     stats,
                     f"本轮预算用尽（{budget_hit}）。请不要再调用工具，总结已完成的部分、未完成的部分与建议的下一步。",
                 )
-
-            if not forced_end:
-                self._complete_summary_step(session)
 
             # 提前收工检测：用户要求改代码，但整轮没有产出任何提案
             if wants_edit and stats.proposals == 0 and nudges < self._config.nudge_limit and not forced_end:
@@ -741,15 +737,6 @@ class AgentLoop:
                 result.append((index, step))
         return result
 
-    def _complete_summary_step(self, session: Session) -> None:
-        """本轮正常收尾时，把计划最后一步（总结）标为完成。"""
-        if not self._plan:
-            return
-        last = self._plan[-1]
-        if str(last.get("status") or "pending") != "done":
-            last["status"] = "done"
-            self._notify("ui.plan", {"sessionId": session.id, "steps": self._plan})
-
     def _maybe_nudge(
         self,
         answer: str,
@@ -781,7 +768,9 @@ class AgentLoop:
                     "role": "user",
                     "content": (
                         f"计划里还有未完成的步骤：\n{listing}\n"
-                        "请继续执行（调用工具）把它们做完；如果计划已不适用，用 update_plan 重写。"
+                        "如果你已经完成了这些步骤，请调用 update_plan 把对应步骤标为 done"
+                        "（不要只用文字说“完成”）；如果还没完成，请继续调用工具执行；"
+                        "如果计划已不适用，用 update_plan 重写。"
                         "最后一步（总结）可以留到最后再完成。"
                     ),
                 }
@@ -912,27 +901,6 @@ class AgentLoop:
     def _emit_plan(self, session: Session, steps: list[dict[str, str]]) -> None:
         self._plan = steps
         self._notify("ui.plan", {"sessionId": session.id, "steps": steps})
-
-    def _advance_plan(self, session: Session, path: str) -> None:
-        """propose_edit 成功后推断进度：计划里提到该文件的步骤标记完成。
-
-        只是**推断**，不覆盖模型自己用 update_plan 设定的状态。
-        """
-        if not self._plan or not path:
-            return
-        target = path.replace("\\", "/").lower()
-        base = target.rsplit("/", 1)[-1]
-        changed = False
-        for step in self._plan:
-            if step.get("status") == "done":
-                continue
-            text = str(step.get("text") or "").replace("\\", "/").lower()
-            if target in text or (base and base in text):
-                step["status"] = "done"
-                changed = True
-                break
-        if changed:
-            self._notify("ui.plan", {"sessionId": session.id, "steps": self._plan})
 
     # ───────────────────────── 子代理 ─────────────────────────
 
