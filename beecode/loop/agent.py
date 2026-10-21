@@ -1162,6 +1162,15 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"digest": True, "tool": "unknown", "note": "结果已省略"}
 
+    if data.get("tool") == "diagram" or ("kind" in data and "id" in data and "source" not in data):
+        return {
+            "digest": True,
+            "tool": "diagram",
+            "id": data.get("id"),
+            "kind": data.get("kind"),
+            "title": data.get("title"),
+            "note": "图已渲染；完整源码在助手消息的 diagrams 字段里",
+        }
     if "exitCode" in data:
         return {
             "digest": True,

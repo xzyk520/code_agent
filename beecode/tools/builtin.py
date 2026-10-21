@@ -228,6 +228,7 @@ async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     }
     ctx.diagram(payload)
     return {
+        "tool": "diagram",
         "ok": True,
         "id": payload["id"],
         "kind": kind,
