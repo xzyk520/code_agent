@@ -707,6 +707,7 @@ system_prompt(mode) → loop
 | 计划持久化 | `ui.plan` 写入 `turns.jsonl` 与 `session meta`；重载后面板恢复，下一轮作为 system 注入未完成步骤 |
 | 计划状态 | **只由模型 `update_plan` 修改**；内核不根据 `propose_edit` / 收尾自动推断完成度 |
 | 计划参与收尾 | 模型不再调用工具时，若计划里**非最后一步**仍有 pending/doing，就催一次「计划还有未完成步骤」，并要求它用 `update_plan` 把已完成的步骤标 done（不能只口头说完成）；最后一步规定为总结，可以留到最后；同一轮只催一次，避免死循环 |
+| 计划收尾提示 | 系统提示词与计划模板都明确要求：**收尾前先 `update_plan` 把最后一步（总结）标为 done，再输出总结**；内核不再替模型自动标记 |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
 | 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示；用尽后先自动建**检查点**，再禁用工具要求模型收尾，并跳过"没提案"追问 |

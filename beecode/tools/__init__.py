@@ -153,7 +153,8 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "update_plan",
-            "更新任务计划（大任务先列 3-6 步，之后逐项更新状态）。面板会显示成清单。",
+            "更新任务计划（大任务先列 3-6 步，之后逐项更新状态）。面板会显示成清单。"
+"收尾前务必再把最后一步（总结）标为 done。",
             _obj(
                 {
                     "steps": {
