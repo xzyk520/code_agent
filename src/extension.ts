@@ -11,7 +11,7 @@ import { createFsAdapter } from "./adapters/fsAdapter";
 import { createSearchAdapter } from "./adapters/searchAdapter";
 import { createSymbolsAdapter } from "./adapters/symbolsAdapter";
 import { registerCommands, undeclaredCommands } from "./commands/register";
-import { API_KEY_ENV, SUBAGENT_API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
+import { API_KEY_ENV, SUBAGENT_API_KEY_ENV, SUMMARY_API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi, InboundRequestContext } from "./coreApi";
 import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
@@ -48,6 +48,7 @@ import type {
   RunResult,
   UiDeltaParams,
   DiagramDto,
+  TraceStepDto,
   PlanStep,
   UiIntentParams,
   UiPlanParams,
@@ -112,6 +113,10 @@ class Shell {
   private readonly turnObservations: string[] = [];
   /** 本轮生成的图（挂到 assistant 消息 + turn record） */
   private readonly turnDiagrams: DiagramDto[] = [];
+  /** 本轮轨迹（思考/工具/图），用于用户消息下的折叠卡片 */
+  private readonly turnTrace: TraceStepDto[] = [];
+  /** 本轮错误（chat.send 失败时） */
+  private turnError: string | undefined;
   /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
@@ -258,11 +263,11 @@ class Shell {
         this.log.info(`配置已更新：${describeConfig(this.config)}`);
 
         // 分流：只改模型相关 → 热更新（不重启进程）；其余（core/pythonPath/checkpoint…）→ 重启
-        if ((event.affectsConfiguration("beeCode.model") || event.affectsConfiguration("beeCode.subagent")) && this.core) {
+        if ((event.affectsConfiguration("beeCode.model") || event.affectsConfiguration("beeCode.subagent") || event.affectsConfiguration("beeCode.summary")) && this.core) {
           void this.resolveApiKey().then((resolved) => {
             if (!this.core) return undefined;
             const subagent = this.effectiveSubagent();
-            return this.resolveSubagentKey().then((subagentKey) =>
+            return Promise.all([this.resolveSubagentKey(), this.resolveSummaryKey()]).then(([subagentKey, summaryKey]) =>
               this.core
                 ? this.core
                     .modelReload({
@@ -276,6 +281,8 @@ class Shell {
                         supportsVision: subagent.supportsVision,
                       },
                       ...(subagentKey.key ? { subagentApiKey: subagentKey.key } : {}),
+                      summaryConfig: this.config.summary,
+                      ...(summaryKey.key ? { summaryApiKey: summaryKey.key } : {}),
                     })
                     .catch((err: unknown) =>
                       this.log.warn(`model.reload 失败: ${err instanceof Error ? err.message : String(err)}`),
@@ -346,6 +353,7 @@ class Shell {
     this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
     this.panel.setPlan(this.sessions.meta(this.sessionId)?.plan);
     await this.loadSummary(existing.length);
+    await this.refreshTurns();
     await this.refreshTrajectory();
 
     const meta = this.sessions.meta(this.sessionId);
@@ -459,6 +467,22 @@ class Shell {
       text: merged,
     });
     void vscode.window.showWarningMessage(`Bee Code: ${merged}`);
+  }
+
+  /** 从轮次记录加载每轮轨迹（用户消息下的折叠卡片） */
+  private async refreshTurns(): Promise<void> {
+    const turns = await this.turns.list(this.sessionId);
+    this.panel.setTurns(
+      turns.map((turn) => ({
+        userMessageId: turn.userMessageId,
+        status: turn.status ?? "ok",
+        error: turn.error,
+        inputTokens: turn.inputTokens,
+        outputTokens: turn.outputTokens,
+        elapsedMs: turn.elapsedMs,
+        trace: turn.trace,
+      })),
+    );
   }
 
   /** 从轮次记录重建右侧轨迹（重载/切换会话/回滚后用） */
@@ -595,6 +619,9 @@ class Shell {
       observations: [...this.turnObservations],
       ...(this.turnPlan.length > 0 ? { plan: this.turnPlan } : {}),
       ...(this.turnDiagrams.length > 0 ? { diagrams: [...this.turnDiagrams] } : {}),
+      trace: [...this.turnTrace],
+      status: this.turnError ? "error" : "ok",
+      ...(this.turnError ? { error: this.turnError } : {}),
       ...(this.turnUserMessageId ? { userMessageId: this.turnUserMessageId } : {}),
       ts: Date.now(),
       messageIndex: all.length,
@@ -605,6 +632,8 @@ class Shell {
     this.turnTools.clear();
     this.turnObservations.length = 0;
     this.turnDiagrams.length = 0;
+    this.turnTrace.length = 0;
+    this.turnError = undefined;
     this.turnFiles.clear();
   }
 
@@ -681,6 +710,7 @@ class Shell {
     this.panel.resetReasoning();
     this.panel.setPlan(this.sessions.meta(picked.id)?.plan);
     await this.loadSummary(messages.length);
+    await this.refreshTurns();
     await this.refreshTrajectory();
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
@@ -722,6 +752,7 @@ class Shell {
       const resolvedKey = await this.resolveApiKey();
       const subagent = this.effectiveSubagent();
       const subagentKey = await this.resolveSubagentKey();
+      const summaryKey = await this.resolveSummaryKey();
       const params: InitializeParams = {
         protocolVersion: PROTOCOL_VERSION,
         workspaceRoots: workspaceRoots(),
@@ -742,6 +773,8 @@ class Shell {
           supportsVision: subagent.supportsVision,
         },
         ...(subagentKey.key ? { subagentApiKey: subagentKey.key } : {}),
+        summaryConfig: this.config.summary,
+        ...(summaryKey.key ? { summaryApiKey: summaryKey.key } : {}),
       };
 
       await core.initialize(params);
@@ -862,6 +895,8 @@ class Shell {
     this.turnTools.clear();
     this.turnObservations.length = 0;
     this.turnDiagrams.length = 0;
+    this.turnTrace.length = 0;
+    this.turnError = undefined;
     this.turnFiles.clear();
     this.turnPlan = [];
     this.turn = "thinking";
@@ -888,10 +923,11 @@ class Shell {
       };
       await core.chatSend(params);
     } catch (err) {
+      this.turnError = err instanceof Error ? err.message : String(err);
       this.panel.addMessage({
         id: `e_${Date.now()}`,
         role: "system",
-        text: err instanceof Error ? err.message : String(err),
+        text: this.turnError,
       });
     } finally {
       const assistantText = this.assistantBuffer;
@@ -908,6 +944,7 @@ class Shell {
       await this.appendTurn(userText, assistantText, mode).catch((err: unknown) => {
         this.log.warn(`轮次记录失败：${err instanceof Error ? err.message : String(err)}`);
       });
+      await this.refreshTurns();
       this.setBusy(false);
       this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
       void this.sessions.updateStatus(this.sessionId, this.turn);
@@ -1341,6 +1378,16 @@ class Shell {
    *
    * 绝大多数情况用户只想"子代理用便宜模型，但仍用同一个 key"，所以最后一级回退到主代理是合理的。
    */
+  private async resolveSummaryKey(): Promise<{ key?: string; source: "secret" | "env" | "main" | "none" }> {
+    const fromSecret = await this.context.secrets.get(this.config.summary.apiKeyId);
+    if (fromSecret) return { key: fromSecret, source: "secret" };
+    const fromEnv = process.env[SUMMARY_API_KEY_ENV]?.trim();
+    if (fromEnv) return { key: fromEnv, source: "env" };
+    const main = await this.resolveApiKey();
+    if (main.key) return { key: main.key, source: "main" };
+    return { source: "none" };
+  }
+
   private async resolveSubagentKey(): Promise<{ key?: string; source: "secret" | "env" | "main" | "none" }> {
     const fromSecret = await this.context.secrets.get(this.config.subagent.apiKeyId);
     if (fromSecret) return { key: fromSecret, source: "secret" };
@@ -1707,6 +1754,7 @@ class Shell {
       const lastPlan = lastTurn?.plan;
       this.panel.setPlan(lastPlan);
       this.sessions.updatePlan(this.sessionId, lastPlan);
+      await this.refreshTurns();
       await this.refreshTrajectory();
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
@@ -1803,11 +1851,38 @@ class Shell {
         const tool = params as UiToolParams;
         if (tool.status === "start" && tool.name !== "model" && tool.name !== "guard") {
           this.turnTools.add(tool.name);
+          this.turnTrace.push({
+            type: "tool",
+            name: tool.name,
+            args: typeof tool.args === "string" ? tool.args : tool.args ? JSON.stringify(tool.args) : undefined,
+            status: "start",
+          });
         }
         if (tool.status !== "start" && tool.name !== "model" && tool.name !== "guard") {
           const note = `${tool.name}${tool.summary ? `: ${tool.summary}` : ""}`;
           this.turnObservations.push(note);
           if (this.turnObservations.length > 12) this.turnObservations.shift();
+          const step = [...this.turnTrace]
+            .reverse()
+            .find((item) => item.type === "tool" && item.name === tool.name && item.status === "start");
+          if (step) {
+            step.status = tool.status;
+            step.summary = tool.summary;
+            step.detail = tool.detail;
+            step.durationMs = tool.durationMs;
+          } else {
+            this.turnTrace.push({
+              type: "tool",
+              name: tool.name,
+              status: tool.status,
+              summary: tool.summary,
+              detail: tool.detail,
+              durationMs: tool.durationMs,
+            });
+          }
+        }
+        if (tool.name === "guard" && tool.summary) {
+          this.turnTrace.push({ type: "error", text: tool.summary });
         }
         if (tool.status === "start") {
           this.turn = "tool";
@@ -1834,6 +1909,9 @@ class Shell {
         const p = params as UiReasoningParams;
         const round = typeof p.round === "number" && p.round > 0 ? p.round : 1;
         this.reasoningSegments.set(round, (this.reasoningSegments.get(round) ?? "") + p.text);
+        const existing = this.turnTrace.find((step) => step.type === "reasoning" && step.round === round);
+        if (existing) existing.text = (existing.text ?? "") + p.text;
+        else this.turnTrace.push({ type: "reasoning", round, text: p.text });
         this.panel.reasoningDelta(p.text, round);
         return;
       }
@@ -1876,6 +1954,12 @@ class Shell {
       case "ui.diagram": {
         const p = params as UiDiagramParams;
         this.turnDiagrams.push(p.diagram);
+        this.turnTrace.push({
+          type: "diagram",
+          name: p.diagram.kind,
+          title: p.diagram.title,
+          text: p.diagram.source,
+        });
         this.panel.diagramEvent(p);
         return;
       }

@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 31;
+export const PROTOCOL_VERSION = 32;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -456,6 +456,10 @@ export interface InitializeParams {
   subagentConfig?: SubagentConfigDto;
   /** 子代理的密钥（只经 stdin 传递；不填则沿用主代理密钥） */
   subagentApiKey?: string;
+  /** 摘要模型（空 = 沿用主模型） */
+  summaryConfig?: ModelConfigDto;
+  /** 摘要模型密钥（只经 stdin；不填则沿用主密钥） */
+  summaryApiKey?: string;
 }
 
 export interface InitializeResult {
@@ -535,12 +539,37 @@ export interface ModelReloadParams {
   apiKey?: string;
   subagentConfig?: SubagentConfigDto;
   subagentApiKey?: string;
+  summaryConfig?: ModelConfigDto;
+  summaryApiKey?: string;
 }
 
 // ────────────────────── 内核 → 壳 通知 ──────────────────────
 
 export interface UiDeltaParams { sessionId: string; text: string }
-export interface UiToolParams { sessionId: string; name: string; args?: unknown; status: "start" | "end" | "error"; summary?: string }
+export interface UiToolParams {
+  sessionId: string;
+  name: string;
+  args?: unknown;
+  status: "start" | "end" | "error";
+  summary?: string;
+  /** 工具结果的截断文本（用于历史轨迹） */
+  detail?: string;
+  durationMs?: number;
+}
+
+/** 一轮的轨迹步骤（思考 / 工具 / 图 / 错误） */
+export interface TraceStepDto {
+  type: "reasoning" | "tool" | "diagram" | "plan" | "error";
+  round?: number;
+  name?: string;
+  args?: string;
+  status?: "start" | "end" | "error";
+  summary?: string;
+  detail?: string;
+  durationMs?: number;
+  text?: string;
+  title?: string;
+}
 /** 子代理的进度（面板里渲染成可折叠卡片） */
 export interface UiSubagentParams {
   sessionId: string;

@@ -1091,14 +1091,16 @@ L3 当前轮附件 / 检索结果（内核自己拼）           单独预算，
 1. **机械裁剪**（`src/contextBuilder.ts`，纯函数）：切出"最近 8 条"，其余折叠；
    token 估算 CJK≈1/字、ASCII≈1/4；超预算先截摘要再从最旧的逐字消息丢。
 2. **模型摘要**（`src/turnStore.ts` + 内核 `context.summarize`）：把被折叠的轮次
-   交给主模型，按意图逐条总结成一句话。
+   交给**指定的摘要模型**（`summary.model` / `summary.baseUrl`）；未配置时沿用主模型，
+   配置了但调用失败时自动回退主模型。
 
 模型摘要的输入/输出：
 
 ```jsonc
 // 输入（壳侧持久化的轮次记录）
 { "turns": [
-  { "intent": "修复配置崩溃", "assistant": "…", "tools": ["read_file","propose_edit"], "files": ["src/config.ts"] }
+  { "intent": "修复配置崩溃", "assistant": "…", "tools": ["read_file","propose_edit"],
+    "files": ["src/config.ts"], "diagrams": [{"kind":"flowchart","title":"调用链","source":"…"}] }
 ]}
 
 // 输出（结构化 schema 约束）
@@ -1500,7 +1502,28 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - CSP：`script-src` 仍是 nonce；`style-src` 额外允许 `'unsafe-inline'`，因为 Mermaid
   输出依赖内联 `style` 属性。Mermaid 本身跑在 strict 模式，模型源码不会直接变成 HTML。
 
-### 11.7 右侧轨迹与任务成本（已实现）
+### 11.7 单轮轨迹（用户消息下的折叠卡片）
+
+每轮结束（成功或失败）后，用户消息下面会出现一个默认折叠的条：
+
+```
+▸ 任务已完成 · 12.3k tok · 8.4s
+```
+
+展开后是这一轮的步骤时间线，每一步也是折叠的：
+
+- **思考 · 第 N 次**：先显示 120 字摘要；展开后是 800 字预览；再点「查看完整内容」进入独立滚动的 `<pre>`；
+- **工具 · read_file · end**：参数/结果摘要；同样支持展开完整内容；
+- **图 · <标题>**：Mermaid 图卡片（与正文图共用渲染器）；
+- **错误**：整轮失败时显示错误信息。
+
+数据来自 `TurnRecord.trace`（`TraceStepDto[]`）+ `status/error`，随 `turns.jsonl` 持久化；
+重载/切换会话后按 `userMessageId` 重新挂到用户消息下。最终回答下方的
+`msg-usage` 显示本轮 token/耗时；失败时最终回答被错误块替代。
+
+所有滚动容器相互独立：轨迹卡片、步骤预览、完整内容各自 `overflow:auto`。
+
+### 11.8 右侧轨迹与任务成本（已实现）
 
 面板右侧是一列**会话轨迹**：每一轮一条，显示意图分析给出的 `intent` 与模式图标。
 点击任意一条会平滑滚动到对应的用户消息并短暂高亮——长会话不必再翻历史。
@@ -1514,7 +1537,7 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 - 轨迹顶部有搜索框：按意图文本过滤（大小写无关），长会话里可以只看"重构"相关；
 - 三种模式用不同颜色区分：Chat 蓝、Builder 绿、Debugger 红（圆点与左侧色条同步）。
 
-### 11.8 子代理的可视化（已实现）
+### 11.9 子代理的可视化（已实现）
 
 
 子代理的过程不推流（避免把主对话刷满），而是在面板里渲染成**一张可折叠卡片**：
@@ -1717,6 +1740,9 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | 设置 | 默认 | 说明 |
 | --- | --- | --- |
 | `beeCode.subagent.enabled` | `true` | 关闭后主代理没有 `spawn_subagent` 工具 |
+| `beeCode.summary.model` | 空 = 沿用主模型 | 历史摘要专用；建议填便宜/快的模型 |
+| `beeCode.summary.baseUrl` | 空 = 沿用主模型 | machine 作用域 |
+| `beeCode.summary.apiKeyId` | `beeCode.summaryApiKey` | 对应 `BEE_CODE_SUMMARY_API_KEY`；没有则用主密钥 |
 | `beeCode.subagent.baseUrl` | 空 = 沿用主代理 | machine 作用域（工作区不能覆盖） |
 | `beeCode.subagent.model` | 空 = 沿用主代理 | 建议填便宜/快的模型 |
 | `beeCode.subagent.apiKeyId` | `beeCode.apiKey.subagent` | SecretStorage 键名 |

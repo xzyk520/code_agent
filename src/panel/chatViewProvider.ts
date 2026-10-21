@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { DiagramDto, Mode, PlanStep, ProposalDto, UiDiagramParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
+import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -61,6 +61,16 @@ export interface PanelHandlers {
   onAttachmentNotice(message: string): void;
 }
 
+export interface TurnView {
+  userMessageId?: string;
+  status: "ok" | "error";
+  error?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  elapsedMs?: number;
+  trace?: TraceStepDto[];
+}
+
 export interface PanelState {
   mode: Mode;
   busy: boolean;
@@ -68,6 +78,7 @@ export interface PanelState {
   messages: ChatMessageView[];
   attachments: AttachedContext[];
   plan?: PlanStep[];
+  turns?: TurnView[];
   hint?: string;
 }
 
@@ -129,6 +140,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** 重载后恢复聊天记录（不改状态机，只回填视图） */
+  /** 设置每轮轨迹（用户消息下的折叠卡片用） */
+  setTurns(turns: TurnView[]): void {
+    this.state.turns = turns;
+  }
+
   restore(messages: ChatMessageView[], mode?: PanelState["mode"]): void {
     this.state.messages = messages.slice(-MAX_MESSAGES);
     if (mode) this.state.mode = mode;

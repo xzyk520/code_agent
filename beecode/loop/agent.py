@@ -705,7 +705,13 @@ class AgentLoop:
             self._emit_tool(session, call, "error", "参数不合法")
             return {"error": message, "kind": "bad_arguments"}
 
-        self._emit_tool(session, call, "start", _brief_args(args))
+        self._emit_tool(
+            session,
+            call,
+            "start",
+            _brief_args(args),
+            args=_short(json.dumps(args, ensure_ascii=False), 1200),
+        )
         started = asyncio.get_running_loop().time()
         try:
             result = await asyncio.wait_for(
@@ -713,7 +719,14 @@ class AgentLoop:
             )
             elapsed = asyncio.get_running_loop().time() - started
             brief = _brief_args(args)
-            self._emit_tool(session, call, "end", f"{brief + ' · ' if brief else ''}{elapsed:.1f}s")
+            self._emit_tool(
+                session,
+                call,
+                "end",
+                f"{brief + ' · ' if brief else ''}{elapsed:.1f}s",
+                detail=_short(json.dumps(result, ensure_ascii=False, default=str), 3000),
+                duration_ms=int(elapsed * 1000),
+            )
             return result
         except asyncio.TimeoutError:
             message = (
@@ -1036,10 +1049,26 @@ class AgentLoop:
     def _emit(self, method: str, params: dict[str, Any]) -> None:
         self._notify(method, params)
 
-    def _emit_tool(self, session: Session, call: ToolCall, status: str, summary: str | None = None) -> None:
+    def _emit_tool(
+        self,
+        session: Session,
+        call: ToolCall,
+        status: str,
+        summary: str | None = None,
+        *,
+        args: str | None = None,
+        detail: str | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
         params: dict[str, Any] = {"sessionId": session.id, "name": call.name, "status": status}
         if summary:
             params["summary"] = summary
+        if args:
+            params["args"] = args
+        if detail:
+            params["detail"] = detail
+        if duration_ms is not None:
+            params["durationMs"] = duration_ms
         self._emit("ui.tool", params)
 
 

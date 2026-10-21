@@ -500,6 +500,27 @@
           "default": true,
           "markdownDescription": "发送时在编辑器里用虚线框高亮 agent 实际读取的代码范围（5 秒后自动消失）。"
         },
+        "beeCode.summary.model": {
+          "type": "string",
+          "scope": "window",
+          "order": 55,
+          "default": "",
+          "markdownDescription": "历史会话摘要使用的模型；留空则沿用主 agent 的模型。"
+        },
+        "beeCode.summary.baseUrl": {
+          "type": "string",
+          "scope": "machine",
+          "order": 56,
+          "default": "",
+          "markdownDescription": "摘要模型的 base_url；留空则沿用主 agent。"
+        },
+        "beeCode.summary.apiKeyId": {
+          "type": "string",
+          "scope": "machine",
+          "order": 57,
+          "default": "beeCode.summaryApiKey",
+          "markdownDescription": "摘要模型 API Key 在 SecretStorage 里的键名；留空/无密钥时沿用主密钥。"
+        },
         "beeCode.subagent.enabled": {
           "type": "boolean",
           "scope": "window",

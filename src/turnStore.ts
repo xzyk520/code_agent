@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { DiagramDto, Mode, PlanStep } from "./protocol";
+import type { DiagramDto, Mode, PlanStep, TraceStepDto } from "./protocol";
 
 /**
  * 轮次记录：一轮 = 意图分析结果 + 用户输入 + AI 回答 + 用过的工具 + 改动的文件。
@@ -40,6 +40,11 @@ export interface TurnRecord {
   plan?: PlanStep[];
   /** 本轮生成的图（参与摘要） */
   diagrams?: DiagramDto[];
+  /** 本轮轨迹（思考 / 工具 / 图），用于用户消息下的折叠卡片 */
+  trace?: TraceStepDto[];
+  /** 本轮是否正常结束 */
+  status?: "ok" | "error";
+  error?: string;
   /** 本轮用户消息的 id（轨迹跳转用） */
   userMessageId?: string;
   ts: number;

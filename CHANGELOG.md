@@ -7,6 +7,12 @@
 
 ### Added
 
+- **摘要模型可指定**：`beeCode.summary.model/baseUrl/apiKeyId`；未配置沿用主模型，
+  配置后失败自动回退主模型
+- **单轮轨迹卡片（协议 v32）**：用户消息下默认折叠「任务已完成/失败 · 用时 · token」，
+  展开后是思考/工具/图的分步折叠卡片，支持截断预览与独立滚动的完整内容；
+  `TurnRecord.trace/status/error` 持久化，最终回答下显示 token 用量，失败时替换为错误
+
 - **画图能力（Mermaid，懒加载）**：新增 `diagram` 工具；面板按需加载 Mermaid 渲染；
   图作为助手消息的 `diagrams` 持久化，进入轮次记录与摘要；单轮 ≤3 张、源码 ≤8KB，失败回退源码/ASCII
 - **协议 v31**：新增 `DiagramDto` / `ui.diagram` / `ChatMessage.diagrams` / `TurnSummaryInput.diagrams`

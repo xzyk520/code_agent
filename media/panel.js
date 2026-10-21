@@ -44,7 +44,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, trace?: Array<any> }>, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -313,6 +313,88 @@
     void chip.offsetWidth;
     chip.classList.add("flash");
     setTimeout(() => chip.classList.remove("flash"), 1_200);
+  }
+
+  /** 一轮的轨迹卡片：默认折叠；外层摘要 + 内层步骤 + 完整内容三层 */
+  function formatUsage(turn) {
+    const tokens = (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0);
+    const seconds = (turn.elapsedMs ?? 0) / 1000;
+    const parts = [];
+    if (tokens > 0) parts.push(tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`);
+    if (seconds > 0) parts.push(`${seconds.toFixed(1)}s`);
+    return parts.join(" · ");
+  }
+
+  function traceStepNode(step) {
+    const details = document.createElement("details");
+    details.className = "trace-step";
+    const summary = document.createElement("summary");
+    summary.className = "trace-step-title";
+    const body = document.createElement("div");
+    body.className = "trace-step-body";
+
+    const type = step && step.type;
+    const text = typeof step?.text === "string" ? step.text : "";
+    const detail = typeof step?.detail === "string" ? step.detail : "";
+    const args = typeof step?.args === "string" ? step.args : "";
+    const summaryText = typeof step?.summary === "string" ? step.summary : "";
+    const preview = (summaryText || text || detail || args || "").replace(/\s+/g, " ").slice(0, 120);
+    let label = "步骤";
+    if (type === "reasoning") label = `思考 · 第 ${step.round ?? 1} 次`;
+    else if (type === "tool") label = `工具 · ${step.name ?? "?"}${step.status ? ` · ${step.status}` : ""}`;
+    else if (type === "diagram") label = `图 · ${step.title || step.name || "mermaid"}`;
+    else if (type === "error") label = "错误";
+    summary.textContent = `${label}${preview ? ` · ${preview}` : ""}`;
+
+    const short = document.createElement("pre");
+    short.className = "trace-preview";
+    short.textContent = (summaryText || text || detail || args || "（无内容）").slice(0, 800);
+    body.appendChild(short);
+
+    const fullText = [summaryText, args, text, detail].filter(Boolean).join("\n\n");
+    if (fullText.length > 800) {
+      const full = document.createElement("details");
+      full.className = "trace-full";
+      const fullSummary = document.createElement("summary");
+      fullSummary.textContent = "查看完整内容";
+      const pre = document.createElement("pre");
+      pre.className = "trace-full-body";
+      pre.textContent = fullText;
+      full.append(fullSummary, pre);
+      body.appendChild(full);
+    }
+
+    details.append(summary, body);
+    return details;
+  }
+
+  function renderTraceCard(turn) {
+    if (!turn) return;
+    const card = document.createElement("details");
+    card.className = "trace-card" + (turn.status === "error" ? " trace-error-card" : "");
+    const summary = document.createElement("summary");
+    summary.className = "trace-summary";
+    const usage = formatUsage(turn);
+    summary.textContent = `${turn.status === "error" ? "任务失败" : "任务已完成"}${usage ? ` · ${usage}` : ""}`;
+    const body = document.createElement("div");
+    body.className = "trace-body";
+    const steps = Array.isArray(turn.trace) ? turn.trace : [];
+    if (steps.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "trace-empty";
+      empty.textContent = "本轮没有工具调用或思考记录。";
+      body.appendChild(empty);
+    }
+    for (const step of steps) body.appendChild(traceStepNode(step));
+    if (turn.error) {
+      const error = document.createElement("div");
+      error.className = "trace-error";
+      error.textContent = `错误：${turn.error}`;
+      body.appendChild(error);
+    }
+    card.append(summary, body);
+    el.messages.appendChild(card);
+    el.messages.scrollTop = el.messages.scrollHeight;
   }
 
   /** ── Mermaid：只有出现图时才懒加载（历史会话打开 / 本轮新图） ── */
@@ -707,7 +789,39 @@
         const next = /** @type {PanelState} */ (msg.state);
         state = { mode: next.mode, busy: next.busy };
         el.messages.textContent = "";
+        const turnsByUser = new Map();
+        for (const turn of next.turns || []) {
+          if (turn && typeof turn.userMessageId === "string") turnsByUser.set(turn.userMessageId, turn);
+        }
+        let currentTurn = null;
         for (const item of next.messages || []) {
+          if (item.role === "user") {
+            if (item.text) addMessage(item.role, item.text, undefined, item.id);
+            currentTurn = turnsByUser.get(item.id) || null;
+            if (currentTurn && (Array.isArray(currentTurn.trace) || currentTurn.error)) renderTraceCard(currentTurn);
+            continue;
+          }
+          if (item.role === "system" && currentTurn && currentTurn.error && item.text === currentTurn.error) {
+            continue;   // 错误已经在轨迹卡片里展示，避免重复气泡
+          }
+          if (item.role === "assistant" && currentTurn) {
+            if (!currentTurn.error) {
+              if (!(currentTurn.trace || []).some((/** @type {any} */ step) => step && step.type === "reasoning") && item.reasoning) {
+                appendPersistedReasoning(item.reasoning);
+              }
+              if (item.text) addMessage(item.role, item.text, undefined, item.id);
+            }
+            for (const diagram of item.diagrams || []) renderDiagramCard(diagram);
+            const usage = formatUsage(currentTurn);
+            if (usage) {
+              const usageNode = document.createElement("div");
+              usageNode.className = "msg-usage";
+              usageNode.textContent = usage;
+              el.messages.appendChild(usageNode);
+            }
+            currentTurn = null;
+            continue;
+          }
           if (item.reasoning) appendPersistedReasoning(item.reasoning);
           if (item.text) addMessage(item.role, item.text, undefined, item.id);
           for (const diagram of item.diagrams || []) renderDiagramCard(diagram);

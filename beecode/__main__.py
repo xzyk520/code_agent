@@ -54,6 +54,8 @@ _state: dict[str, Any] = {
     "large_task_seconds": 1_800.0,
     "subagent_config": {},
     "subagent_api_key": None,
+    "summary_config": {},
+    "summary_api_key": None,
 }
 
 #: 会话表：sessionId → Session（内存态，不持久化——历史由壳负责）
@@ -96,6 +98,8 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["large_task_seconds"] = float(params.get("largeTaskSeconds") or 1800)
     _state["subagent_config"] = dict(params.get("subagentConfig") or {})
     _state["subagent_api_key"] = params.get("subagentApiKey")
+    _state["summary_config"] = dict(params.get("summaryConfig") or {})
+    _state["summary_api_key"] = params.get("summaryApiKey")
 
     _log(f"initialize: roots={len(_state['workspace_roots'])} model={_state['model_config'].get('model', '')}")
     return {"protocolVersion": PROTOCOL_VERSION, "coreVersion": __version__}
@@ -119,6 +123,10 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
         _state["subagent_config"] = dict(params.get("subagentConfig") or {})
     if params.get("subagentApiKey"):
         _state["subagent_api_key"] = params.get("subagentApiKey")
+    if params.get("summaryConfig") is not None:
+        _state["summary_config"] = dict(params.get("summaryConfig") or {})
+    if params.get("summaryApiKey"):
+        _state["summary_api_key"] = params.get("summaryApiKey")
     # 已存在的会话同步新配置（否则旧会话还在用旧 base_url）
     for session in _sessions.values():
         session.model_config = dict(_state["model_config"])
@@ -224,12 +232,34 @@ async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> 
     """按轮次做模型摘要（壳在压缩上下文时调用）。"""
     turns = list(params.get("turns") or [])
     config = _state.get("model_config") or {}
-    client = OpenAIClient(
-        base_url=str(config.get("baseUrl") or ""),
-        model=str(config.get("model") or ""),
-        api_key=_state.get("api_key"),
-    )
-    result = await summarize_turns(client, turns, log=_log)
+    summary = _state.get("summary_config") or {}
+    summary_model = str(summary.get("model") or "").strip()
+    if summary_model:
+        summary_base = str(summary.get("baseUrl") or config.get("baseUrl") or "")
+        client = OpenAIClient(
+            base_url=summary_base,
+            model=summary_model,
+            api_key=_state.get("summary_api_key") or _state.get("api_key"),
+        )
+        _log(f"context.summarize：使用摘要模型 {summary_model}")
+    else:
+        client = OpenAIClient(
+            base_url=str(config.get("baseUrl") or ""),
+            model=str(config.get("model") or ""),
+            api_key=_state.get("api_key"),
+        )
+    try:
+        result = await summarize_turns(client, turns, log=_log)
+    except ModelError as exc:
+        if not summary_model:
+            raise
+        _log(f"摘要模型失败，回退主模型：{exc}")
+        fallback = OpenAIClient(
+            base_url=str(config.get("baseUrl") or ""),
+            model=str(config.get("model") or ""),
+            api_key=_state.get("api_key"),
+        )
+        result = await summarize_turns(fallback, turns, log=_log)
     _log(f"context.summarize：{len(turns)} 轮 → {len(result.get('pairs') or [])} 条")
     return result
 

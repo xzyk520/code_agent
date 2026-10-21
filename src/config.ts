@@ -21,6 +21,7 @@ import type { ModelConfigDto, Mode } from "./protocol";
 export const API_KEY_ENV = "BEE_CODE_API_KEY";
 /** 子代理密钥的环境变量回退名 */
 export const SUBAGENT_API_KEY_ENV = "BEE_CODE_SUBAGENT_API_KEY";
+export const SUMMARY_API_KEY_ENV = "BEE_CODE_SUMMARY_API_KEY";
 
 export interface ShellConfig {
   coreMode: "python" | "mock";
@@ -44,6 +45,7 @@ export interface ShellConfig {
   checkpointRetention: number;
   permissions: PermissionsConfig;
   subagent: SubagentConfig;
+  summary: SummaryConfig;
   /** 面板初始模式（auto = 自动判断） */
   focus: FocusConfig;
   attachments: AttachmentsConfig;
@@ -76,6 +78,13 @@ export interface SubagentConfig {
   apiKeyId: string;
   maxSteps: number;
   supportsVision: "auto" | "on" | "off";
+}
+
+/** 摘要模型：空 model = 沿用主 agent 的模型 */
+export interface SummaryConfig {
+  baseUrl: string;
+  model: string;
+  apiKeyId: string;
 }
 
 /** 权限相关配置（规则原文由 permissions.ts 解析） */
@@ -148,6 +157,11 @@ export function readConfig(): ConfigReadResult {
       fallbackLines: reader.num("focus.fallbackLines", 30, 5, 200),
       maxLines: reader.num("focus.maxLines", 300, 20, 2_000),
       highlight: reader.bool("focus.highlight", true),
+    },
+    summary: {
+      baseUrl: reader.str("summary.baseUrl", ""),
+      model: reader.str("summary.model", ""),
+      apiKeyId: reader.str("summary.apiKeyId", "beeCode.summaryApiKey"),
     },
     subagent: {
       enabled: reader.bool("subagent.enabled", true),
