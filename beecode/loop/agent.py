@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 import uuid
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
@@ -53,13 +52,6 @@ _SUBAGENT_PREFIX = (
     "只能用只读工具（读文件/搜索/符号/诊断）；不能修改文件，也不能再派生子代理。"
     "回答要求：先给结论，再给证据（`path:line` 引用）；不要复述大段代码；"
     "找不到就明确说找不到，不要编造。"
-)
-
-#: 模型"只说不做"的措辞特征（只在 builder/debugger 模式下用，且只催一次）
-_PROMISE_PATTERN = re.compile(
-    r"(我将|我会|接下来我|接下来会|马上|稍等|正在执行|开始执行|立刻|随后我|"
-    r"Let me|I will|I'll|Now I|Next, I)",
-    re.IGNORECASE,
 )
 
 
@@ -383,7 +375,7 @@ class AgentLoop:
                 if budget_hit:
                     break
                 if not calls:
-                    nudged = self._maybe_nudge(answer, session, effective_mode, nudges)
+                    nudged = self._maybe_nudge(answer, session, nudges)
                     if nudged is not None:
                         nudges += 1
                         messages.append(nudged)
@@ -762,7 +754,6 @@ class AgentLoop:
         self,
         answer: str,
         session: Session,
-        effective_mode: str,
         nudges: int,
     ) -> dict[str, Any] | None:
         """决定是否"催一下"。返回要追加的消息，或 None 表示可以结束。"""
@@ -795,15 +786,6 @@ class AgentLoop:
                     ),
                 }
 
-        if effective_mode != "chat" and _PROMISE_PATTERN.search(answer) and not answer.rstrip().endswith(("？", "?")):
-            self._emit("ui.tool", {
-                "sessionId": session.id, "name": "guard", "status": "error",
-                "summary": "模型只描述计划、未调用工具",
-            })
-            return {
-                "role": "user",
-                "content": "不要只描述计划。请立即调用工具执行；如果任务已经完成，请直接给出最终结论。",
-            }
         return None
 
     async def _finish_max_steps(
