@@ -3,6 +3,7 @@
 src/**
 node_modules/**
 docs/**
+tools/**
 tests/**
 scripts/**
 webview/**

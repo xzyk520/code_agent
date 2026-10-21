@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="abdomen"><polygon points="206,246 306,246 334,304 306,362 256,404 206,362 178,304"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101A2E"/>
+      <stop offset="1" stop-color="#070C16"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD36A"/>
+      <stop offset="0.55" stop-color="#FFB100"/>
+      <stop offset="1" stop-color="#E08A00"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="10" y="10" width="492" height="492" rx="104" fill="none" stroke="#1E2C45" stroke-width="2"/>
+
+  <!-- 翅膀 -->
+  <polygon points="226,180 128,118 106,150 198,214" fill="#4FD1FF" fill-opacity="0.18" stroke="#4FD1FF" stroke-width="9" stroke-linejoin="miter"/>
+  <polygon points="286,180 384,118 406,150 314,214" fill="#4FD1FF" fill-opacity="0.18" stroke="#4FD1FF" stroke-width="9" stroke-linejoin="miter"/>
+  <line x1="150" y1="140" x2="205" y2="190" stroke="#4FD1FF" stroke-width="4" opacity="0.55"/>
+  <line x1="362" y1="140" x2="307" y2="190" stroke="#4FD1FF" stroke-width="4" opacity="0.55"/>
+
+  <!-- 腿 -->
+  <polyline points="196,292 168,318 154,350" fill="none" stroke="#C97F00" stroke-width="9" stroke-linecap="square"/><polyline points="316,292 344,318 358,350" fill="none" stroke="#C97F00" stroke-width="9" stroke-linecap="square"/><polyline points="210,340 188,366 180,392" fill="none" stroke="#C97F00" stroke-width="9" stroke-linecap="square"/><polyline points="302,340 324,366 332,392" fill="none" stroke="#C97F00" stroke-width="9" stroke-linecap="square"/>
+
+  <!-- 腹部 + 条纹 -->
+  <g clip-path="url(#abdomen)">
+    <rect x="170" y="240" width="172" height="170" fill="url(#body)"/>
+    <polygon points="170,274 342,274 342,290 170,290" fill="#0B1220"/><polygon points="170,312 342,312 342,328 170,328" fill="#0B1220"/><polygon points="170,350 342,350 342,364 170,364" fill="#0B1220"/>
+  </g>
+  <polygon points="206,246 306,246 334,304 306,362 256,404 206,362 178,304" fill="none" stroke="#0B1220" stroke-width="6"/>
+
+  <!-- 胸部 / 头部 -->
+  <polygon points="256.0,142.0 299.30127018922195,167.0 299.30127018922195,217.0 256.0,242.0 212.69872981077805,217.0 212.69872981077808,167.0" fill="url(#body)" stroke="#0B1220" stroke-width="6"/>
+  <polygon points="256.0,76.0 281.98076211353316,91.0 281.98076211353316,121.0 256.0,136.0 230.01923788646684,121.0 230.01923788646684,91.0" fill="url(#body)" stroke="#0B1220" stroke-width="6"/>
+
+  <!-- 触角 -->
+  <polyline points="241,85 216,50" fill="none" stroke="#4FD1FF" stroke-width="8" stroke-linecap="square"/><polyline points="271,85 296,50" fill="none" stroke="#4FD1FF" stroke-width="8" stroke-linecap="square"/>
+  <circle cx="216" cy="50" r="7" fill="#4FD1FF"/>
+  <circle cx="296" cy="50" r="7" fill="#4FD1FF"/>
+
+  <!-- 翅尖节点 -->
+  <circle cx="128" cy="118" r="6" fill="#4FD1FF"/>
+  <circle cx="384" cy="118" r="6" fill="#4FD1FF"/>
+
+  <!-- 尾刺 -->
+  <polygon points="240,398 272,398 256,432" fill="#FFB100"/>
+</svg>

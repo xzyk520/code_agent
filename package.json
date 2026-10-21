@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "xzyk520",
   "license": "MIT",
+  "icon": "media/icon-128.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/xzyk520/code_agent.git"

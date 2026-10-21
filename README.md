@@ -1,3 +1,5 @@
+<p align="center"><img src="media/icon-128.png" width="88" height="88" alt="Bee Code 图标"></p>
+
 # Bee Code
 
 > **自带模型的代码智能体 VS Code 扩展。** Chat / Builder / Debugger 三模式，统一 OpenAI 兼容协议，改动先以**虚拟文件提案**逐文件预览，接受才落盘，随时整轮 Restore。
