@@ -724,7 +724,7 @@ class AgentLoop:
                 call,
                 "end",
                 f"{brief + ' · ' if brief else ''}{elapsed:.1f}s",
-                detail=_short(json.dumps(result, ensure_ascii=False, default=str), 3000),
+                detail=_short(json.dumps(result, ensure_ascii=False, default=str), 8000),
                 duration_ms=int(elapsed * 1000),
             )
             return result
