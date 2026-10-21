@@ -41,7 +41,7 @@
 
 
   /** @typedef {"chat" | "builder" | "debugger"} Mode */
-  /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string }} ChatMessage */
+  /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
   /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, hint?: string }} PanelState */
@@ -346,6 +346,23 @@
     el.messages.appendChild(reasoningNode);
   }
 
+  /** 渲染一条"已落盘"的思考块（默认折叠，供回看） */
+  /** @param {string} text */
+  function appendPersistedReasoning(text) {
+    if (!text) return;
+    const details = document.createElement("details");
+    details.className = "msg reasoning";
+    details.open = false;
+    const summary = document.createElement("summary");
+    summary.className = "reasoning-title";
+    summary.textContent = "思考过程";
+    const body = document.createElement("div");
+    body.className = "reasoning-body";
+    body.textContent = text;
+    details.append(summary, body);
+    el.messages.appendChild(details);
+  }
+
   function resetReasoning() {
     reasoningText = "";
     clearReasoningNode();
@@ -418,9 +435,10 @@
   /** 轨迹搜索：按意图文本过滤（大小写无关） */
   function applyTrajectoryFilter() {
     const query = el.trajectoryFilter.value.trim().toLowerCase();
-    for (const button of el.trajectoryList.querySelectorAll(".trajectory-item")) {
-      const intent = button instanceof HTMLElement ? button.dataset.intent || "" : "";
-      button.hidden = query.length > 0 && !intent.includes(query);
+    for (const element of el.trajectoryList.querySelectorAll(".trajectory-item")) {
+      if (!(element instanceof HTMLElement)) continue;
+      const intent = element.dataset.intent || "";
+      element.hidden = query.length > 0 && !intent.includes(query);
     }
   }
 
@@ -595,10 +613,12 @@
         state = { mode: next.mode, busy: next.busy };
         el.messages.textContent = "";
         for (const item of next.messages || []) {
+          if (item.reasoning) appendPersistedReasoning(item.reasoning);
           addMessage(item.role, item.text, undefined, item.id);
         }
         el.trajectoryList.textContent = "";
         trajectoryItems = [];
+        reasoningText = "";
         clearReasoningNode();
         clearStreaming();
         subagents.clear();
@@ -611,7 +631,6 @@
         renderAttachments(next.attachments || []);
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
-        renderReasoning(true);
         break;
       }
       case "status": {
@@ -635,6 +654,7 @@
           break;
         }
         if (message.role === "user") clearStreaming();
+        if (message.reasoning) appendPersistedReasoning(message.reasoning);
         addMessage(message.role, message.text, undefined, message.id);
         if (message.role === "system") announce("系统消息：" + message.text);
         break;

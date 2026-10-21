@@ -9,6 +9,8 @@ export interface StoredMessage {
   role: "user" | "assistant" | "system";
   text: string;
   ts: number;
+  /** 仅用于回看：思考内容不进入模型上下文，也不参与摘要 */
+  reasoning?: string;
 }
 
 export type TurnStatus = "idle" | "thinking" | "tool" | "awaiting-decision";

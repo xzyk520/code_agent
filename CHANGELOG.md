@@ -7,6 +7,9 @@
 
 ### Added
 
+- **思考内容持久化**：随 assistant 消息写入会话 JSONL 的 `reasoning` 字段，
+  轮次结束 / 切换会话 / 重载后仍以折叠块显示；不进入模型上下文，也不参与摘要
+
 - **思考内容抓取（协议 v27）**：
   - 解析 `reasoning_content` / `reasoning` / `thinking`，经 `ui.reasoning` 在面板显示为可折叠「思考过程」（答题自动收起）
   - 思考内容不进上下文、不进摘要、不落盘；跨轮不会出现

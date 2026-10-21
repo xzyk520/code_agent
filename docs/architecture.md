@@ -425,11 +425,13 @@ class ChatMessage(BaseModel):
 | --- | --- |
 | 抓取 | 依次识别上述三个字段，统一成 `ChatDelta.reasoning` |
 | UI | 广播 `ui.reasoning`；面板渲染成本轮复用的「思考过程」折叠块，答题开始时自动收起 |
-| 上下文 | **不写入 messages**；摘要、轮次记录、会话 JSONL 都不含思考内容 |
+| 上下文 | **不写入 messages**，也不参与摘要；但会随 assistant 消息落进会话 JSONL 的 `reasoning` 字段，供回看 |
 | 回传 | 默认**不回传**（`model.reasoningReplay=auto`）；服务端报错要求 `reasoning_content` 时自动补上并重试一次 |
 | 强制策略 | `always` 总是回传；`never` 从不回传（兼容明确禁止回传的模型） |
 
-回传只发生在**同一轮内**的 assistant 工具调用消息上；跨轮没有持久化，所以也不会"复活"旧的思考内容。
+回看：思考内容随 assistant 消息持久化，**轮次结束、切换会话、重载窗口后仍然存在**，
+在面板里显示为默认折叠的「思考过程」块；它不参与模型上下文，所以跨轮不会"复活"进 prompt。
+回传只发生在同一轮内的 assistant 工具调用消息上。
 ### 5.7 错误处理
 
 | 情况 | 策略 |

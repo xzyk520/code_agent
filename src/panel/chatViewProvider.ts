@@ -6,6 +6,8 @@ export interface ChatMessageView {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  /** 回看用的思考内容（不进入模型上下文） */
+  reasoning?: string;
 }
 
 export interface AttachedContext {

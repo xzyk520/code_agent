@@ -111,6 +111,8 @@ class Shell {
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
   private turnUserMessageId: string | undefined;
+  /** 本轮思考内容（流式累积；随 assistant 消息落盘，供回看） */
+  private reasoningBuffer = "";
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
@@ -323,7 +325,7 @@ class Shell {
     if (existing.length === 0) return;
 
     this.panel.restore(
-      existing.map((m) => ({ id: m.id, role: m.role, text: m.text })),
+      existing.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
       this.sessions.meta(this.sessionId)?.mode ?? this.panel.getMode(),
     );
     this.persisted = existing.length;
@@ -366,9 +368,15 @@ class Shell {
   }
 
   /** 追加一条消息到磁盘（用户/助手/系统都走这里） */
-  private remember(role: "user" | "assistant" | "system", text: string): void {
+  private remember(role: "user" | "assistant" | "system", text: string, reasoning?: string): void {
     if (!text.trim()) return;
-    this.sessions.append(this.sessionId, { id: `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, role, text, ts: Date.now() });
+    this.sessions.append(this.sessionId, {
+      id: `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      role,
+      text,
+      ts: Date.now(),
+      ...(reasoning ? { reasoning } : {}),
+    });
   }
 
   /**
@@ -772,6 +780,7 @@ class Shell {
     this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
     this.panel.setCost("");
     this.panel.resetReasoning();
+    this.reasoningBuffer = "";
     this.remember("user", userText);
     this.setBusy(true);
     this.assistantBuffer = "";
@@ -813,7 +822,7 @@ class Shell {
       if (assistantText.trim()) {
         // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
         this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text: assistantText });
-        this.remember("assistant", assistantText);
+        this.remember("assistant", assistantText, this.reasoningBuffer || undefined);
         this.assistantBuffer = "";
       }
       // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
@@ -1595,7 +1604,7 @@ class Shell {
       // 快照只存行号：截断 JSONL 到那一行，消息全文仍然只有一份
       const kept = await this.sessions.truncate(this.sessionId, snapshot.line);
       this.panel.restore(
-        kept.map((m) => ({ id: m.id, role: m.role, text: m.text })),
+        kept.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
         this.sessions.meta(this.sessionId)?.mode,
       );
       this.persisted = kept.length;
@@ -1722,6 +1731,7 @@ class Shell {
       }
       case "ui.reasoning": {
         const p = params as UiReasoningParams;
+        this.reasoningBuffer += p.text;
         this.panel.reasoningDelta(p.text);
         return;
       }
