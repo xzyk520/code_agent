@@ -708,7 +708,7 @@ system_prompt(mode) → loop
 | 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
-| 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示，用尽后**禁用工具**要求模型收尾，并跳过"没提案"追问 |
+| 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示；用尽后先自动建**检查点**，再禁用工具要求模型收尾，并跳过"没提案"追问 |
 
 收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
 
@@ -720,7 +720,7 @@ system_prompt(mode) → loop
 | 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
-| 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示，用尽后**禁用工具**要求模型收尾，并跳过"没提案"追问 |
+| 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示；用尽后先自动建**检查点**，再禁用工具要求模型收尾，并跳过"没提案"追问 |
 
 收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
 

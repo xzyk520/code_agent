@@ -786,6 +786,9 @@ class AgentLoop:
         stats: TurnStats,
         notice: str,
     ) -> str:
+        # 硬截断前先存快照：避免"预算/步数用尽时改了一半"无法回退
+        await self._checkpoint_before_cutoff(session, notice)
+
         self._emit(
             "ui.tool",
             {
@@ -825,6 +828,20 @@ class AgentLoop:
             reasoning = self._reasoning_by_msg.get(id(message))
             if reasoning:
                 message["reasoning_content"] = reasoning
+
+    async def _checkpoint_before_cutoff(self, session: Session, notice: str) -> None:
+        if self._role != "main":
+            return
+        try:
+            checkpoint = await self._shell.checkpoint(label=f"cutoff: {notice[:40]}")
+            if checkpoint:
+                self._log(f"硬截断前快照：{checkpoint[:8]}")
+                self._notify(
+                    "log",
+                    {"level": "warn", "msg": f"已达到本轮上限，已自动创建检查点 {checkpoint[:8]}"},
+                )
+        except Exception as exc:  # noqa: BLE001 - 快照失败不该阻断收尾
+            self._log(f"硬截断前快照失败：{exc}")
 
     def _budget_warning(self, stats: TurnStats, started_at: float) -> str | None:
         """到 80% 预算时提前提醒模型收尾（硬截断在 100%）。"""

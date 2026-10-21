@@ -7,6 +7,9 @@
 
 ### Added
 
+- **硬截断前自动检查点**：预算/步数用尽、强制收尾之前先 `checkpoint.create`，
+  避免「改了一半被截断」无法回退；快照失败只记日志，不阻断收尾
+
 - **轮次成本落盘 + 预算预警**：turn record 记录 `inputTokens/outputTokens/elapsedMs`；
   历史会话列表与右侧轨迹显示每轮/累计成本；预算到 80% 先注入一条「优先收尾」system 提示（硬截断仍在 100%）
 
