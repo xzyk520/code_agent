@@ -706,6 +706,7 @@ system_prompt(mode) → loop
 | 步数放宽 | `scale=large` 时用 `beeCode.agent.largeTaskSteps`（默认 24），普通任务用 `agent.maxSteps` |
 | 计划持久化 | `ui.plan` 写入 `turns.jsonl` 与 `session meta`；重载后面板恢复，下一轮作为 system 注入未完成步骤 |
 | 计划推断 | `propose_edit` 成功时，把计划里提到该文件的步骤标为 done（只是推断，不覆盖模型自己设的状态） |
+| 计划参与收尾 | 模型不再调用工具时，若计划里**非最后一步**仍有 pending/doing，就催一次「计划还有未完成步骤」；最后一步规定为总结，可以留到最后；正常收尾时自动把它标为 done（强制截断不标）；同一轮只催一次，避免死循环 |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
 | 轮预算 | `agent.maxTurnTokens`（默认 200k）+ 墙钟：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；到 **80%** 先注入一条"优先收尾"的 system 提示；用尽后先自动建**检查点**，再禁用工具要求模型收尾，并跳过"没提案"追问 |

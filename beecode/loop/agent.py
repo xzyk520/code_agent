@@ -140,6 +140,8 @@ class AgentLoop:
         self._turn_time_budget = self._config.max_turn_seconds
         #: 80% 预算预警是否已经发过
         self._budget_warned = False
+        #: 本轮是否已经因"计划未完成"催过一次（避免死循环）
+        self._plan_nudged = False
         #: assistant 消息 → 思考内容（按对象 id 记，便于稍后补上 replay 字段）
         self._reasoning_by_msg: dict[int, str] = {}
 
@@ -272,6 +274,7 @@ class AgentLoop:
         self._l3_used = False
         self._reasoning_by_msg.clear()
         self._budget_warned = False
+        self._plan_nudged = False
         replay_setting = str(session.model_config.get("reasoningReplay") or "auto").lower()
         self._replay_reasoning = replay_setting == "always"
         max_steps = self._config.max_steps
@@ -438,6 +441,9 @@ class AgentLoop:
                     stats,
                     f"本轮预算用尽（{budget_hit}）。请不要再调用工具，总结已完成的部分、未完成的部分与建议的下一步。",
                 )
+
+            if not forced_end:
+                self._complete_summary_step(session)
 
             # 提前收工检测：用户要求改代码，但整轮没有产出任何提案
             if wants_edit and stats.proposals == 0 and nudges < self._config.nudge_limit and not forced_end:
@@ -733,6 +739,25 @@ class AgentLoop:
 
     # ───────────────────────── 守卫 ─────────────────────────
 
+    def _unfinished_plan_steps(self) -> list[tuple[int, dict[str, str]]]:
+        """非最后一步里仍 pending/doing 的步骤（最后一步规定为总结）。"""
+        if not self._plan or len(self._plan) <= 1:
+            return []
+        result: list[tuple[int, dict[str, str]]] = []
+        for index, step in enumerate(self._plan[:-1], start=1):
+            if str(step.get("status") or "pending") != "done":
+                result.append((index, step))
+        return result
+
+    def _complete_summary_step(self, session: Session) -> None:
+        """本轮正常收尾时，把计划最后一步（总结）标为完成。"""
+        if not self._plan:
+            return
+        last = self._plan[-1]
+        if str(last.get("status") or "pending") != "done":
+            last["status"] = "done"
+            self._notify("ui.plan", {"sessionId": session.id, "steps": self._plan})
+
     def _maybe_nudge(
         self,
         answer: str,
@@ -750,6 +775,25 @@ class AgentLoop:
                 "summary": "模型返回空响应，要求重试",
             })
             return {"role": "user", "content": "你刚才没有输出任何内容。请继续完成任务；如果缺少信息，请明确问我。"}
+
+        # 计划未完成：非最后一步还有 pending/doing，就不要让它直接收尾
+        if not self._plan_nudged and not answer.rstrip().endswith(("？", "?")):
+            blockers = self._unfinished_plan_steps()
+            if blockers:
+                self._plan_nudged = True
+                self._emit("ui.tool", {
+                    "sessionId": session.id, "name": "guard", "status": "error",
+                    "summary": f"计划还有 {len(blockers)} 步未完成",
+                })
+                listing = "\n".join(f"{index}. [{step.get('status')}] {step.get('text')}" for index, step in blockers)
+                return {
+                    "role": "user",
+                    "content": (
+                        f"计划里还有未完成的步骤：\n{listing}\n"
+                        "请继续执行（调用工具）把它们做完；如果计划已不适用，用 update_plan 重写。"
+                        "最后一步（总结）可以留到最后再完成。"
+                    ),
+                }
 
         if effective_mode != "chat" and _PROMISE_PATTERN.search(answer) and not answer.rstrip().endswith(("？", "?")):
             self._emit("ui.tool", {
