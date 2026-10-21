@@ -138,6 +138,8 @@ class AgentLoop:
         self._replay_reasoning = False
         #: 本轮墙钟预算（按 scale 动态设置）
         self._turn_time_budget = self._config.max_turn_seconds
+        #: 80% 预算预警是否已经发过
+        self._budget_warned = False
         #: assistant 消息 → 思考内容（按对象 id 记，便于稍后补上 replay 字段）
         self._reasoning_by_msg: dict[int, str] = {}
 
@@ -269,6 +271,7 @@ class AgentLoop:
         self._compact_notice_added = False
         self._l3_used = False
         self._reasoning_by_msg.clear()
+        self._budget_warned = False
         replay_setting = str(session.model_config.get("reasoningReplay") or "auto").lower()
         self._replay_reasoning = replay_setting == "always"
         max_steps = self._config.max_steps
@@ -367,6 +370,12 @@ class AgentLoop:
                 stats.steps += 1
                 answer, calls, usage, reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
                 self._emit_usage(session, stats, started_at)
+                warning = self._budget_warning(stats, started_at)
+                if warning and not self._budget_warned:
+                    self._budget_warned = True
+                    messages.append({"role": "system", "content": warning})
+                    self._log(warning)
+                    self._notify("log", {"level": "warn", "msg": warning})
                 budget_hit = self._budget_reason(stats, started_at)
                 if budget_hit:
                     break
@@ -816,6 +825,22 @@ class AgentLoop:
             reasoning = self._reasoning_by_msg.get(id(message))
             if reasoning:
                 message["reasoning_content"] = reasoning
+
+    def _budget_warning(self, stats: TurnStats, started_at: float) -> str | None:
+        """到 80% 预算时提前提醒模型收尾（硬截断在 100%）。"""
+        used = stats.input_tokens + stats.output_tokens
+        if used > self._config.max_turn_tokens * 0.8:
+            return (
+                f"本轮已使用约 {used} token（预算 {self._config.max_turn_tokens} 的 80% 以上）。"
+                "请优先完成当前关键改动并收尾，跳过非必要探索。"
+            )
+        elapsed = asyncio.get_running_loop().time() - started_at
+        if elapsed > self._turn_time_budget * 0.8:
+            return (
+                f"本轮已耗时 {elapsed:.0f}s（预算 {self._turn_time_budget:.0f}s 的 80% 以上）。"
+                "请优先完成当前关键改动并收尾，跳过非必要探索。"
+            )
+        return None
 
     def _budget_reason(self, stats: TurnStats, started_at: float) -> str | None:
         used = stats.input_tokens + stats.output_tokens

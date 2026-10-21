@@ -114,6 +114,8 @@ class Shell {
   private turnUserMessageId: string | undefined;
   /** 本轮意图规模（决定墙钟预算） */
   private turnScale: "small" | "large" = "small";
+  /** 本轮累计消耗（ui.usage 推送） */
+  private turnUsage?: { inputTokens: number; outputTokens: number; elapsedMs: number };
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -457,7 +459,7 @@ class Shell {
   private async refreshTrajectory(): Promise<void> {
     const turns = await this.turns.list(this.sessionId);
     const messages = await this.sessions.open(this.sessionId);
-    const items: Array<{ id: string; mode: Mode; intent: string }> = [];
+    const items: Array<{ id: string; mode: Mode; intent: string; detail?: string }> = [];
     for (const turn of turns) {
       // 回滚等"合成轮"没有用户消息，不进轨迹
       if (!turn.userText || turn.userText.trim().length === 0) continue;
@@ -473,7 +475,8 @@ class Shell {
           }
         }
       }
-      if (id) items.push({ id, mode: turn.mode, intent: turn.intent });
+      const detail = formatTurnCost(turn.inputTokens, turn.outputTokens, turn.elapsedMs);
+      if (id) items.push({ id, mode: turn.mode, intent: turn.intent, ...(detail ? { detail } : {}) });
     }
     this.panel.setTrajectory(items);
   }
@@ -571,6 +574,13 @@ class Shell {
       ...(this.turnIntent?.scale ? { scale: this.turnIntent.scale } : {}),
       ...(typeof this.turnIntent?.needsProposal === "boolean" ? { needsProposal: this.turnIntent.needsProposal } : {}),
       ...(this.turnIntent?.reason ? { reason: this.turnIntent.reason } : {}),
+      ...(this.turnUsage
+        ? {
+            inputTokens: this.turnUsage.inputTokens,
+            outputTokens: this.turnUsage.outputTokens,
+            elapsedMs: this.turnUsage.elapsedMs,
+          }
+        : {}),
       userText: userText.slice(0, 400),
       assistant: assistant.slice(0, 1200),
       tools: [...this.turnTools],
@@ -622,12 +632,21 @@ class Shell {
 
   /** 切换历史会话 */
   private async pickSession(): Promise<void> {
-    const items = this.sessions.list().map((meta) => ({
-      label: meta.title,
-      description: `${new Date(meta.updatedAt).toLocaleString()} · ${meta.messageCount} 条`,
-      detail: meta.id,
-      id: meta.id,
-    }));
+    const metas = this.sessions.list();
+    const items = await Promise.all(
+      metas.map(async (meta) => {
+        const turns = await this.turns.list(meta.id).catch(() => []);
+        const tokens = turns.reduce((sum, turn) => sum + (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0), 0);
+        const elapsed = turns.reduce((sum, turn) => sum + (turn.elapsedMs ?? 0), 0);
+        const cost = formatTurnCost(tokens, 0, elapsed);
+        return {
+          label: meta.title,
+          description: `${new Date(meta.updatedAt).toLocaleString()} · ${meta.messageCount} 条${cost ? ` · ${cost}` : ""}`,
+          detail: meta.id,
+          id: meta.id,
+        };
+      }),
+    );
     if (items.length === 0) {
       void vscode.window.showInformationMessage("Bee Code: 还没有历史会话。");
       return;
@@ -646,7 +665,7 @@ class Shell {
     this.persisted = 0;
     const messages = await this.sessions.open(picked.id);
     this.panel.restore(
-      messages.map((m) => ({ id: m.id, role: m.role, text: m.text })),
+      messages.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}) })),
       this.sessions.meta(picked.id)?.mode ?? this.panel.getMode(),
     );
     this.persisted = messages.length;
@@ -825,6 +844,7 @@ class Shell {
     this.panel.setCost("");
     this.panel.resetReasoning();
     this.turnScale = "small";
+    this.turnUsage = undefined;
     this.reasoningSegments.clear();
     this.remember("user", userText);
     this.setBusy(true);
@@ -1869,6 +1889,11 @@ class Shell {
         const p = params as UiUsageParams;
         const cost = typeof p.costUsd === "number" ? ` · $${p.costUsd.toFixed(4)}` : "";
         this.usage = `${p.inputTokens ?? 0}→${p.outputTokens ?? 0} tok${cost}`;
+        this.turnUsage = {
+          inputTokens: p.inputTokens ?? 0,
+          outputTokens: p.outputTokens ?? 0,
+          elapsedMs: p.elapsedMs ?? 0,
+        };
         const tokens = (p.inputTokens ?? 0) + (p.outputTokens ?? 0);
         const seconds = (p.elapsedMs ?? 0) / 1000;
         const nearTokens = tokens > this.config.maxTurnTokens * 0.8;
@@ -2099,6 +2124,17 @@ function clampAttachments(
   if (truncatedItem) notices.push(`单个附件超过 ${limits.maxCharsPerItem} 字符，已截断。`);
   if (truncatedTotal) notices.push(`附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`);
   return { items: out, notices };
+}
+
+/** 成本展示：12.3k tok · 8.4s；没有数据时返回空串 */
+function formatTurnCost(inputTokens?: number, outputTokens?: number, elapsedMs?: number): string {
+  const tokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+  const seconds = (elapsedMs ?? 0) / 1000;
+  if (tokens === 0 && seconds === 0) return "";
+  const parts: string[] = [];
+  if (tokens > 0) parts.push(tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`);
+  if (seconds > 0) parts.push(`${seconds.toFixed(1)}s`);
+  return parts.join(" · ");
 }
 
 /** 未完成的计划（全部 done 就没必要再带给模型） */

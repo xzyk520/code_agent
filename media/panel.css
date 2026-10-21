@@ -554,3 +554,15 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   font-size: 0.84em;
   opacity: 0.9;
 }
+
+.trajectory-item {
+  flex-wrap: wrap;
+}
+
+.trajectory-cost {
+  flex-basis: 100%;
+  padding-left: 14px;
+  font-size: 0.9em;
+  opacity: 0.72;
+  white-space: nowrap;
+}

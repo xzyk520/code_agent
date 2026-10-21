@@ -22,6 +22,10 @@ export interface TurnRecord {
   needsProposal?: boolean;
   /** 意图判定的理由 */
   reason?: string;
+  /** 本轮消耗（累计） */
+  inputTokens?: number;
+  outputTokens?: number;
+  elapsedMs?: number;
   /** 用户原话（截断） */
   userText: string;
   /** AI 这一轮的回答（截断） */

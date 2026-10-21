@@ -390,7 +390,7 @@
   /** @type {Array<{ id: string, mode: string, intent: string }>} */
   let trajectoryItems = [];
 
-  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown }} item */
+  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }} item */
   function appendTrajectoryButton(item) {
     const id = typeof item.id === "string" ? item.id : "";
     if (!id) return;
@@ -410,6 +410,14 @@
     label.className = "trajectory-label";
     label.textContent = intent || "（未记录意图）";
     button.append(dot, label);
+    const detail = typeof item.detail === "string" ? item.detail : "";
+    if (detail) {
+      const cost = document.createElement("span");
+      cost.className = "trajectory-cost";
+      cost.textContent = detail;
+      button.append(cost);
+      button.title = `${intent}\n${detail}`;
+    }
     button.addEventListener("click", () => {
       const node = Array.from(el.messages.querySelectorAll("[data-message-id]")).find(
         (candidate) => /** @type {HTMLElement} */ (candidate).dataset.messageId === id,
@@ -424,7 +432,7 @@
     el.trajectoryList.appendChild(button);
   }
 
-  /** @param {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} items */
+  /** @param {Array<{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }>} items */
   function renderTrajectory(items) {
     trajectoryItems = [];
     el.trajectoryList.textContent = "";
@@ -452,7 +460,7 @@
 
   el.trajectoryFilter.addEventListener("input", applyTrajectoryFilter);
 
-  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown }} item */
+  /** @param {{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }} item */
   function addTrajectoryItem(item) {
     const id = typeof item.id === "string" ? item.id : "";
     if (!id || trajectoryItems.some((existing) => existing.id === id)) return;
@@ -709,12 +717,12 @@
         break;
       }
       case "trajectory": {
-        renderTrajectory(/** @type {Array<{ id?: unknown, mode?: unknown, intent?: unknown }>} */ (msg.items) || []);
+        renderTrajectory(/** @type {Array<{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }>} */ (msg.items) || []);
         applyTrajectoryFilter();
         break;
       }
       case "trajectoryItem": {
-        addTrajectoryItem(/** @type {{ id?: unknown, mode?: unknown, intent?: unknown }} */ (msg.item));
+        addTrajectoryItem(/** @type {{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }} */ (msg.item));
         break;
       }
       case "plan": {

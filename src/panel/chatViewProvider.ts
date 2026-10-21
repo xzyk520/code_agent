@@ -201,11 +201,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** 会话轨迹：按意图列出每一轮，点击跳转到对应消息 */
-  setTrajectory(items: Array<{ id: string; mode: Mode; intent: string }>): void {
+  setTrajectory(items: Array<{ id: string; mode: Mode; intent: string; detail?: string }>): void {
     this.post({ type: "trajectory", items });
   }
 
-  addTrajectoryItem(item: { id: string; mode: Mode; intent: string }): void {
+  addTrajectoryItem(item: { id: string; mode: Mode; intent: string; detail?: string }): void {
     this.post({ type: "trajectoryItem", item });
   }
 
