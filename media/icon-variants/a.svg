@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs><clipPath id="body-a"><polygon points="256,84 292,104 292,148 334,172 334,286 300,344 256,392 212,344 178,286 178,172 220,148 220,104"/></clipPath></defs>
+  <rect width="512" height="512" rx="112" fill="#0B1220"/>
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#1E2C45" stroke-width="2"/>
+  <polygon points="232,158 178,120 140,88 126,106 146,138 206,186" fill="#1FA9D9"/><polygon points="280,158 334,120 372,88 386,106 366,138 306,186" fill="#1FA9D9"/>
+  <g clip-path="url(#body-a)"><polygon points="256,84 292,104 292,148 334,172 334,286 300,344 256,392 212,344 178,286 178,172 220,148 220,104" fill="#FFB100"/><rect x="218" y="146" width="76" height="10" fill="#0B1220"/><rect x="0" y="214" width="512" height="14" fill="#0B1220"/><rect x="0" y="258" width="512" height="14" fill="#0B1220"/><rect x="0" y="302" width="512" height="14" fill="#0B1220"/></g>
+  <line x1="240" y1="96" x2="218" y2="58" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="218" cy="58" r="6" fill="#4FD1FF"/><line x1="272" y1="96" x2="294" y2="58" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="294" cy="58" r="6" fill="#4FD1FF"/>
+</svg>
