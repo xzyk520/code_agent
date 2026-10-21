@@ -55,12 +55,6 @@ _SUBAGENT_PREFIX = (
     "找不到就明确说找不到，不要编造。"
 )
 
-#: 连续追问的措辞：命中就沿用上一轮意图，不再调分类器
-_CONTINUE_PATTERN = re.compile(
-    r"^(继续|接着|继续吧|继续上次|接着做|好|好的|可以|行|ok|okay|go on|continue|next)[\s。.!！?？]*$",
-    re.IGNORECASE,
-)
-
 #: 模型"只说不做"的措辞特征（只在 builder/debugger 模式下用，且只催一次）
 _PROMISE_PATTERN = re.compile(
     r"(我将|我会|接下来我|接下来会|马上|稍等|正在执行|开始执行|立刻|随后我|"
@@ -173,37 +167,39 @@ class AgentLoop:
         effective_mode = str(session.mode)
         reused = False
         if system_override is None:
-            if (
-                not attachments
-                and session.last_intent
-                and _CONTINUE_PATTERN.match(text.strip())
-            ):
-                # 连续追问：直接沿用上一轮意图，省一次分类调用
-                saved = session.last_intent
+            previous = session.last_intent
+            try:
+                intent = await classify(client, text, history, log=self._log, previous=previous)
+            except Exception as exc:  # noqa: BLE001 - 分类器不该拖垮整轮
+                self._log(f"意图识别异常：{exc}")
+                intent = Intent("chat", "small", False, f"意图识别异常，按 Chat 处理（{exc}）", "", degraded=True)
+
+            # 是否"同一意图"完全交给模型判断，不用正则猜"继续/好/ok"
+            if previous and intent.continues_previous:
+                saved = previous
                 intent = Intent(
                     mode=str(saved.get("mode") or "chat"),
                     scale=str(saved.get("scale") or "small"),
                     needs_proposal=bool(saved.get("needs_proposal")),
-                    reason=f"沿用上一轮意图（{saved.get('reason') or '连续追问'}）",
-                    intent=str(saved.get("intent") or ""),
-                    degraded=bool(saved.get("degraded")),
+                    reason=f"延续上一轮意图（模型判定）",
+                    intent=str(saved.get("intent") or intent.intent),
+                    usage=intent.usage,
+                    degraded=intent.degraded,
+                    continues_previous=True,
                 )
                 reused = True
-                self._log("意图沿用上一轮（连续追问）")
+                self._log("意图沿用上一轮（模型判定为同一意图）")
             else:
-                try:
-                    intent = await classify(client, text, history, log=self._log)
-                except Exception as exc:  # noqa: BLE001 - 分类器不该拖垮整轮
-                    self._log(f"意图识别异常：{exc}")
-                    intent = Intent("chat", "small", False, f"意图识别异常，按 Chat 处理（{exc}）", "", degraded=True)
-                session.last_intent = {
-                    "mode": intent.mode,
-                    "scale": intent.scale,
-                    "needs_proposal": intent.needs_proposal,
-                    "intent": intent.intent,
-                    "reason": intent.reason,
-                    "degraded": intent.degraded,
-                }
+                self._log("意图已更新（模型判定为新意图）")
+
+            session.last_intent = {
+                "mode": intent.mode,
+                "scale": intent.scale,
+                "needs_proposal": intent.needs_proposal,
+                "intent": intent.intent,
+                "reason": intent.reason,
+                "degraded": intent.degraded,
+            }
             effective_mode = intent.mode
             self._notify(
                 "ui.intent",

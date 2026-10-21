@@ -29,7 +29,7 @@ class Session:
     created_at: float = field(default_factory=time.time)
     #: OpenAI 兼容格式：{"role": "user"|"assistant"|"system", "content": str}
     messages: list[dict[str, Any]] = field(default_factory=list)
-    #: 上一轮的意图分析结果（连续追问时复用，省一次模型调用）
+    #: 上一轮的意图分析结果（供下一轮判断是否延续）
     last_intent: dict[str, Any] | None = None
 
     @classmethod

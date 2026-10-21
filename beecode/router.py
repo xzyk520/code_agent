@@ -26,8 +26,9 @@ INTENT_SCHEMA: dict[str, Any] = {
         "needs_proposal": {"type": "boolean"},
         "reason": {"type": "string"},
         "intent": {"type": "string"},
+        "continue_previous": {"type": "boolean"},
     },
-    "required": ["mode", "scale", "needs_proposal", "reason", "intent"],
+    "required": ["mode", "scale", "needs_proposal", "reason", "intent", "continue_previous"],
     "additionalProperties": False,
 }
 
@@ -39,6 +40,7 @@ _SYSTEM = """你是 Bee Code 的意图分类器。只输出 JSON 对象，不要
 - needs_proposal: boolean（这一轮是否应该产出文件修改提案）
 - reason: 一句话中文说明（为什么这么判）
 - intent: 一句话概括"用户想达成什么"（用于后续总结，不要写实现细节）
+- continue_previous: boolean（这次是否在**延续**上一轮意图，而不是换了目标）
 
 判定规则：
 - chat：解释代码、回答问题、讨论方案，不需要改动文件
@@ -46,6 +48,8 @@ _SYSTEM = """你是 Bee Code 的意图分类器。只输出 JSON 对象，不要
 - debugger：报错、异常、崩溃、行为不符预期的定位与修复
 - builder 与 debugger **默认 needs_proposal=true**；只有用户明确表示"先讨论/不要改"时才 false
 - scale=large：涉及多个文件、架构调整、迁移、需求描述很长；否则 small
+- continue_previous=true 仅当用户是在补充信息、回答追问、说"继续/接着"，且目标没变；
+  一旦出现新目标、新对象、新约束，就判 false
 """
 
 _CORRECTION = "你的输出不合法：{error}。请只输出 JSON，且 mode 必须是 chat、builder、debugger 三者之一。"
@@ -62,6 +66,8 @@ class Intent:
     usage: dict[str, int] | None = None
     #: 是否走了降级（模型不配合 / 接口不支持结构化输出）
     degraded: bool = False
+    #: 模型判定：是否延续上一轮意图
+    continues_previous: bool = False
 
     @property
     def should_plan(self) -> bool:
@@ -80,8 +86,21 @@ def _is_format_rejection(message: str) -> bool:
     )
 
 
-def _user_prompt(text: str, history: list[dict[str, str]] | None) -> str:
+def _user_prompt(
+    text: str,
+    history: list[dict[str, str]] | None,
+    previous: dict[str, Any] | None = None,
+) -> str:
     lines: list[str] = []
+    if previous:
+        lines.append("上一轮意图：")
+        lines.append(
+            f"- 目标：{str(previous.get('intent') or '').strip()[:200] or '（未记录）'}\n"
+            f"- 模式：{previous.get('mode') or 'chat'}；规模：{previous.get('scale') or 'small'}\n"
+            f"- 是否在建言改动：{bool(previous.get('needs_proposal'))}"
+        )
+        lines.append("请判断当前消息是在延续它，还是换了新目标。")
+        lines.append("")
     recent = (history or [])[-4:]
     if recent:
         lines.append("最近对话（仅供参考）：")
@@ -131,6 +150,8 @@ def _parse(content: str) -> tuple[Intent | None, str]:
     needs = bool(raw_needs) if isinstance(raw_needs, bool) else mode != "chat"
     reason = str(data.get("reason") or "").strip()[:200]
     intent_text = str(data.get("intent") or "").strip()[:200]
+    raw_continue = data.get("continue_previous")
+    continues = bool(raw_continue) if isinstance(raw_continue, bool) else False
     return (
         Intent(
             mode=mode,
@@ -138,6 +159,7 @@ def _parse(content: str) -> tuple[Intent | None, str]:
             needs_proposal=needs,
             reason=reason or "模型判定",
             intent=intent_text,
+            continues_previous=continues,
         ),
         "",
     )
@@ -149,12 +171,13 @@ async def classify(
     history: list[dict[str, str]] | None = None,
     *,
     log: Callable[[str], None] | None = None,
+    previous: dict[str, Any] | None = None,
 ) -> Intent:
     """调一次主模型做意图分类。失败时退回 chat，绝不把异常抛给上层。"""
     say = log or (lambda _m: None)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM},
-        {"role": "user", "content": _user_prompt(text, history)},
+        {"role": "user", "content": _user_prompt(text, history, previous)},
     ]
     formats: list[dict[str, Any] | None] = [
         {"type": "json_schema", "json_schema": {"name": "intent", "strict": True, "schema": INTENT_SCHEMA}},
