@@ -926,8 +926,10 @@ interface ContextBudget {
 | --- | --- | --- |
 | `beeCode.attachments.maxCount` | 10 | 超过则忽略新附件并提示 |
 | `beeCode.attachments.maxCharsPerItem` | 40000 | 单个附件截断并追加"…（附件已截断）" |
-| `beeCode.attachments.maxTotalChars` | 120000 | 合计超限时拒绝追加 |
+| `beeCode.attachments.maxTotalChars` | 120000 | 合计超限时**截断到剩余额度**并提示；额度用尽才拒绝 |
 
+超限时会给**明确提示**（toast + 面板系统消息 + 日志）：
+超过数量显示"本次只保留了前 N 段"；单项过大显示"已截断"；合计超限显示"已截断到上限"。
 内核还有一道**防御性上限**（单项 40k / 合计 120k），旧版壳或被篡改的输入也会被夹取。
 
 ### 8.6 光标上下文：先读"用户正在看的那个函数"（已实现）

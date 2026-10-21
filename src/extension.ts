@@ -172,6 +172,11 @@ class Shell {
       onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
+      onAttachmentNotice: (message) => {
+        this.log.warn(`附件提示：${message}`);
+        this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: message });
+        void vscode.window.showWarningMessage(`Bee Code: ${message}`);
+      },
     }, this.config.attachments);
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
@@ -757,7 +762,12 @@ class Shell {
     this.focusHighlight.clear();
 
     // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
-    let effectiveAttachments = clampAttachments(attachments, this.config.attachments);
+    const clamped = clampAttachments(attachments, this.config.attachments);
+    let effectiveAttachments = clamped.items;
+    for (const notice of clamped.notices) {
+      this.log.warn(`附件提示：${notice}`);
+      void vscode.window.showWarningMessage(`Bee Code: ${notice}`);
+    }
     let focus: FocusInfo | undefined;
     if (autoFocus && attachments.length === 0 && this.config.focus.autoAttach) {
       focus = await readFocusAtCursor({
@@ -1990,19 +2000,36 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
 function clampAttachments(
   items: AttachedContext[],
   limits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
-): AttachedContext[] {
+): { items: AttachedContext[]; notices: string[] } {
+  const notices: string[] = [];
+  if (items.length > limits.maxCount) {
+    notices.push(`最多附加 ${limits.maxCount} 段：本次只保留了前 ${limits.maxCount} 段，其余已忽略。`);
+  }
   const out: AttachedContext[] = [];
   let total = 0;
+  let truncatedItem = false;
+  let truncatedTotal = false;
   for (const item of items.slice(0, limits.maxCount)) {
     let text = item.text ?? "";
     if (text.length > limits.maxCharsPerItem) {
       text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+      truncatedItem = true;
     }
-    if (total + text.length > limits.maxTotalChars) break;
+    const remaining = limits.maxTotalChars - total;
+    if (remaining <= 0) {
+      truncatedTotal = true;
+      break;
+    }
+    if (text.length > remaining) {
+      text = `${text.slice(0, remaining)}\n…（附件已截断）`;
+      truncatedTotal = true;
+    }
     total += text.length;
     out.push({ ...item, ...(text.length > 0 ? { text } : {}) });
   }
-  return out;
+  if (truncatedItem) notices.push(`单个附件超过 ${limits.maxCharsPerItem} 字符，已截断。`);
+  if (truncatedTotal) notices.push(`附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`);
+  return { items: out, notices };
 }
 
 /** 未完成的计划（全部 done 就没必要再带给模型） */

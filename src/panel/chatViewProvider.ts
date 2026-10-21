@@ -55,6 +55,8 @@ export interface PanelHandlers {
   onAbort(): void;
   /** 点击「已读取文件」chip：打开文件并定位到行范围 */
   onOpenRead(path: string, startLine?: number, endLine?: number): void;
+  /** 附件被截断/忽略时给用户的明确提示（toast + 面板系统消息） */
+  onAttachmentNotice(message: string): void;
 }
 
 export interface PanelState {
@@ -246,22 +248,48 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "proposals", items });
   }
 
-  /** 追加附件（带数量/体积上限）；返回是否成功 */
+  /** 追加附件（带数量/体积上限）；返回是否成功，超限会给明确提示 */
   addAttachment(attachment: AttachedContext): boolean {
     const limits = this.attachmentLimits;
     if (this.state.attachments.length >= limits.maxCount) {
-      this.setHint(`最多附加 ${limits.maxCount} 段，已忽略新的附件。`);
+      this.handlers.onAttachmentNotice(
+        `最多附加 ${limits.maxCount} 段：本次只保留了前 ${limits.maxCount} 段，其余已忽略。`,
+      );
       return false;
     }
+
     let text = attachment.text ?? "";
+    let truncatedByItem = false;
     if (text.length > limits.maxCharsPerItem) {
       text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+      truncatedByItem = true;
     }
+
     const current = this.state.attachments.reduce((sum, item) => sum + (item.text?.length ?? 0), 0);
-    if (current + text.length > limits.maxTotalChars) {
-      this.setHint(`附件总量超过 ${limits.maxTotalChars} 字符，已忽略新的附件。`);
+    const remaining = limits.maxTotalChars - current;
+    if (remaining <= 0) {
+      this.handlers.onAttachmentNotice(
+        `附件合计超过 ${limits.maxTotalChars} 字符：这一段未加入（请减少附件或分段发送）。`,
+      );
       return false;
     }
+    let truncatedByTotal = false;
+    if (text.length > remaining) {
+      text = `${text.slice(0, remaining)}\n…（附件已截断）`;
+      truncatedByTotal = true;
+    }
+
+    if (truncatedByItem) {
+      this.handlers.onAttachmentNotice(
+        `单个附件超过 ${limits.maxCharsPerItem} 字符，已截断（可改用行范围减少体积）。`,
+      );
+    }
+    if (truncatedByTotal) {
+      this.handlers.onAttachmentNotice(
+        `附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`,
+      );
+    }
+
     this.state.attachments.push({ ...attachment, ...(text.length > 0 ? { text } : {}) });
     this.post({ type: "attachments", items: this.state.attachments });
     return true;
