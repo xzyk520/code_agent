@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 26;
+export const PROTOCOL_VERSION = 27;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -410,8 +410,10 @@ export type ShellMethod = keyof ShellMethodParams;
 export type Mode = "chat" | "builder" | "debugger";
 
 export interface ModelConfigDto {
-  /** 视觉能力：auto=按模型名猜；on/off=用户显式声明 */
+  /** 视觉能力：auto=先试，被拒后自愈；on/off=显式声明 */
   supportsVision?: "auto" | "on" | "off";
+  /** 是否把思考内容回传给服务端：auto=被拒后自动打开；always/never=强制 */
+  reasoningReplay?: "auto" | "always" | "never";
   baseUrl: string;
   model: string;
   temperature?: number;
@@ -571,6 +573,12 @@ export interface UiReadParams {
   endLine?: number;
   /** 触发读取的工具名 */
   tool?: string;
+}
+
+/** 思考内容增量（只给用户看，不进上下文、不落盘） */
+export interface UiReasoningParams {
+  sessionId: string;
+  text: string;
 }
 
 export interface UiUsageParams {

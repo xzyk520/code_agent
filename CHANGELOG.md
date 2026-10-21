@@ -7,6 +7,11 @@
 
 ### Added
 
+- **思考内容抓取（协议 v27）**：
+  - 解析 `reasoning_content` / `reasoning` / `thinking`，经 `ui.reasoning` 在面板显示为可折叠「思考过程」（答题自动收起）
+  - 思考内容不进上下文、不进摘要、不落盘；跨轮不会出现
+  - 回传策略 `beeCode.model.reasoningReplay`（auto/always/never）：auto 默认不回传，服务端要求时自动补上并重试
+
 - **轨迹增强**：顶部搜索框按意图过滤；Chat/Builder/Debugger 三色区分（圆点 + 左侧色条）；
   旧版轮次记录没有 `userMessageId` 时按 `messageIndex` 回填，老会话同样能重建轨迹
 

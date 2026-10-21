@@ -31,6 +31,7 @@ from ..llm import (
     ChatDelta,
     ModelCapabilityError,
     ModelError,
+    ReasoningReplayRequired,
     OpenAIClient,
     ToolCall,
     estimate_tokens,
@@ -137,6 +138,10 @@ class AgentLoop:
         self._l3_used = False
         #: 本轮的当前计划（update_plan 更新；propose_edit 成功时推断进度）
         self._plan: list[dict[str, str]] | None = None
+        #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
+        self._replay_reasoning = False
+        #: assistant 消息 → 思考内容（按对象 id 记，便于稍后补上 replay 字段）
+        self._reasoning_by_msg: dict[int, str] = {}
 
     async def run_turn(
         self,
@@ -263,6 +268,9 @@ class AgentLoop:
         self._digested.clear()
         self._compact_notice_added = False
         self._l3_used = False
+        self._reasoning_by_msg.clear()
+        replay_setting = str(session.model_config.get("reasoningReplay") or "auto").lower()
+        self._replay_reasoning = replay_setting == "always"
         max_steps = self._config.max_steps
         if intent is not None and intent.scale == "large":
             max_steps = max(max_steps, self._config.large_task_steps)
@@ -339,7 +347,7 @@ class AgentLoop:
         try:
             while stats.steps < max_steps:
                 stats.steps += 1
-                answer, calls, usage = await self._stream(client, messages, session, stats)
+                answer, calls, usage, reasoning = await self._stream(client, messages, session, stats)
                 self._emit_usage(session, stats, started_at)
                 budget_hit = self._budget_reason(stats, started_at)
                 if budget_hit:
@@ -353,7 +361,9 @@ class AgentLoop:
                     final_text = answer
                     break
 
-                messages.append(_assistant_tool_message(answer, calls))
+                assistant_msg = _assistant_tool_message(answer, calls)
+                self._attach_reasoning(assistant_msg, reasoning)
+                messages.append(assistant_msg)
                 for call in calls:
                     key = f"{call.name}:{_canonical(call.arguments)}"
                     repeat[key] += 1
@@ -414,16 +424,18 @@ class AgentLoop:
                     "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
                                "如果不需要改，请明确说明原因。",
                 })
-                answer, calls, _usage = await self._stream(client, messages, session, stats)
+                answer, calls, _usage, reasoning = await self._stream(client, messages, session, stats)
                 if calls:
-                    messages.append(_assistant_tool_message(answer, calls))
+                    assistant_msg = _assistant_tool_message(answer, calls)
+                    self._attach_reasoning(assistant_msg, reasoning)
+                    messages.append(assistant_msg)
                     for call in calls:
                         result = await self._execute(ctx, call, session)
                         stats.tool_calls += 1
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
-                    answer, _calls, _usage = await self._stream(client, messages, session, stats)
+                    answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats)
                 final_text = answer
         finally:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
@@ -563,11 +575,12 @@ class AgentLoop:
         stats: TurnStats,
         *,
         allow_tools: bool = True,
-    ) -> tuple[str, list[ToolCall], dict[str, int] | None]:
+    ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         """一次模型调用。
 
         视觉能力不靠模型名猜：服务端如果明确拒绝图片，就剥掉图片重试一次，
         并把"该模型不支持图片"记进缓存（后续轮次直接不带图）。
+        思考内容默认不回传；只有服务端明确要求（或配置 always）才补上。
         """
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
@@ -600,6 +613,13 @@ class AgentLoop:
                 },
             )
             return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
+        except ReasoningReplayRequired as exc:
+            if self._replay_reasoning or str(session.model_config.get("reasoningReplay") or "auto").lower() == "never":
+                raise
+            self._replay_reasoning = True
+            self._enable_replay(messages)
+            self._log(f"服务端要求回传思考内容，已补上并重试：{exc}")
+            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
 
     async def _stream_once(
         self,
@@ -609,8 +629,9 @@ class AgentLoop:
         stats: TurnStats,
         *,
         allow_tools: bool = True,
-    ) -> tuple[str, list[ToolCall], dict[str, int] | None]:
+    ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         calls: list[ToolCall] = []
         usage: dict[str, int] | None = None
 
@@ -622,6 +643,9 @@ class AgentLoop:
             if delta.text:
                 parts.append(delta.text)
                 self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
+            if delta.reasoning:
+                reasoning_parts.append(delta.reasoning)
+                self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning})
 
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
@@ -632,7 +656,7 @@ class AgentLoop:
             if prompt_tokens > 0 and estimated > 0:
                 ratio = prompt_tokens / estimated
                 self._calibration = min(2.0, max(0.5, self._calibration * 0.5 + ratio * 0.5))
-        return "".join(parts), calls, usage
+        return "".join(parts), calls, usage, "".join(reasoning_parts)
 
     # ───────────────────────── 工具执行 ─────────────────────────
 
@@ -743,7 +767,7 @@ class AgentLoop:
             },
         )
         messages.append({"role": "user", "content": notice})
-        answer, _calls, _usage = await self._stream(client, messages, session, stats, allow_tools=False)
+        answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, allow_tools=False)
         return answer
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
@@ -756,6 +780,22 @@ class AgentLoop:
                 "elapsedMs": int((asyncio.get_running_loop().time() - started_at) * 1000),
             },
         )
+
+    def _attach_reasoning(self, message: dict[str, Any], reasoning: str) -> None:
+        """记住 assistant 消息的思考内容；需要回传时才写进协议字段。"""
+        if not reasoning:
+            return
+        self._reasoning_by_msg[id(message)] = reasoning
+        if self._replay_reasoning:
+            message["reasoning_content"] = reasoning
+
+    def _enable_replay(self, messages: list[dict[str, Any]]) -> None:
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            reasoning = self._reasoning_by_msg.get(id(message))
+            if reasoning:
+                message["reasoning_content"] = reasoning
 
     def _budget_reason(self, stats: TurnStats, started_at: float) -> str | None:
         used = stats.input_tokens + stats.output_tokens

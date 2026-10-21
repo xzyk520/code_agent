@@ -528,3 +528,29 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   white-space: nowrap;
   padding: 0 4px;
 }
+
+/* ───────────── 思考过程（默认展开，回答开始后自动收起） ───────────── */
+.reasoning {
+  border-left: 2px solid var(--vscode-descriptionForeground);
+  padding: 2px 8px;
+  margin: 2px 0;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.05));
+  border-radius: 4px;
+}
+
+.reasoning-title {
+  cursor: pointer;
+  font-size: 0.8em;
+  user-select: none;
+}
+
+.reasoning-body {
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.84em;
+  opacity: 0.9;
+}

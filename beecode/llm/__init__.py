@@ -6,7 +6,15 @@
 
 from __future__ import annotations
 
-from .openai import ChatDelta, ModelCapabilityError, ModelError, OpenAIClient, ToolCall, estimate_tokens
+from .openai import (
+    ChatDelta,
+    ModelCapabilityError,
+    ModelError,
+    OpenAIClient,
+    ReasoningReplayRequired,
+    ToolCall,
+    estimate_tokens,
+)
 from .vision import forget, remember, resolve_vision
 
 __all__ = [
@@ -14,6 +22,7 @@ __all__ = [
     "ModelCapabilityError",
     "ModelError",
     "OpenAIClient",
+    "ReasoningReplayRequired",
     "ToolCall",
     "estimate_tokens",
     "forget",

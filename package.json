@@ -298,6 +298,19 @@
           "type": "number",
           "default": 0.2
         },
+        "beeCode.model.reasoningReplay": {
+          "type": "string",
+          "scope": "window",
+          "order": 7,
+          "enum": ["auto", "always", "never"],
+          "enumDescriptions": [
+            "默认不回传；服务端报错要求 reasoning_content 时自动补上",
+            "总是把思考内容随 assistant 消息回传",
+            "从不回传（兼容明确禁止回传的模型）"
+          ],
+          "default": "auto",
+          "markdownDescription": "思考内容的回传策略。思考内容本身只给用户看，不进上下文、不落盘。"
+        },
         "beeCode.model.contextWindow": {
           "type": "number",
           "scope": "window",

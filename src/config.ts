@@ -108,6 +108,7 @@ export function readConfig(): ConfigReadResult {
       supportsTools: reader.bool("model.supportsTools", true),
       supportsVision: reader.oneOf("model.supportsVision", "auto", ["auto", "on", "off"] as const),
       contextWindow: reader.num("model.contextWindow", 32_768, 4_096, 2_000_000),
+      reasoningReplay: reader.oneOf("model.reasoningReplay", "auto", ["auto", "always", "never"] as const),
     },
     maxSteps: reader.num("agent.maxSteps", 30, 1, 500),
     largeTaskSteps: reader.num("agent.largeTaskSteps", 24, 1, 60),

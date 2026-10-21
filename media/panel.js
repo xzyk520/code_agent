@@ -315,6 +315,52 @@
     setTimeout(() => chip.classList.remove("flash"), 1_200);
   }
 
+  /** 思考内容：一个本轮内复用的可折叠块（只展示，不进上下文、不落盘） */
+  /** @type {HTMLDetailsElement | null} */
+  let reasoningNode = null;
+  /** @type {HTMLElement | null} */
+  let reasoningBody = null;
+  /** 本轮思考文本：state 重渲染后用它把折叠块补回来 */
+  let reasoningText = "";
+
+  function clearReasoningNode() {
+    if (reasoningNode) reasoningNode.remove();
+    reasoningNode = null;
+    reasoningBody = null;
+  }
+
+  /** @param {boolean} collapsed */
+  function renderReasoning(collapsed) {
+    clearReasoningNode();
+    if (!reasoningText) return;
+    reasoningNode = document.createElement("details");
+    reasoningNode.className = "msg reasoning";
+    reasoningNode.open = !collapsed;
+    const summary = document.createElement("summary");
+    summary.className = "reasoning-title";
+    summary.textContent = "思考过程";
+    reasoningBody = document.createElement("div");
+    reasoningBody.className = "reasoning-body";
+    reasoningBody.textContent = reasoningText;
+    reasoningNode.append(summary, reasoningBody);
+    el.messages.appendChild(reasoningNode);
+  }
+
+  function resetReasoning() {
+    reasoningText = "";
+    clearReasoningNode();
+  }
+
+  /** @param {string} text */
+  function reasoningDelta(text) {
+    if (!text) return;
+    reasoningText += text;
+    if (!reasoningNode) renderReasoning(false);
+    else if (reasoningBody) reasoningBody.textContent = reasoningText;
+    setMessagesBusy(true);
+    el.messages.scrollTop = el.messages.scrollHeight;
+  }
+
   /** 右侧会话轨迹：按意图列出每一轮，点击跳到对应消息 */
   /** @type {Array<{ id: string, mode: string, intent: string }>} */
   let trajectoryItems = [];
@@ -553,6 +599,7 @@
         }
         el.trajectoryList.textContent = "";
         trajectoryItems = [];
+        clearReasoningNode();
         clearStreaming();
         subagents.clear();
         planNode = null;
@@ -564,6 +611,7 @@
         renderAttachments(next.attachments || []);
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
+        renderReasoning(true);
         break;
       }
       case "status": {
@@ -593,6 +641,8 @@
       }
       case "delta": {
         const text = String(msg.text ?? "");
+        // 正文开始：把思考块自动收起（用户仍可展开回看）
+        if (reasoningNode && reasoningNode.open) reasoningNode.open = false;
         if (!streamingNode) {
           streamingNode = addMessage("assistant", "");
           setMessagesBusy(true);   // 开始流式：先不自动播报
@@ -617,6 +667,14 @@
 
       case "reads": {
         renderRead(/** @type {{ path?: unknown, startLine?: unknown, endLine?: unknown }} */ (msg.item));
+        break;
+      }
+      case "reasoning": {
+        reasoningDelta(String(msg.text ?? ""));
+        break;
+      }
+      case "reasoningReset": {
+        resetReasoning();
         break;
       }
       case "cost": {

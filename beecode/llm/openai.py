@@ -40,6 +40,10 @@ class ModelCapabilityError(ModelError):
         self.body = body
 
 
+class ReasoningReplayRequired(ModelError):
+    """服务端要求把思考内容回传（缺少 reasoning_content 时才会抛）。"""
+
+
 #: 服务端拒绝图片时常见的措辞（只认这些，别把所有 400 都当成"没视觉"）
 _IMAGE_REJECT_HINTS = (
     "image",
@@ -77,6 +81,8 @@ class ChatDelta:
     usage: dict[str, int] | None = None
     #: 只在流结束时出现一次（参数已拼完整）
     tool_calls: list[ToolCall] | None = None
+    #: 思考内容增量（DeepSeek `reasoning_content` / OpenRouter `reasoning` / 网关 `thinking`）
+    reasoning: str = ""
 
 
 class OpenAIClient:
@@ -148,6 +154,10 @@ class OpenAIClient:
                                 f"模型不接受图片输入（HTTP {response.status_code}）：{body[:200]}",
                                 status=response.status_code,
                                 body=body,
+                            )
+                        if _is_reasoning_rejection(body):
+                            raise ReasoningReplayRequired(
+                                f"服务端要求回传思考内容（HTTP {response.status_code}）：{body[:200]}"
                             )
                         raise ModelError(_explain_http_error(response.status_code, body))
 
@@ -236,6 +246,26 @@ def _explain_http_error(status: int, body: str) -> str:
     return f"模型返回 HTTP {status}{hint}：{body}"
 
 
+def _is_reasoning_rejection(body: str) -> bool:
+    lowered = body.lower()
+    if "reasoning" not in lowered and "thinking" not in lowered:
+        return False
+    return any(word in lowered for word in ("required", "missing", "must", "absent", "not found"))
+
+
+def _reasoning_text(delta: dict[str, Any]) -> str:
+    """从 delta 里取出思考文本（不同厂商字段不同）。"""
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            inner = value.get("text") or value.get("content")
+            if isinstance(inner, str) and inner:
+                return inner
+    return ""
+
+
 def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDelta]:
     """解析一行 SSE。非数据行、心跳、`[DONE]` 都返回空列表。"""
     if not line or not line.startswith("data:"):
@@ -269,6 +299,10 @@ def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDel
         text = delta.get("content")
         if isinstance(text, str) and text:
             out.append(ChatDelta(text=text))
+
+        reasoning = _reasoning_text(delta)
+        if reasoning:
+            out.append(ChatDelta(reasoning=reasoning))
 
         # 工具调用分片：index / id / function.name / function.arguments 都可能分批到达
         for item in delta.get("tool_calls") or []:

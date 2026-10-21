@@ -180,6 +180,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "plan", ...params });
   }
 
+  /** 思考内容增量（面板折叠块，不进上下文） */
+  reasoningDelta(text: string): void {
+    this.post({ type: "reasoning", text });
+  }
+
+  /** 新一轮开始：清掉上一轮的思考块 */
+  resetReasoning(): void {
+    this.post({ type: "reasoningReset" });
+  }
+
   /** 任务级成本（本轮 token / 耗时） */
   setCost(text: string): void {
     this.post({ type: "cost", text });

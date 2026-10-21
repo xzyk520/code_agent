@@ -50,6 +50,7 @@ import type {
   UiIntentParams,
   UiPlanParams,
   UiReadParams,
+  UiReasoningParams,
   UiSubagentParams,
   UiToolParams,
   UiUsageParams,
@@ -326,6 +327,7 @@ class Shell {
       this.sessions.meta(this.sessionId)?.mode ?? this.panel.getMode(),
     );
     this.persisted = existing.length;
+    this.panel.resetReasoning();
     this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
     this.panel.setPlan(this.sessions.meta(this.sessionId)?.plan);
     await this.loadSummary(existing.length);
@@ -600,6 +602,7 @@ class Shell {
       this.sessions.meta(picked.id)?.mode ?? this.panel.getMode(),
     );
     this.persisted = messages.length;
+    this.panel.resetReasoning();
     this.panel.setPlan(this.sessions.meta(picked.id)?.plan);
     await this.loadSummary(messages.length);
     await this.refreshTrajectory();
@@ -768,6 +771,7 @@ class Shell {
     this.turnUserMessageId = userMessageId;
     this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
     this.panel.setCost("");
+    this.panel.resetReasoning();
     this.remember("user", userText);
     this.setBusy(true);
     this.assistantBuffer = "";
@@ -1714,6 +1718,11 @@ class Shell {
             ? `读取 ${name}:${p.startLine}-${p.endLine}`
             : `读取 ${name}`,
         );
+        return;
+      }
+      case "ui.reasoning": {
+        const p = params as UiReasoningParams;
+        this.panel.reasoningDelta(p.text);
         return;
       }
       case "ui.intent": {
