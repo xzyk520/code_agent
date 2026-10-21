@@ -7,6 +7,9 @@
 
 ### Added
 
+- **意图回滚完整化**：turn record 新增 `scale/needsProposal/reason`，聊天回滚后 `lastIntent` 四要素一起回退；
+  分类器 prompt 明确列出目标/规模/模式/是否提案；延续时主模型也会收到同样四项说明
+
 - **lastIntent 落盘（协议 v29）**：上一轮意图写入 `session meta.lastIntent`，`chat.send` 每次带回内核；
   内核重启后第一轮也能判断「是否延续」；聊天回滚时同步回退到保留轮次的意图
 

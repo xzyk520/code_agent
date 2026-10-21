@@ -293,6 +293,21 @@ class AgentLoop:
                     }
                 )
 
+        # 延续上一轮时，把完整意图（目标/规模/模式/是否提案）也告诉主模型
+        if reused and intent is not None:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"用户延续上一轮任务：{intent.intent or text[:120]}。\n"
+                        f"- 任务规模：{intent.scale}\n"
+                        f"- 模式：{intent.mode}\n"
+                        f"- 是否需要产出提案：{'是' if intent.needs_proposal else '否'}\n"
+                        "请在此基础上继续，不要重新开始。"
+                    ),
+                }
+            )
+
         # 大任务且需要产出：预置一份计划骨架，模型可以直接沿用/改写
         if (
             intent is not None

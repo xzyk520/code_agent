@@ -16,6 +16,12 @@ export interface TurnRecord {
   /** 意图分析给出的一句话用户意图 */
   intent: string;
   mode: Mode;
+  /** 意图判定的任务规模（回滚后恢复 lastIntent 用） */
+  scale?: "small" | "large";
+  /** 意图判定的"是否需要产出提案" */
+  needsProposal?: boolean;
+  /** 意图判定的理由 */
+  reason?: string;
   /** 用户原话（截断） */
   userText: string;
   /** AI 这一轮的回答（截断） */

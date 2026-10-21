@@ -105,7 +105,7 @@ class Shell {
   private readonly chatIndex: CheckpointChatIndex;
   private readonly turns: TurnStore;
   private readonly summaries: SummaryStore;
-  private turnIntent?: { intent: string; mode: Mode };
+  private turnIntent?: { intent: string; mode: Mode; scale?: "small" | "large"; needsProposal?: boolean; reason?: string };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
   /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
@@ -566,6 +566,9 @@ class Shell {
     await this.turns.append(this.sessionId, {
       intent,
       mode: this.turnIntent?.mode ?? fallbackMode,
+      ...(this.turnIntent?.scale ? { scale: this.turnIntent.scale } : {}),
+      ...(typeof this.turnIntent?.needsProposal === "boolean" ? { needsProposal: this.turnIntent.needsProposal } : {}),
+      ...(this.turnIntent?.reason ? { reason: this.turnIntent.reason } : {}),
       userText: userText.slice(0, 400),
       assistant: assistant.slice(0, 1200),
       tools: [...this.turnTools],
@@ -1657,7 +1660,15 @@ class Shell {
       const lastTurn = keptTurns[keptTurns.length - 1];
       this.sessions.updateLastIntent(
         this.sessionId,
-        lastTurn ? { mode: lastTurn.mode, intent: lastTurn.intent } : undefined,
+        lastTurn
+          ? {
+              mode: lastTurn.mode,
+              intent: lastTurn.intent,
+              ...(lastTurn.scale ? { scale: lastTurn.scale } : {}),
+              ...(typeof lastTurn.needsProposal === "boolean" ? { needsProposal: lastTurn.needsProposal } : {}),
+              ...(lastTurn.reason ? { reason: lastTurn.reason } : {}),
+            }
+          : undefined,
       );
       const lastPlan = lastTurn?.plan;
       this.panel.setPlan(lastPlan);
@@ -1786,7 +1797,13 @@ class Shell {
       case "ui.intent": {
         const p = params as UiIntentParams;
         // 意图分析本身不展示（不产生消息）；面板只更新模式徽标与提示
-        this.turnIntent = { intent: p.intent, mode: p.mode };
+        this.turnIntent = {
+          intent: p.intent,
+          mode: p.mode,
+          scale: p.scale,
+          needsProposal: p.needsProposal,
+          reason: p.reason,
+        };
         this.panel.setMode(p.mode);
         const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
         const flags = [

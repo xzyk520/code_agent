@@ -96,8 +96,9 @@ def _user_prompt(
         lines.append("上一轮意图：")
         lines.append(
             f"- 目标：{str(previous.get('intent') or '').strip()[:200] or '（未记录）'}\n"
-            f"- 模式：{previous.get('mode') or 'chat'}；规模：{previous.get('scale') or 'small'}\n"
-            f"- 是否在建言改动：{bool(previous.get('needs_proposal'))}"
+            f"- 任务规模：{previous.get('scale') or 'small'}（small=单点/小改，large=多文件/架构/迁移）\n"
+            f"- 模式：{previous.get('mode') or 'chat'}\n"
+            f"- 是否需要产出提案：{'是' if previous.get('needs_proposal') else '否'}"
         )
         lines.append("请判断当前消息是在延续它，还是换了新目标。")
         lines.append("")
