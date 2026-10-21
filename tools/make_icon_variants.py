@@ -74,9 +74,22 @@ C_WING_R = [(300, 156), (364, 138), (410, 112), (420, 132), (396, 152), (314, 19
 # D：六边形蜂（蜂巢 + 条纹 + 触角，去掉翅膀，最像"标记"）
 D_BODY = [(256, 132), (388, 208), (388, 356), (256, 432), (124, 356), (124, 208)]
 D_STRIPES = [(214, 238), (276, 300), (338, 362)]
-# 翅膀不再是外挂的"手臂"，而是六边形内部的两片青色切面（负空间/镶嵌）
-D_WING_L = [(128, 210), (200, 230), (184, 276), (128, 258)]
-D_WING_R = [(384, 210), (312, 230), (328, 276), (384, 258)]
+# 一对小翅膀：圆润的椭圆翼（蜂翅本来就是圆的），根部压在六边形下面
+def _ellipse(cx, cy, rx, ry, degrees, steps=48):
+    import math
+    rad = math.radians(degrees)
+    cos_a, sin_a = math.cos(rad), math.sin(rad)
+    pts = []
+    for i in range(steps):
+        theta = 2 * math.pi * i / steps
+        x = rx * math.cos(theta)
+        y = ry * math.sin(theta)
+        pts.append((cx + x * cos_a - y * sin_a, cy + x * sin_a + y * cos_a))
+    return pts
+
+
+D_WING_L = [(152, 224), (120, 238), (78, 262), (68, 246), (94, 216), (140, 202)]
+D_WING_R = [(360, 224), (392, 238), (434, 262), (444, 246), (418, 216), (372, 202)]
 
 def hexagon(cx: float, cy: float, r: float) -> list[tuple[float, float]]:
     import math
@@ -159,9 +172,10 @@ def draw_variant(kind: str, size: int = 512) -> Image.Image:
                           end[0] * w / 512 + r, end[1] * w / 512 + r], fill=CYAN)
 
     elif kind == "d":
+        poly(D_WING_L, CYAN)
+        poly(D_WING_R, CYAN)
         poly(D_BODY, AMBER)
         stripes(D_BODY, D_STRIPES)
-        # 无翅膀：只留六边形 + 条纹 + 触角，做最简"蜂巢蜂"
         for antenna in ANTENNAE:
             start = (240, 142)
             end = (216, 96)
@@ -223,8 +237,7 @@ def svg_for(kind: str) -> str:
             f'<rect x="0" y="{y0}" width="512" height="{y1 - y0}" fill="#0B1220"/>'
             for y0, y1 in D_STRIPES
         )
-        wings = ""
-        pass
+        wings = poly(D_WING_L, "#4FD1FF") + poly(D_WING_R, "#4FD1FF")
     else:
         body = "".join(poly(band, "#FFB100") for band in C_BANDS) + poly(C_HEAD, "#FFB100")
         clip = ""

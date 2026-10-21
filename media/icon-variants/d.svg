@@ -2,7 +2,7 @@
   <defs><clipPath id="body-d"><polygon points="256,132 388,208 388,356 256,432 124,356 124,208"/></clipPath></defs>
   <rect width="512" height="512" rx="112" fill="#0B1220"/>
   <rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#1E2C45" stroke-width="2"/>
-  
+  <polygon points="152,224 120,238 78,262 68,246 94,216 140,202" fill="#4FD1FF"/><polygon points="360,224 392,238 434,262 444,246 418,216 372,202" fill="#4FD1FF"/>
   <g clip-path="url(#body-d)"><polygon points="256,132 388,208 388,356 256,432 124,356 124,208" fill="#FFB100"/><rect x="0" y="214" width="512" height="24" fill="#0B1220"/><rect x="0" y="276" width="512" height="24" fill="#0B1220"/><rect x="0" y="338" width="512" height="24" fill="#0B1220"/></g>
   <line x1="240" y1="142" x2="216" y2="96" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="216" cy="96" r="6" fill="#4FD1FF"/><line x1="272" y1="142" x2="296" y2="96" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="296" cy="96" r="6" fill="#4FD1FF"/>
 </svg>
