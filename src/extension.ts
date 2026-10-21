@@ -847,6 +847,7 @@ class Shell {
         summary: ctx.summary,
         // 上一轮未完成的计划：跨轮延续（全部完成就不带了）
         ...(pendingPlan(meta?.plan) ? { plan: pendingPlan(meta?.plan) } : {}),
+        ...(meta?.lastIntent ? { lastIntent: meta.lastIntent } : {}),
       };
       await core.chatSend(params);
     } catch (err) {
@@ -1653,7 +1654,12 @@ class Shell {
       await this.turns.truncate(this.sessionId, snapshot.line);
       await this.truncateSummary(snapshot.line);
       const keptTurns = await this.turns.list(this.sessionId);
-      const lastPlan = keptTurns[keptTurns.length - 1]?.plan;
+      const lastTurn = keptTurns[keptTurns.length - 1];
+      this.sessions.updateLastIntent(
+        this.sessionId,
+        lastTurn ? { mode: lastTurn.mode, intent: lastTurn.intent } : undefined,
+      );
+      const lastPlan = lastTurn?.plan;
       this.panel.setPlan(lastPlan);
       this.sessions.updatePlan(this.sessionId, lastPlan);
       await this.refreshTrajectory();
@@ -1790,6 +1796,13 @@ class Shell {
           p.reused ? "沿用上轮意图" : "",
         ].filter(Boolean);
         this.panel.setHint(`${label}${flags.length ? `（${flags.join("，")}）` : ""} · ${p.reason ?? ""}`);
+        this.sessions.updateLastIntent(this.sessionId, {
+          mode: p.mode,
+          scale: p.scale,
+          needsProposal: p.needsProposal,
+          intent: p.intent,
+          reason: p.reason,
+        });
         if (this.turnUserMessageId) {
           this.panel.addTrajectoryItem({
             id: this.turnUserMessageId,

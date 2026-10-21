@@ -7,6 +7,9 @@
 
 ### Added
 
+- **lastIntent 落盘（协议 v29）**：上一轮意图写入 `session meta.lastIntent`，`chat.send` 每次带回内核；
+  内核重启后第一轮也能判断「是否延续」；聊天回滚时同步回退到保留轮次的意图
+
 - **意图延续改由模型判定**：移除 `继续/接着/好/ok` 正则；每轮都把上一轮意图交给分类器，
   由模型输出 `continue_previous` 决定沿用还是新建意图（`ui.intent.reused` 随之为 true）
 

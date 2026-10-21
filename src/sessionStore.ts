@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Logger } from "./log";
-import type { Mode, PlanStep } from "./protocol";
+import type { LastIntentDto, Mode, PlanStep } from "./protocol";
 
 /** 一条已落盘的消息（追加写，永不修改） */
 export interface StoredMessage {
@@ -35,6 +35,8 @@ export interface SessionMeta {
   statusDetail?: string;
   /** 最近一次计划（跨轮延续 + 重载后恢复面板） */
   plan?: PlanStep[];
+  /** 上一轮意图（跨轮延续；内核重启后仍可用） */
+  lastIntent?: LastIntentDto;
 }
 
 const INDEX_FILE = "index.json";
@@ -177,6 +179,15 @@ export class SessionStore {
     const entry = this.meta(id);
     if (!entry) return;
     entry.title = title.slice(0, 80);
+    this.scheduleIndexWrite();
+  }
+
+  /** 记录上一轮意图（内核重启后由 send 带回去） */
+  updateLastIntent(id: string, lastIntent: LastIntentDto | undefined): void {
+    const entry = this.meta(id);
+    if (!entry) return;
+    entry.lastIntent = lastIntent;
+    entry.updatedAt = Date.now();
     this.scheduleIndexWrite();
   }
 

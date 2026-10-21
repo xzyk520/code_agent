@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 28;
+export const PROTOCOL_VERSION = 29;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -488,6 +488,15 @@ export interface ChatMessage {
   text: string;
 }
 
+/** 上一轮的意图分析结果（壳持久化，内核重启后仍能判断"是否延续"） */
+export interface LastIntentDto {
+  mode: Mode;
+  scale?: "small" | "large";
+  needsProposal?: boolean;
+  intent?: string;
+  reason?: string;
+}
+
 export interface ChatSendParams {
   /** 本轮光标位置（可选；壳会自动附上对应代码块） */
   focus?: FocusDto;
@@ -502,6 +511,10 @@ export interface ChatSendParams {
   history?: ChatMessage[];
   /** 早前轮次的压缩摘要（contextBuilder 产出；内核可选消费） */
   summary?: string;
+  /** 上一轮未完成的计划（跨轮延续） */
+  plan?: PlanStep[];
+  /** 上一轮意图（壳从 session meta 读取，供内核重启后判断延续） */
+  lastIntent?: LastIntentDto;
 }
 
 /** 提案（虚拟文件）：内核把「修正后的代码」暂存在自己那边，壳按需拉取，用户批准后才真正落盘 */
