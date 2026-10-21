@@ -406,7 +406,34 @@
           "order": 26,
           "default": true,
           "markdownDescription": "是否要求工作区被显式信任（不受信任时禁写、禁命令）。"
-        },        "beeCode.focus.autoAttach": {
+        },        "beeCode.attachments.maxCount": {
+          "type": "number",
+          "scope": "window",
+          "order": 48,
+          "default": 10,
+          "minimum": 1,
+          "maximum": 50,
+          "markdownDescription": "单轮最多附加多少段代码/文件。"
+        },
+        "beeCode.attachments.maxCharsPerItem": {
+          "type": "number",
+          "scope": "window",
+          "order": 49,
+          "default": 40000,
+          "minimum": 2000,
+          "maximum": 500000,
+          "markdownDescription": "单个附件最多多少字符；超出截断并标记。"
+        },
+        "beeCode.attachments.maxTotalChars": {
+          "type": "number",
+          "scope": "window",
+          "order": 50,
+          "default": 120000,
+          "minimum": 10000,
+          "maximum": 1000000,
+          "markdownDescription": "本轮所有附件合计最多多少字符；超出时拒绝追加。"
+        },
+        "beeCode.focus.autoAttach": {
           "type": "boolean",
           "scope": "window",
           "order": 41,

@@ -45,6 +45,14 @@ export interface ShellConfig {
   subagent: SubagentConfig;
   /** 面板初始模式（auto = 自动判断） */
   focus: FocusConfig;
+  attachments: AttachmentsConfig;
+}
+
+/** 附件（代码选区/文件）的数量与体积上限 */
+export interface AttachmentsConfig {
+  maxCount: number;
+  maxTotalChars: number;
+  maxCharsPerItem: number;
 }
 
 /** 光标附近代码的读取策略 */
@@ -127,6 +135,11 @@ export function readConfig(): ConfigReadResult {
       dockerImage: reader.str("permissions.dockerImage", "node:22-alpine"),
       requireTrust: reader.bool("permissions.requireTrust", true),
       fullAccess: reader.bool("permissions.fullAccess", false),
+    },
+    attachments: {
+      maxCount: reader.num("attachments.maxCount", 10, 1, 50),
+      maxTotalChars: reader.num("attachments.maxTotalChars", 120_000, 10_000, 1_000_000),
+      maxCharsPerItem: reader.num("attachments.maxCharsPerItem", 40_000, 2_000, 500_000),
     },
     focus: {
       autoAttach: reader.bool("focus.autoAttach", true),

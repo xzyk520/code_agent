@@ -10,7 +10,13 @@ export interface StoredMessage {
   text: string;
   ts: number;
   /** 仅用于回看：思考内容不进入模型上下文，也不参与摘要 */
-  reasoning?: string;
+  reasoning?: string | ReasoningSegment[];
+}
+
+/** 一次模型调用的思考内容（用于分段回看） */
+export interface ReasoningSegment {
+  round: number;
+  text: string;
 }
 
 export type TurnStatus = "idle" | "thinking" | "tool" | "awaiting-decision";

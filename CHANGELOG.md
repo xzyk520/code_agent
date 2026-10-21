@@ -7,6 +7,10 @@
 
 ### Added
 
+- **思考分段与附件上限（协议 v28）**：
+  - 思考内容按模型调用分段（`ui.reasoning.round`），面板显示「思考过程 · 第 N 次调用」，持久化也从字符串升级为数组
+  - 附件限制：`attachments.maxCount`（10）/ `maxCharsPerItem`（40k）/ `maxTotalChars`（120k）；壳与内核双层夹取
+
 - **思考内容持久化**：随 assistant 消息写入会话 JSONL 的 `reasoning` 字段，
   轮次结束 / 切换会话 / 重载后仍以折叠块显示；不进入模型上下文，也不参与摘要
 

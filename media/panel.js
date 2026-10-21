@@ -315,47 +315,56 @@
     setTimeout(() => chip.classList.remove("flash"), 1_200);
   }
 
-  /** 思考内容：一个本轮内复用的可折叠块（只展示，不进上下文、不落盘） */
-  /** @type {HTMLDetailsElement | null} */
-  let reasoningNode = null;
-  /** @type {HTMLElement | null} */
-  let reasoningBody = null;
-  /** 本轮思考文本：state 重渲染后用它把折叠块补回来 */
-  let reasoningText = "";
+  /** 思考内容：按"第几次模型调用"分段显示（只展示，不进上下文，但会随消息落盘） */
+  /** @type {Map<number, { node: HTMLDetailsElement, body: HTMLElement }>} */
+  const reasoningBlocks = new Map();
 
-  function clearReasoningNode() {
-    if (reasoningNode) reasoningNode.remove();
-    reasoningNode = null;
-    reasoningBody = null;
+  function clearLiveReasoning() {
+    for (const entry of reasoningBlocks.values()) entry.node.remove();
+    reasoningBlocks.clear();
   }
 
-  /** @param {boolean} collapsed */
-  function renderReasoning(collapsed) {
-    clearReasoningNode();
-    if (!reasoningText) return;
-    reasoningNode = document.createElement("details");
-    reasoningNode.className = "msg reasoning";
-    reasoningNode.open = !collapsed;
-    const summary = document.createElement("summary");
-    summary.className = "reasoning-title";
-    summary.textContent = "思考过程";
-    reasoningBody = document.createElement("div");
-    reasoningBody.className = "reasoning-body";
-    reasoningBody.textContent = reasoningText;
-    reasoningNode.append(summary, reasoningBody);
-    el.messages.appendChild(reasoningNode);
+  function resetReasoning() {
+    clearLiveReasoning();
   }
 
-  /** 渲染一条"已落盘"的思考块（默认折叠，供回看） */
-  /** @param {string} text */
-  function appendPersistedReasoning(text) {
+  /** @param {number} round @param {string} text */
+  function reasoningDelta(text, round) {
+    if (!text) return;
+    const key = typeof round === "number" && round > 0 ? round : 1;
+    let entry = reasoningBlocks.get(key);
+    if (!entry) {
+      const node = document.createElement("details");
+      node.className = "msg reasoning";
+      node.open = true;
+      const summary = document.createElement("summary");
+      summary.className = "reasoning-title";
+      summary.textContent = key > 1 ? `思考过程 · 第 ${key} 次调用` : "思考过程";
+      const body = document.createElement("div");
+      body.className = "reasoning-body";
+      node.append(summary, body);
+      el.messages.appendChild(node);
+      entry = { node, body };
+      reasoningBlocks.set(key, entry);
+    }
+    entry.body.textContent += text;
+    setMessagesBusy(true);
+    el.messages.scrollTop = el.messages.scrollHeight;
+  }
+
+  function collapseLiveReasoning() {
+    for (const entry of reasoningBlocks.values()) entry.node.open = false;
+  }
+
+  /** @param {string} title @param {string} text */
+  function appendReasoningBlock(title, text) {
     if (!text) return;
     const details = document.createElement("details");
     details.className = "msg reasoning";
     details.open = false;
     const summary = document.createElement("summary");
     summary.className = "reasoning-title";
-    summary.textContent = "思考过程";
+    summary.textContent = title;
     const body = document.createElement("div");
     body.className = "reasoning-body";
     body.textContent = text;
@@ -363,19 +372,18 @@
     el.messages.appendChild(details);
   }
 
-  function resetReasoning() {
-    reasoningText = "";
-    clearReasoningNode();
-  }
-
-  /** @param {string} text */
-  function reasoningDelta(text) {
-    if (!text) return;
-    reasoningText += text;
-    if (!reasoningNode) renderReasoning(false);
-    else if (reasoningBody) reasoningBody.textContent = reasoningText;
-    setMessagesBusy(true);
-    el.messages.scrollTop = el.messages.scrollHeight;
+  /** @param {string | Array<{ round?: number, text?: string }> } reasoning */
+  function appendPersistedReasoning(reasoning) {
+    if (typeof reasoning === "string") {
+      appendReasoningBlock("思考过程", reasoning);
+      return;
+    }
+    if (!Array.isArray(reasoning)) return;
+    for (const segment of reasoning) {
+      const text = typeof segment?.text === "string" ? segment.text : "";
+      const round = typeof segment?.round === "number" ? segment.round : 1;
+      appendReasoningBlock(round > 1 ? `思考过程 · 第 ${round} 次调用` : "思考过程", text);
+    }
   }
 
   /** 右侧会话轨迹：按意图列出每一轮，点击跳到对应消息 */
@@ -618,8 +626,7 @@
         }
         el.trajectoryList.textContent = "";
         trajectoryItems = [];
-        reasoningText = "";
-        clearReasoningNode();
+        clearLiveReasoning();
         clearStreaming();
         subagents.clear();
         planNode = null;
@@ -662,7 +669,7 @@
       case "delta": {
         const text = String(msg.text ?? "");
         // 正文开始：把思考块自动收起（用户仍可展开回看）
-        if (reasoningNode && reasoningNode.open) reasoningNode.open = false;
+        collapseLiveReasoning();
         if (!streamingNode) {
           streamingNode = addMessage("assistant", "");
           setMessagesBusy(true);   // 开始流式：先不自动播报
@@ -690,7 +697,7 @@
         break;
       }
       case "reasoning": {
-        reasoningDelta(String(msg.text ?? ""));
+        reasoningDelta(String(msg.text ?? ""), Number(msg.round ?? 1));
         break;
       }
       case "reasoningReset": {

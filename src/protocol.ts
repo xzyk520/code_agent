@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 27;
+export const PROTOCOL_VERSION = 28;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -579,6 +579,8 @@ export interface UiReadParams {
 export interface UiReasoningParams {
   sessionId: string;
   text: string;
+  /** 第几次模型调用（用于分段显示） */
+  round?: number;
 }
 
 export interface UiUsageParams {

@@ -111,8 +111,8 @@ class Shell {
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
   private turnUserMessageId: string | undefined;
-  /** 本轮思考内容（流式累积；随 assistant 消息落盘，供回看） */
-  private reasoningBuffer = "";
+  /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
+  private readonly reasoningSegments = new Map<number, string>();
   private readonly turnFiles = new Set<string>();
   /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
@@ -172,7 +172,7 @@ class Shell {
       onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
-    });
+    }, this.config.attachments);
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
     this.status.command = "beeCode.chat.ask";
@@ -368,7 +368,11 @@ class Shell {
   }
 
   /** 追加一条消息到磁盘（用户/助手/系统都走这里） */
-  private remember(role: "user" | "assistant" | "system", text: string, reasoning?: string): void {
+  private remember(
+    role: "user" | "assistant" | "system",
+    text: string,
+    reasoning?: string | Array<{ round: number; text: string }>,
+  ): void {
     if (!text.trim()) return;
     this.sessions.append(this.sessionId, {
       id: `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -753,7 +757,7 @@ class Shell {
     this.focusHighlight.clear();
 
     // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
-    let effectiveAttachments = attachments;
+    let effectiveAttachments = clampAttachments(attachments, this.config.attachments);
     let focus: FocusInfo | undefined;
     if (autoFocus && attachments.length === 0 && this.config.focus.autoAttach) {
       focus = await readFocusAtCursor({
@@ -780,7 +784,7 @@ class Shell {
     this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
     this.panel.setCost("");
     this.panel.resetReasoning();
-    this.reasoningBuffer = "";
+    this.reasoningSegments.clear();
     this.remember("user", userText);
     this.setBusy(true);
     this.assistantBuffer = "";
@@ -822,7 +826,10 @@ class Shell {
       if (assistantText.trim()) {
         // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
         this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text: assistantText });
-        this.remember("assistant", assistantText, this.reasoningBuffer || undefined);
+        const segments = [...this.reasoningSegments.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([round, text]) => ({ round, text }));
+        this.remember("assistant", assistantText, segments.length > 0 ? segments : undefined);
         this.assistantBuffer = "";
       }
       // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
@@ -1731,8 +1738,9 @@ class Shell {
       }
       case "ui.reasoning": {
         const p = params as UiReasoningParams;
-        this.reasoningBuffer += p.text;
-        this.panel.reasoningDelta(p.text);
+        const round = typeof p.round === "number" && p.round > 0 ? p.round : 1;
+        this.reasoningSegments.set(round, (this.reasoningSegments.get(round) ?? "") + p.text);
+        this.panel.reasoningDelta(p.text, round);
         return;
       }
       case "ui.intent": {
@@ -1976,6 +1984,25 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
     return history.slice(0, -1);
   }
   return history;
+}
+
+/** 防御性夹取：面板状态可能来自旧版本或被篡改 */
+function clampAttachments(
+  items: AttachedContext[],
+  limits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
+): AttachedContext[] {
+  const out: AttachedContext[] = [];
+  let total = 0;
+  for (const item of items.slice(0, limits.maxCount)) {
+    let text = item.text ?? "";
+    if (text.length > limits.maxCharsPerItem) {
+      text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+    }
+    if (total + text.length > limits.maxTotalChars) break;
+    total += text.length;
+    out.push({ ...item, ...(text.length > 0 ? { text } : {}) });
+  }
+  return out;
 }
 
 /** 未完成的计划（全部 done 就没必要再带给模型） */

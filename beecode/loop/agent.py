@@ -347,7 +347,7 @@ class AgentLoop:
         try:
             while stats.steps < max_steps:
                 stats.steps += 1
-                answer, calls, usage, reasoning = await self._stream(client, messages, session, stats)
+                answer, calls, usage, reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
                 self._emit_usage(session, stats, started_at)
                 budget_hit = self._budget_reason(stats, started_at)
                 if budget_hit:
@@ -424,7 +424,7 @@ class AgentLoop:
                     "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
                                "如果不需要改，请明确说明原因。",
                 })
-                answer, calls, _usage, reasoning = await self._stream(client, messages, session, stats)
+                answer, calls, _usage, reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
                 if calls:
                     assistant_msg = _assistant_tool_message(answer, calls)
                     self._attach_reasoning(assistant_msg, reasoning)
@@ -435,7 +435,7 @@ class AgentLoop:
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
-                    answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats)
+                    answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
                 final_text = answer
         finally:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
@@ -575,6 +575,7 @@ class AgentLoop:
         stats: TurnStats,
         *,
         allow_tools: bool = True,
+        round_index: int = 1,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         """一次模型调用。
 
@@ -586,7 +587,7 @@ class AgentLoop:
         model_name = str(session.model_config.get("model") or "")
         await self._compact(client, messages, session)
         try:
-            result = await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
+            result = await self._stream_once(client, messages, session, stats, allow_tools=allow_tools, round_index=round_index)
             if has_image_parts(messages):
                 remember(model_name, base_url, True)
             return result
@@ -612,7 +613,7 @@ class AgentLoop:
                     "msg": "当前模型不接受图片：本轮已改为文字描述，后续不再发送图片。",
                 },
             )
-            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
+            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools, round_index=round_index)
         except ReasoningReplayRequired as exc:
             if self._replay_reasoning or str(session.model_config.get("reasoningReplay") or "auto").lower() == "never":
                 raise
@@ -629,6 +630,7 @@ class AgentLoop:
         stats: TurnStats,
         *,
         allow_tools: bool = True,
+        round_index: int = 1,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -645,7 +647,7 @@ class AgentLoop:
                 self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
             if delta.reasoning:
                 reasoning_parts.append(delta.reasoning)
-                self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning})
+                self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning, "round": round_index})
 
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
@@ -767,7 +769,7 @@ class AgentLoop:
             },
         )
         messages.append({"role": "user", "content": notice})
-        answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, allow_tools=False)
+        answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, allow_tools=False, round_index=stats.steps)
         return answer
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:

@@ -99,6 +99,11 @@ class Session:
         return out
 
 
+#: 附件防御性上限（壳已限制，这里是最后一道）
+MAX_ATTACHMENT_CHARS = 40_000
+MAX_ATTACHMENT_TOTAL = 120_000
+
+
 def _format_user_content(
     text: str,
     attachments: list[dict[str, Any]],
@@ -134,7 +139,9 @@ def _format_user_content(
             where += f" 第 {start}-{end} 行"
         if item.get("untitled"):
             where += "（未保存）"
-        body = item.get("text") or ""
+        body = str(item.get("text") or "")
+        if len(body) > MAX_ATTACHMENT_CHARS:
+            body = body[:MAX_ATTACHMENT_CHARS] + "\n…（附件已截断）"
         if item.get("kind") == "focus":
             header = f"【光标附近的代码】{where}"
             symbol = item.get("symbol")
@@ -145,6 +152,8 @@ def _format_user_content(
             blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
 
     text_part = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
+    if len(text_part) > MAX_ATTACHMENT_TOTAL:
+        text_part = text_part[:MAX_ATTACHMENT_TOTAL] + "\n…（附件总量超限，已截断）"
     if not images:
         return text_part
     return [{"type": "text", "text": text_part}, *images]

@@ -6,8 +6,8 @@ export interface ChatMessageView {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
-  /** 回看用的思考内容（不进入模型上下文） */
-  reasoning?: string;
+  /** 回看用的思考内容（不进入模型上下文）；数组 = 按模型调用分段 */
+  reasoning?: string | Array<{ round: number; text: string }>;
 }
 
 export interface AttachedContext {
@@ -96,6 +96,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly handlers: PanelHandlers,
+    private readonly attachmentLimits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -182,9 +183,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "plan", ...params });
   }
 
-  /** 思考内容增量（面板折叠块，不进上下文） */
-  reasoningDelta(text: string): void {
-    this.post({ type: "reasoning", text });
+  /** 思考内容增量（按模型调用分段，不进上下文） */
+  reasoningDelta(text: string, round = 1): void {
+    this.post({ type: "reasoning", text, round });
   }
 
   /** 新一轮开始：清掉上一轮的思考块 */
@@ -245,9 +246,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "proposals", items });
   }
 
-  addAttachment(attachment: AttachedContext): void {
-    this.state.attachments.push(attachment);
+  /** 追加附件（带数量/体积上限）；返回是否成功 */
+  addAttachment(attachment: AttachedContext): boolean {
+    const limits = this.attachmentLimits;
+    if (this.state.attachments.length >= limits.maxCount) {
+      this.setHint(`最多附加 ${limits.maxCount} 段，已忽略新的附件。`);
+      return false;
+    }
+    let text = attachment.text ?? "";
+    if (text.length > limits.maxCharsPerItem) {
+      text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+    }
+    const current = this.state.attachments.reduce((sum, item) => sum + (item.text?.length ?? 0), 0);
+    if (current + text.length > limits.maxTotalChars) {
+      this.setHint(`附件总量超过 ${limits.maxTotalChars} 字符，已忽略新的附件。`);
+      return false;
+    }
+    this.state.attachments.push({ ...attachment, ...(text.length > 0 ? { text } : {}) });
     this.post({ type: "attachments", items: this.state.attachments });
+    return true;
   }
 
   clearAttachments(): void {
