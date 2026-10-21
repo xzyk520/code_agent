@@ -80,9 +80,11 @@ class TurnConfig:
     keep_raw_tool_results: int = 3
     #: 大任务放宽后的步数上限
     large_task_steps: int = 24
-    #: 单轮 token / 墙钟预算
+    #: 单轮 token / 墙钟预算（普通任务）
     max_turn_tokens: int = 200_000
-    max_turn_seconds: float = 900.0
+    max_turn_seconds: float = 600.0
+    #: 大任务的墙钟预算（按意图 scale 切换）
+    large_task_seconds: float = 1_800.0
 
 
 @dataclass(slots=True)
@@ -134,6 +136,8 @@ class AgentLoop:
         self._plan: list[dict[str, str]] | None = None
         #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
         self._replay_reasoning = False
+        #: 本轮墙钟预算（按 scale 动态设置）
+        self._turn_time_budget = self._config.max_turn_seconds
         #: assistant 消息 → 思考内容（按对象 id 记，便于稍后补上 replay 字段）
         self._reasoning_by_msg: dict[int, str] = {}
 
@@ -268,8 +272,11 @@ class AgentLoop:
         replay_setting = str(session.model_config.get("reasoningReplay") or "auto").lower()
         self._replay_reasoning = replay_setting == "always"
         max_steps = self._config.max_steps
+        time_budget = self._config.max_turn_seconds
         if intent is not None and intent.scale == "large":
             max_steps = max(max_steps, self._config.large_task_steps)
+            time_budget = self._config.large_task_seconds
+        self._turn_time_budget = time_budget
         started_at = asyncio.get_running_loop().time()
         budget_hit: str | None = None
         forced_end = False
@@ -815,8 +822,8 @@ class AgentLoop:
         if used > self._config.max_turn_tokens:
             return f"token {used} > {self._config.max_turn_tokens}"
         elapsed = asyncio.get_running_loop().time() - started_at
-        if elapsed > self._config.max_turn_seconds:
-            return f"耗时 {elapsed:.0f}s > {self._config.max_turn_seconds:.0f}s"
+        if elapsed > self._turn_time_budget:
+            return f"耗时 {elapsed:.0f}s > {self._turn_time_budget:.0f}s"
         return None
 
     def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:

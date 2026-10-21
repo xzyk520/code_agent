@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 29;
+export const PROTOCOL_VERSION = 30;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -443,8 +443,10 @@ export interface InitializeParams {
   largeTaskSteps?: number;
   /** 一轮的 token 预算（输入 + 输出） */
   maxTurnTokens?: number;
-  /** 一轮的墙钟预算（秒） */
+  /** 一轮的墙钟预算（秒）；普通任务用 */
   maxTurnSeconds?: number;
+  /** 大任务的墙钟预算（秒）；按意图规模动态切换 */
+  largeTaskSeconds?: number;
   checkpointEnabled?: boolean;
   /** 只在握手时通过 stdin 传入；内核只应放内存，不落盘、不进日志 */
   apiKey?: string;

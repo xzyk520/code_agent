@@ -50,7 +50,8 @@ _state: dict[str, Any] = {
     "tool_timeout_ms": 60_000,
     "large_task_steps": 24,
     "max_turn_tokens": 200_000,
-    "max_turn_seconds": 900.0,
+    "max_turn_seconds": 600.0,
+    "large_task_seconds": 1_800.0,
     "subagent_config": {},
     "subagent_api_key": None,
 }
@@ -91,7 +92,8 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
     _state["large_task_steps"] = int(params.get("largeTaskSteps") or 24)
     _state["max_turn_tokens"] = int(params.get("maxTurnTokens") or 200_000)
-    _state["max_turn_seconds"] = float(params.get("maxTurnSeconds") or 900)
+    _state["max_turn_seconds"] = float(params.get("maxTurnSeconds") or 600)
+    _state["large_task_seconds"] = float(params.get("largeTaskSeconds") or 1800)
     _state["subagent_config"] = dict(params.get("subagentConfig") or {})
     _state["subagent_api_key"] = params.get("subagentApiKey")
 
@@ -171,7 +173,8 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             context_window_tokens=int((_state.get("model_config") or {}).get("contextWindow") or 32_768),
             large_task_steps=int(_state.get("large_task_steps") or 24),
             max_turn_tokens=int(_state.get("max_turn_tokens") or 200_000),
-            max_turn_seconds=float(_state.get("max_turn_seconds") or 900),
+            max_turn_seconds=float(_state.get("max_turn_seconds") or 600),
+            large_task_seconds=float(_state.get("large_task_seconds") or 1800),
         ),
         propose=_propose,
         log=_log,

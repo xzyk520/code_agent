@@ -538,14 +538,23 @@
           "maximum": 2000000,
           "markdownDescription": "单轮 token 预算（输入 + 输出累计）。用尽后 agent 会收尾并报告未完成部分。"
         },
+        "beeCode.agent.largeTaskSeconds": {
+          "type": "number",
+          "scope": "window",
+          "order": 51,
+          "default": 1800,
+          "minimum": 60,
+          "maximum": 14400,
+          "markdownDescription": "意图判定为「大任务」时的单轮墙钟预算（秒）；普通任务用 `beeCode.agent.maxTurnSeconds`。"
+        },
         "beeCode.agent.maxTurnSeconds": {
           "type": "number",
           "scope": "window",
           "order": 47,
-          "default": 900,
+          "default": 600,
           "minimum": 60,
           "maximum": 7200,
-          "markdownDescription": "单轮墙钟预算（秒）。超时后 agent 会收尾并报告未完成部分。"
+          "markdownDescription": "普通任务的单轮墙钟预算（秒）。超时后 agent 会收尾并报告未完成部分；大任务另见 `largeTaskSeconds`。"
         },
         "beeCode.agent.maxSteps": {
           "type": "number",

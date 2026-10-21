@@ -112,6 +112,8 @@ class Shell {
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
   private turnUserMessageId: string | undefined;
+  /** 本轮意图规模（决定墙钟预算） */
+  private turnScale: "small" | "large" = "small";
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -701,6 +703,7 @@ class Shell {
         largeTaskSteps: this.config.largeTaskSteps,
         maxTurnTokens: this.config.maxTurnTokens,
         maxTurnSeconds: this.config.maxTurnSeconds,
+        largeTaskSeconds: this.config.largeTaskSeconds,
         checkpointEnabled: this.config.checkpointEnabled,
         ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),
         subagentConfig: {
@@ -821,6 +824,7 @@ class Shell {
     this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
     this.panel.setCost("");
     this.panel.resetReasoning();
+    this.turnScale = "small";
     this.reasoningSegments.clear();
     this.remember("user", userText);
     this.setBusy(true);
@@ -1676,7 +1680,10 @@ class Shell {
       await this.refreshTrajectory();
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
-      await this.noteRollback(picked.id, picked.label, true);
+      const intentNote = lastTurn
+        ? `意图已回退到「${lastTurn.intent}」（${lastTurn.mode}${lastTurn.scale ? ` · ${lastTurn.scale === "large" ? "大任务" : "小任务"}` : ""}）。`
+        : "意图已清空（没有保留的轮次）。";
+      await this.noteRollback(picked.id, picked.label, true, intentNote);
       void vscode.window.showInformationMessage(
         `Bee Code: 已回滚代码与聊天记录（截断到第 ${snapshot.line} 行，恢复 ${result.restored.length} 个文件）。`,
       );
@@ -1689,11 +1696,17 @@ class Shell {
     );
   }
   /** 回滚后写一条系统消息，并把它记成一轮"意图"，让后续摘要能覆盖这次回滚 */
-  private async noteRollback(checkpointId: string, label: string, withChat: boolean): Promise<void> {
-    const text = withChat
+  private async noteRollback(
+    checkpointId: string,
+    label: string,
+    withChat: boolean,
+    intentNote?: string,
+  ): Promise<void> {
+    const base = withChat
       ? `【回滚通知】已把代码与聊天记录一起回滚到检查点 ${checkpointId.slice(0, 8)}（${label}）。此前的对话记录已截断，请以当前文件内容为准。`
       : `【回滚通知】代码已回滚到检查点 ${checkpointId.slice(0, 8)}（${label}），聊天记录保留。` +
         "此前提到的文件改动可能已不在磁盘上；请以当前文件内容为准，需要时重新读取确认。";
+    const text = intentNote ? `${base} ${intentNote}` : base;
     this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text });
     this.remember("system", text);
     const all = await this.sessions.open(this.sessionId);
@@ -1797,6 +1810,7 @@ class Shell {
       case "ui.intent": {
         const p = params as UiIntentParams;
         // 意图分析本身不展示（不产生消息）；面板只更新模式徽标与提示
+        this.turnScale = p.scale === "large" ? "large" : "small";
         this.turnIntent = {
           intent: p.intent,
           mode: p.mode,
@@ -1858,7 +1872,8 @@ class Shell {
         const tokens = (p.inputTokens ?? 0) + (p.outputTokens ?? 0);
         const seconds = (p.elapsedMs ?? 0) / 1000;
         const nearTokens = tokens > this.config.maxTurnTokens * 0.8;
-        const nearTime = seconds > this.config.maxTurnSeconds * 0.8;
+        const timeBudget = this.turnScale === "large" ? this.config.largeTaskSeconds : this.config.maxTurnSeconds;
+        const nearTime = seconds > timeBudget * 0.8;
         const fmtTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
         this.panel.setCost(
           `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens || nearTime ? " · ⚠ 接近预算" : ""}`,
