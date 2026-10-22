@@ -83,6 +83,85 @@ export class CheckpointAdapter implements vscode.Disposable {
     });
   }
 
+  /**
+   * 命令级 checkpoint：返回相对于指定快照的变更文件。
+   *
+   * 先把工作区 stage 到影子索引（不碰项目 .git），这样新增文件也能被 diff 到；
+   * 返回的是工作区相对路径。
+   */
+  async diff(id: string): Promise<string[]> {
+    return this.serialize(async () => {
+      if (!this.available) return [];
+      if (!id) return [];
+      await this.ensureRepo();
+      await this.git(["add", "-A", "--", "."]);
+      const out = await this.git(["diff", "--cached", "--name-status", id, "--", "."]);
+      const files: string[] = [];
+      for (const line of out.split("\n")) {
+        const parts = line.trim().split("\t");
+        if (parts.length === 0 || !parts[0]) continue;
+        const status = parts[0][0];
+        const target = status === "R" || status === "C" ? parts[2] : parts[1];
+        if (target) files.push(target);
+      }
+      return [...new Set(files)];
+    });
+  }
+
+  /**
+   * 只恢复指定文件到快照状态：
+   *   - 快照里没有、命令新增的 → 删除
+   *   - 快照里有、命令修改/删除的 → checkout 回来
+   * 不影响工作区里其他文件。
+   */
+  async restorePaths(id: string, paths: string[]): Promise<string[]> {
+    return this.serialize(async () => {
+      if (!this.available) throw new Error("检查点未启用（beeCode.checkpoint.enabled=false 或没有工作区）");
+      if (!id) throw new Error("缺少检查点 id");
+      const wanted = paths
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0)
+        .filter((p) => !path.isAbsolute(p) && !p.startsWith(".."));
+      if (wanted.length === 0) return [];
+      await this.ensureRepo();
+      await this.git(["add", "-A", "--", "."]);
+      const out = await this.git(["diff", "--cached", "--name-status", id, "--", ...wanted]);
+      const restored: string[] = [];
+      const checkout: string[] = [];
+      for (const line of out.split("\n")) {
+        const parts = line.trim().split("\t");
+        if (parts.length === 0 || !parts[0]) continue;
+        const status = parts[0][0];
+        if (status === "A") {
+          const rel = parts[1] ?? "";
+          const file = path.resolve(this.workTree, rel);
+          const inside = path.relative(path.resolve(this.workTree), file);
+          if (rel && inside && !inside.startsWith("..") && !path.isAbsolute(inside)) {
+            await fs.promises.rm(file, { force: true });
+            restored.push(rel);
+          }
+        } else if (status === "R" || status === "C") {
+          const target = parts[2] ?? "";
+          const file = path.resolve(this.workTree, target);
+          const inside = path.relative(path.resolve(this.workTree), file);
+          if (target && inside && !inside.startsWith("..") && !path.isAbsolute(inside)) {
+            await fs.promises.rm(file, { force: true });
+            restored.push(target);
+          }
+          if (parts[1]) checkout.push(parts[1]);
+        } else if (parts[1]) {
+          checkout.push(parts[1]);
+        }
+      }
+      if (checkout.length > 0) {
+        await this.git(["checkout", id, "--", ...checkout]);
+        restored.push(...checkout);
+      }
+      this.logger.info(`命令级恢复 ${id.slice(0, 8)}：${restored.length} 个文件`);
+      return [...new Set(restored)];
+    });
+  }
+
   /** 从 git 历史读（不依赖内存），重载窗口后仍能列出旧检查点 */
   async list(): Promise<CheckpointRecord[]> {
     return this.serialize(() => this.listInner());

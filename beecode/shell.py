@@ -456,15 +456,14 @@ class ShellClient:
         cwd: str | None = None,
         timeout_ms: int | None = None,
         rpc_timeout: float = 600.0,
-        sandbox: str = "sandbox",
+        sandbox: str = "sandbox-readonly",
         justification: str = "",
     ) -> RunResult:
         """在工作区内执行命令。
 
-        `sandbox="sandbox"`：Docker 沙箱，无网络；壳会首次/会话审批。
-        `sandbox="sandbox-network"`：Docker 沙箱 + 网络；每次都要审批。
-        `sandbox="host"`：跳出沙箱在真实系统 Shell 执行；每次危险审批。
-        `sandbox-network` / `host` 必须提供 `justification`。
+        权限从低到高：`sandbox-readonly`（默认，Docker 只读）→
+        `sandbox`（Docker 工作区可写）→ `sandbox-network`（Docker + 网络）→
+        `host`（真实系统）。每一级升级都需要用户审批；非默认级必须 `justification`。
 
         ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
         需要确认时会弹窗。不要用它做只读探测——读文件用 `read_file`。

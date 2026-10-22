@@ -44,7 +44,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -94,6 +94,67 @@
   /** @param {boolean} busy */
   function setMessagesBusy(busy) {
     el.messages.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
+  /** 命令级 checkpoint 卡片：变更文件 + 一键撤销 */
+  /** @param {{ id?: string, files?: string[], command?: string }} item */
+  function renderCommandCheckpoint(item) {
+    const id = String(item.id || "");
+    if (!id) return;
+    if (el.messages.querySelector(`[data-checkpoint-id="${id}"]`)) return;
+
+    const card = document.createElement("div");
+    card.className = "msg command-checkpoint";
+    card.dataset.checkpointId = id;
+
+    const head = document.createElement("div");
+    head.className = "cc-head";
+    const title = document.createElement("span");
+    const files = Array.isArray(item.files) ? item.files : [];
+    title.textContent = `命令修改了 ${files.length} 个文件`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cc-restore";
+    button.textContent = "撤销本次修改";
+    head.append(title, button);
+
+    const command = document.createElement("div");
+    command.className = "cc-command";
+    command.textContent = String(item.command || "");
+
+    const details = document.createElement("details");
+    details.className = "cc-files";
+    const summary = document.createElement("summary");
+    summary.textContent = "查看变更文件";
+    const list = document.createElement("ul");
+    for (const file of files.slice(0, 100)) {
+      const li = document.createElement("li");
+      li.textContent = file;
+      list.appendChild(li);
+    }
+    if (files.length > 100) {
+      const more = document.createElement("li");
+      more.textContent = `…还有 ${files.length - 100} 个`;
+      list.appendChild(more);
+    }
+    details.append(summary, list);
+    card.append(head, command, details);
+    el.messages.appendChild(card);
+    el.messages.scrollTop = el.messages.scrollHeight;
+  }
+
+  /** @param {string} id @param {number} files */
+  function markCommandRestored(id, files) {
+    const card = el.messages.querySelector(`[data-checkpoint-id="${id}"]`);
+    if (!(card instanceof HTMLElement)) return;
+    card.classList.add("restored");
+    const button = card.querySelector(".cc-restore");
+    if (button instanceof HTMLButtonElement) {
+      button.disabled = true;
+      button.textContent = "已恢复";
+    }
+    const title = card.querySelector(".cc-head span");
+    if (title) title.textContent = `已恢复 ${files} 个文件`;
   }
 
   /**
@@ -352,6 +413,16 @@
   el.messages.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    const restore = target.closest(".cc-restore");
+    if (restore instanceof HTMLButtonElement) {
+      const card = restore.closest(".command-checkpoint");
+      if (card instanceof HTMLElement && card.dataset.checkpointId) {
+        restore.disabled = true;
+        restore.textContent = "撤销中…";
+        post({ type: "restoreCommand", id: card.dataset.checkpointId });
+      }
+      return;
+    }
     const button = target.closest(".code-copy");
     if (!(button instanceof HTMLButtonElement)) return;
     const block = button.closest(".code-block");
@@ -1114,6 +1185,7 @@
         clearLiveReasoning();
         clearStreaming();
         subagents.clear();
+        for (const checkpoint of next.commandCheckpoints || []) renderCommandCheckpoint(checkpoint);
         planNode = null;
         readChips.clear();
         el.reads.textContent = "";
@@ -1209,6 +1281,14 @@
       }
       case "plan": {
         renderPlan(/** @type {Array<{ text?: unknown, status?: unknown }>} */ (msg.steps));
+        break;
+      }
+      case "commandCheckpoint": {
+        renderCommandCheckpoint(/** @type {{ id?: string, files?: string[], command?: string }} */ (msg.item));
+        break;
+      }
+      case "commandCheckpointRestored": {
+        markCommandRestored(String(msg.id ?? ""), Number(msg.files ?? 0));
         break;
       }
       case "subagent": {

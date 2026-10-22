@@ -62,13 +62,13 @@ export function createRunAdapter(deps: RunAdapterDeps) {
       const timeoutMs = clamp(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000, MAX_TIMEOUT_MS);
       const policy = deps.policy();
       const requested = params.sandbox ?? "auto";
-      if ((requested === "sandbox" || requested === "sandbox-network") && !deps.dockerAvailable()) {
+      if ((requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network") && !deps.dockerAvailable()) {
         throw new Error("请求在 Docker 沙箱内执行，但当前环境找不到 docker；如确需真实环境执行，请用 sandbox=host 并说明理由。");
       }
       const useDocker =
         requested === "host"
           ? false
-          : requested === "sandbox" || requested === "sandbox-network"
+          : requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network"
             ? true
             : policy.sandbox === "docker" || (policy.sandbox === "auto" && deps.dockerAvailable());
 
@@ -86,6 +86,7 @@ export function createRunAdapter(deps: RunAdapterDeps) {
             command,
             timeoutMs,
             ctx.signal,
+            requested !== "sandbox-readonly",
             requested === "sandbox-network",
           )
         : await runDirect(deps, cwd, command, timeoutMs, ctx.signal);
@@ -106,9 +107,11 @@ export function createRunAdapter(deps: RunAdapterDeps) {
             ? "host"
             : requested === "sandbox-network"
               ? "docker-network"
-              : useDocker
-                ? "docker"
-                : "none",
+              : requested === "sandbox-readonly"
+                ? "docker-readonly"
+                : useDocker
+                  ? "docker"
+                  : "none",
         killed: result.killed,
       };
     },
@@ -202,6 +205,7 @@ function runInDocker(
   command: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  workspaceWritable = true,
   network = false,
 ): Promise<RawResult> {
   const relative = path.relative(root, cwd).split(path.sep).join("/");
@@ -223,7 +227,7 @@ function runInDocker(
     "--tmpfs",
     "/tmp",
     "-v",
-    `${root}:/workspace`,
+    `${root}:/workspace${workspaceWritable ? "" : ":ro"}`,
     "-w",
     workdir,
     "--memory",

@@ -207,8 +207,8 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（必须用户批准）。按最小权限逐级申请：默认 sandbox（无网络）；"
-            "需要下载依赖/访问网络时才用 sandbox-network；只有必须真实系统（如安装系统包）才用 host。"
+            "在工作区内执行命令（必须用户批准）。按最小权限逐级申请：默认 sandbox-readonly（Docker 只读）；"
+            "需要写工作区才用 sandbox；需要下载依赖/访问网络才用 sandbox-network；只有必须真实系统才用 host。"
             "每升一级都要填写 justification，不要一次性申请不必要的权限。",
             _obj(
                 {
@@ -217,10 +217,10 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                     "timeout_ms": _int("超时毫秒（默认使用长工具时限，通常 600000）"),
                     "sandbox": {
                         "type": "string",
-                        "enum": ["sandbox", "sandbox-network", "host"],
-                        "description": "sandbox = Docker 沙箱，无网络（默认）；sandbox-network = Docker 沙箱 + 网络（需用户逐次批准）；host = 跳出沙箱在真实系统 Shell 执行（最高风险，需用户逐次批准）",
+                        "enum": ["sandbox-readonly", "sandbox", "sandbox-network", "host"],
+                        "description": "权限从低到高：sandbox-readonly（默认，Docker 只读）< sandbox（Docker 工作区可写）< sandbox-network（Docker + 网络）< host（真实系统）。每一级升级都需用户审批和 justification，按需逐级申请。",
                     },
-                    "justification": _str("申请 sandbox-network 或 host 时的理由（会展示给用户审批）"),
+                    "justification": _str("申请 sandbox 及以上权限时的理由（会展示给用户审批）"),
                 },
                 ["command"],
             ),

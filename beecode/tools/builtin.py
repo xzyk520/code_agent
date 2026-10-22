@@ -175,11 +175,11 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
 
 
 async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    sandbox = str(params.get("sandbox") or "sandbox")
-    if sandbox not in ("sandbox", "sandbox-network", "host"):
-        raise ValueError("sandbox 只能是 sandbox、sandbox-network 或 host")
+    sandbox = str(params.get("sandbox") or "sandbox-readonly")
+    if sandbox not in ("sandbox-readonly", "sandbox", "sandbox-network", "host"):
+        raise ValueError("sandbox 只能是 sandbox-readonly、sandbox、sandbox-network 或 host")
     justification = str(params.get("justification") or "").strip()
-    if sandbox != "sandbox" and not justification:
+    if sandbox != "sandbox-readonly" and not justification:
         raise ValueError(f"sandbox={sandbox} 必须提供 justification，说明为什么需要额外权限")
     timeout_ms = _int_or_none(params.get("timeout_ms"))
     if timeout_ms is None:

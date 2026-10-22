@@ -57,6 +57,8 @@ export interface PanelHandlers {
   onAbort(): void;
   /** 点击「已读取文件」chip：打开文件并定位到行范围 */
   onOpenRead(path: string, startLine?: number, endLine?: number): void;
+  /** 撤销某条命令造成的文件修改 */
+  onRestoreCommand(id: string): void;
   /** 附件被截断/忽略时给用户的明确提示（toast + 面板系统消息） */
   onAttachmentNotice(message: string): void;
 }
@@ -81,6 +83,7 @@ export interface PanelState {
   attachments: AttachedContext[];
   plan?: PlanStep[];
   turns?: TurnView[];
+  commandCheckpoints?: Array<{ id: string; files: string[]; command: string }>;
   hint?: string;
 }
 
@@ -149,6 +152,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   restore(messages: ChatMessageView[], mode?: PanelState["mode"]): void {
     this.state.messages = messages.slice(-MAX_MESSAGES);
+    this.state.commandCheckpoints = [];
     if (mode) this.state.mode = mode;
     this.pushState();   // 全量快照：重载/切换会话时才需要
   }
@@ -200,6 +204,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 
   /** 计划清单（大任务时由 update_plan 产生） */
+  /** 命令级 checkpoint：命令结束后显示变更文件与撤销按钮 */
+  commandCheckpointEvent(item: { id: string; files: string[]; command: string }): void {
+    const list = this.state.commandCheckpoints ?? [];
+    if (!list.some((entry) => entry.id === item.id)) {
+      list.push(item);
+      this.state.commandCheckpoints = list;
+    }
+    this.post({ type: "commandCheckpoint", item });
+  }
+
+  commandCheckpointRestored(id: string, files: number): void {
+    this.state.commandCheckpoints = (this.state.commandCheckpoints ?? []).filter((entry) => entry.id !== id);
+    this.post({ type: "commandCheckpointRestored", id, files });
+  }
+
   planEvent(params: UiPlanParams): void {
     this.state.plan = params.steps;
     this.post({ type: "plan", ...params });
@@ -391,6 +410,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "stop":
         this.handlers.onAbort();
         return;
+      case "restoreCommand": {
+        const id = typeof msg.id === "string" ? msg.id : "";
+        if (id) this.handlers.onRestoreCommand(id);
+        return;
+      }
       case "openRead": {
         const target = parseOpenRead(msg);
         if (target) this.handlers.onOpenRead(target.path, target.startLine, target.endLine);

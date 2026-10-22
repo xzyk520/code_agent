@@ -133,8 +133,10 @@ class Shell {
   };
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
-  /** 已在“本会话”批准过 Docker 沙箱执行的会话 */
-  private readonly sandboxApprovedSessions = new Set<string>();
+  /** 每个会话已批准的最高沙箱权限等级 */
+  private readonly sandboxApprovals = new Map<string, number>();
+  /** 命令级 checkpoint：命令结束后可一键撤销 */
+  private readonly commandCheckpoints = new Map<string, { files: string[]; command: string; createdAt: number }>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
   private readonly attachmentNotices: string[] = [];
   private attachmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -197,6 +199,7 @@ class Shell {
       onShowProposal: (id) => void this.showProposal(id),
       onAbort: () => void this.abort(),
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
+      onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments);
 
@@ -1291,21 +1294,28 @@ class Shell {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) throw deniedError("未打开工作区");
 
-    const requested =
+    const ranks = {
+      "sandbox-readonly": 0,
+      sandbox: 1,
+      "sandbox-network": 2,
+      host: 3,
+    } as const;
+    type SandboxLevel = keyof typeof ranks;
+    const requested: SandboxLevel =
       params.sandbox === "host"
         ? "host"
         : params.sandbox === "sandbox-network"
           ? "sandbox-network"
           : params.sandbox === "sandbox"
             ? "sandbox"
-            : "auto";
-    // 没有 Docker 时，基础 sandbox 请求退回原有 auto 行为；需要网络的 sandbox 不能伪造
-    if (requested === "sandbox-network" && !this.dockerAvailable) {
-      throw deniedError("没有 Docker：无法提供带网络的沙箱。如确需真实环境，请用 sandbox=host 并说明理由");
+            : "sandbox-readonly";
+    if (requested !== "host" && !this.dockerAvailable) {
+      throw deniedError(
+        "没有 Docker：无法提供沙箱环境。如确需在真实系统执行，请用 sandbox=host 并说明理由；不要静默降级为直接执行。",
+      );
     }
-    const effectiveParams: RunParams =
-      requested === "sandbox" && !this.dockerAvailable ? { ...params, sandbox: undefined } : params;
-    if (requested !== "sandbox" && requested !== "auto" && !(params.justification ?? "").trim()) {
+    const effectiveParams: RunParams = { ...params, sandbox: requested };
+    if (requested !== "sandbox-readonly" && !(params.justification ?? "").trim()) {
       throw deniedError(`sandbox=${requested} 必须提供 justification，说明为什么需要额外权限`);
     }
 
@@ -1322,8 +1332,48 @@ class Shell {
 
     let gateHandled = false;
     const roleLabel = role === "subagent" ? "子代理" : "主 agent";
-    if (requested === "host") {
-      // 跳出沙箱：必须逐次审批，不提供“本会话都允许”
+    const approved = this.sandboxApprovals.get(this.sessionId) ?? -1;
+    if (requested !== "host" && this.dockerAvailable && ranks[requested] > approved) {
+      const labels: Record<SandboxLevel, { question: string; detail: string }> = {
+        "sandbox-readonly": {
+          question: "允许 agent 在 Docker 只读沙箱内执行命令吗？",
+          detail: "沙箱：根文件系统只读、工作区只读、无网络、capability 清空、内存/PID 限制。适合查询、构建检查等不需要写文件的命令。",
+        },
+        sandbox: {
+          question: "允许 agent 在 Docker 沙箱内写入工作区吗？",
+          detail: "额外权限：工作区可写。根文件系统仍只读、无网络；命令可以修改或创建项目文件。",
+        },
+        "sandbox-network": {
+          question: "允许 agent 在 Docker 沙箱内访问网络吗？",
+          detail: "额外权限：网络访问（Docker bridge）。工作区可写、根只读；可下载依赖、访问外部服务，也可能泄露请求内容。",
+        },
+        host: { question: "", detail: "" },
+      };
+      const spec = labels[requested];
+      const answer = await this.confirm.ask(
+        {
+          question: spec.question,
+          detail:
+            `${roleLabel} 请求权限：${requested}\n\n` +
+            `命令：${params.command}\n` +
+            `目录：${cwdAbs}\n` +
+            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
+            spec.detail,
+          options: [
+            { id: "once", label: "仅本次允许" },
+            { id: "session", label: "本会话都允许" },
+            { id: "cancel", label: "取消" },
+          ],
+        },
+        ctx,
+      );
+      if (answer.choice === "session") {
+        this.sandboxApprovals.set(this.sessionId, ranks[requested]);
+      } else if (answer.choice !== "once") {
+        throw deniedError("用户取消权限申请");
+      }
+      gateHandled = true;
+    } else if (requested === "host" && ranks.host > approved) {
       const answer = await this.confirm.ask(
         {
           question: "⚠ 危险：允许 agent 跳出沙箱，在真实系统 Shell 中执行吗？",
@@ -1335,56 +1385,17 @@ class Shell {
             "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n" +
             "只在你完全信任这条命令时继续。",
           options: [
-            { id: "once", label: "仍然执行（危险）" },
-            { id: "cancel", label: "取消" },
-          ],
-        },
-        ctx,
-      );
-      if (answer.choice !== "once") throw deniedError("用户取消跳出沙箱执行");
-      gateHandled = true;
-    } else if (requested === "sandbox-network") {
-      // 额外网络权限：每次都要审批，不提供“本会话都允许”
-      const answer = await this.confirm.ask(
-        {
-          question: "允许 agent 在 Docker 沙箱内访问网络吗？",
-          detail:
-            `${roleLabel} 申请额外权限：网络访问\n\n` +
-            `命令：${params.command}\n` +
-            `目录：${cwdAbs}\n` +
-            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
-            "沙箱仍保留：根文件系统只读、capability 清空、内存/PID 限制、工作区可写。\n" +
-            "网络访问可能下载依赖、访问外部服务或泄露请求内容；仅在确实需要时允许。",
-          options: [
-            { id: "once", label: "仅本次允许" },
-            { id: "cancel", label: "取消" },
-          ],
-        },
-        ctx,
-      );
-      if (answer.choice !== "once") throw deniedError("用户取消网络权限");
-      gateHandled = true;
-    } else if (requested === "sandbox" && this.dockerAvailable && !this.sandboxApprovedSessions.has(this.sessionId)) {
-      const answer = await this.confirm.ask(
-        {
-          question: "允许 agent 在 Docker 沙箱内执行命令吗？",
-          detail:
-            `${roleLabel} 请求执行命令：\n\n` +
-            `命令：${params.command}\n` +
-            `目录：${cwdAbs}\n\n` +
-            "沙箱：Docker（无网络、只读根文件系统、内存/PID 限制；工作区可写）",
-          options: [
-            { id: "once", label: "仅本次允许" },
-            { id: "session", label: "本会话都允许" },
+            { id: "once", label: "仅本次执行（危险）" },
+            { id: "session", label: "本会话都允许（危险）" },
             { id: "cancel", label: "取消" },
           ],
         },
         ctx,
       );
       if (answer.choice === "session") {
-        this.sandboxApprovedSessions.add(this.sessionId);
+        this.sandboxApprovals.set(this.sessionId, ranks.host);
       } else if (answer.choice !== "once") {
-        throw deniedError("用户取消沙箱执行");
+        throw deniedError("用户取消跳出沙箱执行");
       }
       gateHandled = true;
     }
@@ -1402,9 +1413,11 @@ class Shell {
                 ? "真实系统 Shell（危险）"
                 : requested === "sandbox-network"
                   ? "Docker 沙箱 + 网络"
-                  : this.dockerAvailable
-                    ? "Docker 沙箱（无网络）"
-                    : "无沙箱（直接执行）"
+                  : requested === "sandbox"
+                    ? "Docker 沙箱（工作区可写，无网络）"
+                    : this.dockerAvailable
+                      ? "Docker 沙箱（只读，无网络）"
+                      : "无沙箱（直接执行）"
             }`,
           options: [
             { id: "yes", label: "执行" },
@@ -1418,7 +1431,74 @@ class Shell {
       if (answer.choice !== "yes") throw deniedError("用户取消执行");
     }
 
-    return this.runner.run(effectiveParams, ctx);
+    // 命令级 checkpoint：写操作前快照，结束后给出变更清单与一键撤销
+    const writesPossible = !this.dockerAvailable || requested !== "sandbox-readonly";
+    const checkpointId = writesPossible
+      ? await this.checkpoint
+          .create({ label: `command: ${params.command.slice(0, 80)}` })
+          .then((result) => result.id)
+          .catch((err: unknown) => {
+            this.log.warn(`命令级 checkpoint 创建失败：${err instanceof Error ? err.message : String(err)}`);
+            return "";
+          })
+      : "";
+
+    try {
+      return await this.runner.run(effectiveParams, ctx);
+    } finally {
+      if (checkpointId) {
+        void this.checkpoint
+          .diff(checkpointId)
+          .then((files) => {
+            if (files.length === 0) return;
+            this.commandCheckpoints.set(checkpointId, {
+              files,
+              command: params.command,
+              createdAt: Date.now(),
+            });
+            this.panel.commandCheckpointEvent({
+              id: checkpointId,
+              files,
+              command: params.command,
+            });
+          })
+          .catch((err: unknown) => {
+            this.log.warn(`命令变更清单失败：${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
+    }
+  }
+
+  private async restoreCommandCheckpoint(id: string): Promise<void> {
+    const record = this.commandCheckpoints.get(id);
+    if (!record) {
+      void vscode.window.showInformationMessage("Bee Code: 这条命令的检查点已不存在。");
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      "撤销这次命令修改吗？",
+      {
+        modal: true,
+        detail:
+          `命令：${record.command}\n\n` +
+          `将恢复以下 ${record.files.length} 个文件到命令执行前：\n` +
+          record.files.slice(0, 20).join("\n") +
+          (record.files.length > 20 ? `\n…还有 ${record.files.length - 20} 个` : "") +
+          "\n\n只恢复这些文件；命令之外的其他修改不会被动。",
+      },
+      "撤销本次修改",
+    );
+    if (answer !== "撤销本次修改") return;
+    try {
+      const restored = await this.checkpoint.restorePaths(id, record.files);
+      this.commandCheckpoints.delete(id);
+      this.panel.commandCheckpointRestored(id, restored.length);
+      this.log.info(`命令级恢复完成：${restored.length} 个文件`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      void vscode.window.showErrorMessage(`Bee Code: 撤销失败：${message}`);
+      this.log.error(`命令级恢复失败：${message}`);
+    }
   }
 
   /** 点击「已读取文件」chip：打开文件并把光标放到对应行范围 */

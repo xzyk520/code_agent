@@ -845,3 +845,41 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 .hljs-property { color: var(--vscode-editor-foreground); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
+
+
+/* ── 命令级 checkpoint ─────────────────────────────────────── */
+.command-checkpoint {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  border-left: 3px solid var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.08));
+}
+.cc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+.cc-restore {
+  border: 1px solid var(--vscode-button-border, transparent);
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.18));
+  color: var(--vscode-button-secondaryForeground, inherit);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.cc-restore:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.28)); }
+.cc-restore:disabled { opacity: 0.55; cursor: default; }
+.cc-command {
+  margin: 4px 0;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 11px;
+  opacity: 0.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cc-files summary { cursor: pointer; font-size: 11px; opacity: 0.85; }
+.cc-files ul { margin: 4px 0 0; padding-left: 1.3em; font-size: 11px; }
+.cc-files li { font-family: var(--vscode-editor-font-family, Consolas, monospace); }
+.command-checkpoint.restored { opacity: 0.65; }
