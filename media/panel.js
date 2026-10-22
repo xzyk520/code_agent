@@ -37,6 +37,8 @@
     trajectoryFilter: must("trajectory-filter", HTMLInputElement),
     reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
+    retry: must("retry", HTMLButtonElement),
+    retryBanner: must("retry-banner", HTMLElement),
   };
 
 
@@ -44,7 +46,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, retryAvailable?: boolean, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -57,6 +59,71 @@
   function post(message) {
     vscode.postMessage(message);
   }
+
+  /** @type {number | null} */
+  let retryTimer = null;
+  let retryDeadline = 0;
+
+  function hideRetryBanner() {
+    if (retryTimer) {
+      clearInterval(retryTimer);
+      retryTimer = null;
+    }
+    el.retryBanner.classList.add("hidden");
+    el.retryBanner.textContent = "";
+  }
+
+  /** @param {boolean} available */
+  function setRetryAvailable(available) {
+    el.retry.classList.toggle("hidden", !available);
+    el.retry.disabled = !available || state.busy;
+  }
+
+  /** @param {{ attempt?: number, max?: number, delayMs?: number, reason?: string, status?: string }} params */
+  function showRetry(params) {
+    const status = String(params.status || "");
+    if (status === "done") {
+      hideRetryBanner();
+      return;
+    }
+    if (status === "starting") {
+      if (retryTimer) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+      }
+      el.retryBanner.classList.remove("hidden");
+      el.retryBanner.textContent = "模型连接恢复中，正在重试…";
+      return;
+    }
+    if (status !== "waiting") return;
+    hideRetryBanner();
+    const delay = Math.max(0, Number(params.delayMs || 0));
+    const attempt = Number(params.attempt || 0);
+    const max = Number(params.max || 0);
+    const reason = String(params.reason || "");
+    retryDeadline = Date.now() + delay;
+    el.retryBanner.classList.remove("hidden");
+    const tick = () => {
+      const left = Math.max(0, retryDeadline - Date.now());
+      const seconds = Math.ceil(left / 1000);
+      el.retryBanner.textContent =
+        `模型连接失败，${seconds}s 后重试` +
+        (attempt && max ? `（${attempt}/${max}）` : "") +
+        (reason ? ` · ${reason.slice(0, 80)}` : "");
+      if (left <= 0 && retryTimer) {
+        clearInterval(retryTimer);
+        retryTimer = null;
+        el.retryBanner.textContent = "模型连接恢复中，正在重试…";
+      }
+    };
+    tick();
+    retryTimer = setInterval(tick, 250);
+  }
+
+  el.retry.addEventListener("click", () => {
+    el.retry.classList.add("hidden");
+    post({ type: "retry" });
+  });
 
   function clearStreaming() {
     streamingNode = null;
@@ -1192,12 +1259,15 @@
         if (next.plan && next.plan.length > 0) renderPlan(next.plan);
         renderMode();
         renderBusy();
+        setRetryAvailable(Boolean(next.retryAvailable));
+        hideRetryBanner();
         renderAttachments(next.attachments || []);
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
         break;
       }
       case "status": {
+        if (!msg.busy) hideRetryBanner();
         // 轻量状态：绝不重渲染消息列表（否则流式中的回复会被清掉）
         state.mode = /** @type {Mode} */ (msg.mode);
         state.busy = Boolean(msg.busy);
@@ -1208,6 +1278,7 @@
         break;
       }
       case "message": {
+        hideRetryBanner();
         const message = /** @type {ChatMessage} */ (msg.message);
         if (message.role === "assistant" && streamingNode) {
           // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
@@ -1225,6 +1296,7 @@
         break;
       }
       case "delta": {
+        hideRetryBanner();
         const text = String(msg.text ?? "");
         // 正文开始：把思考块自动收起（用户仍可展开回看）
         collapseLiveReasoning();
@@ -1277,6 +1349,14 @@
       }
       case "trajectoryItem": {
         addTrajectoryItem(/** @type {{ id?: unknown, mode?: unknown, intent?: unknown, detail?: unknown }} */ (msg.item));
+        break;
+      }
+      case "retryAvailable": {
+        setRetryAvailable(Boolean(msg.available));
+        break;
+      }
+      case "retry": {
+        showRetry(/** @type {{ attempt?: number, max?: number, delayMs?: number, reason?: string, status?: string }} */ (msg));
         break;
       }
       case "plan": {

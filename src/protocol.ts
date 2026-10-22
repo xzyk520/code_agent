@@ -656,6 +656,16 @@ export interface UiReasoningParams {
   round?: number;
 }
 
+export interface UiRetryParams {
+  sessionId?: string;
+  /** 第几次尝试（1-based） */
+  attempt?: number;
+  max?: number;
+  delayMs?: number;
+  reason?: string;
+  status?: "waiting" | "starting" | "done";
+}
+
 export interface UiUsageParams {
   sessionId?: string;
   inputTokens?: number;

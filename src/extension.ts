@@ -57,6 +57,7 @@ import type {
   UiReasoningParams,
   UiSubagentParams,
   UiToolParams,
+  UiRetryParams,
   UiUsageParams,
 } from "./protocol";
 const SESSION_KEY = "beeCode.sessionId";
@@ -135,6 +136,8 @@ class Shell {
   private readonly reasoningSegments = new Map<number, string>();
   /** 每个会话已批准的最高沙箱权限等级 */
   private readonly sandboxApprovals = new Map<string, number>();
+  /** 最近一次发送的请求，用于“重试本轮” */
+  private lastTurnRequest?: { text: string; mode: Mode; attachments: AttachedContext[] };
   /** 命令级 checkpoint：命令结束后可一键撤销 */
   private readonly commandCheckpoints = new Map<string, { files: string[]; command: string; createdAt: number }>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -200,6 +203,7 @@ class Shell {
       onAbort: () => void this.abort(),
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
       onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
+      onRetryTurn: () => void this.retryLastTurn(),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments);
 
@@ -900,10 +904,12 @@ class Shell {
     if (trimmed.length === 0 && effectiveAttachments.length === 0) return;
 
     const userText = trimmed || defaultInstruction(mode);
+    this.lastTurnRequest = { text: userText, mode, attachments: effectiveAttachments };
     const userMessageId = `u_${Date.now()}`;
     this.turnUserMessageId = userMessageId;
     this.panel.addMessage({ id: userMessageId, role: "user", text: userText });
     this.panel.setCost("");
+    this.panel.setRetryAvailable(false);
     this.panel.resetReasoning();
     this.turnScale = "small";
     this.turnUsage = undefined;
@@ -944,6 +950,7 @@ class Shell {
       await core.chatSend(params);
     } catch (err) {
       this.turnError = err instanceof Error ? err.message : String(err);
+      this.panel.setRetryAvailable(true);
       this.panel.addMessage({
         id: `e_${Date.now()}`,
         role: "system",
@@ -970,6 +977,49 @@ class Shell {
       void this.sessions.updateStatus(this.sessionId, this.turn);
       this.panel.pushState();
     }
+  }
+
+  /** 重试上一轮：截掉失败的 assistant/error，保留之前的用户消息，重新发送同一请求 */
+  private async retryLastTurn(): Promise<void> {
+    if (this.busy || this.disposed) {
+      this.panel.setHint("当前还有任务在跑，先停止再重试。");
+      return;
+    }
+    const request = this.lastTurnRequest;
+    if (!request) {
+      this.panel.setHint("没有可重试的请求。");
+      return;
+    }
+    const all = await this.sessions.open(this.sessionId);
+    let userIndex = -1;
+    for (let i = all.length - 1; i >= 0; i -= 1) {
+      if (all[i]?.role === "user") {
+        userIndex = i;
+        break;
+      }
+    }
+    if (userIndex < 0) {
+      this.panel.setHint("找不到上一轮的用户消息，无法重试。");
+      return;
+    }
+    // 截掉失败的用户消息及之后的 assistant/error；send 会重新写入用户消息
+    const kept = await this.sessions.truncate(this.sessionId, userIndex);
+    this.persisted = kept.length;
+    await this.turns.truncate(this.sessionId, userIndex).catch(() => undefined);
+    await this.truncateSummary(userIndex).catch(() => undefined);
+    this.panel.restore(
+      kept.map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        ...(m.reasoning ? { reasoning: m.reasoning } : {}),
+        ...(m.diagrams ? { diagrams: m.diagrams } : {}),
+      })),
+      this.panel.getMode(),
+    );
+    this.panel.setRetryAvailable(false);
+    this.panel.setHint("正在重试上一轮…");
+    await this.send(request.text, request.mode, request.attachments, false);
   }
 
   /** 接受一个或多个提案：逐个 拉正文 → 写盘 → 通知内核 */
@@ -2329,6 +2379,10 @@ class Shell {
           `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens ? " · ⚠ 接近 token 预算" : ""}`,
         );
         this.updateStatus();
+        return;
+      }
+      case "ui.retry": {
+        this.panel.retryEvent(params as UiRetryParams);
         return;
       }
       case "proposal.changed": {

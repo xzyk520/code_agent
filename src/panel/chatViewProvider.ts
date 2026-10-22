@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiSubagentParams } from "../protocol";
+import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -59,6 +59,8 @@ export interface PanelHandlers {
   onOpenRead(path: string, startLine?: number, endLine?: number): void;
   /** 撤销某条命令造成的文件修改 */
   onRestoreCommand(id: string): void;
+  /** 重试上一轮失败的请求 */
+  onRetryTurn(): void;
   /** 附件被截断/忽略时给用户的明确提示（toast + 面板系统消息） */
   onAttachmentNotice(message: string): void;
 }
@@ -84,6 +86,7 @@ export interface PanelState {
   plan?: PlanStep[];
   turns?: TurnView[];
   commandCheckpoints?: Array<{ id: string; files: string[]; command: string }>;
+  retryAvailable?: boolean;
   hint?: string;
 }
 
@@ -153,6 +156,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   restore(messages: ChatMessageView[], mode?: PanelState["mode"]): void {
     this.state.messages = messages.slice(-MAX_MESSAGES);
     this.state.commandCheckpoints = [];
+    this.state.retryAvailable = false;
     if (mode) this.state.mode = mode;
     this.pushState();   // 全量快照：重载/切换会话时才需要
   }
@@ -212,6 +216,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.state.commandCheckpoints = list;
     }
     this.post({ type: "commandCheckpoint", item });
+  }
+
+  setRetryAvailable(available: boolean): void {
+    this.state.retryAvailable = available;
+    this.post({ type: "retryAvailable", available });
+  }
+
+  retryEvent(params: UiRetryParams): void {
+    this.post({ type: "retry", ...params });
   }
 
   commandCheckpointRestored(id: string, files: number): void {
@@ -410,6 +423,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "stop":
         this.handlers.onAbort();
         return;
+      case "retry":
+        this.handlers.onRetryTurn();
+        return;
       case "restoreCommand": {
         const id = typeof msg.id === "string" ? msg.id : "";
         if (id) this.handlers.onRestoreCommand(id);
@@ -466,6 +482,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
 
   <section id="attachments" class="attachments"></section>
   <section id="reads" class="reads" aria-label="agent 最近读取的文件"></section>
+  <div id="retry-banner" class="retry-banner hidden" role="status"></div>
   <div class="conversation">
     <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
     <aside id="trajectory" class="trajectory" aria-label="会话轨迹">
@@ -489,6 +506,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
     <textarea id="input" placeholder="描述你的需求…（Ctrl+Enter 发送）" rows="3"></textarea>
     <div class="composer-row">
       <span id="hint" class="hint"></span>
+      <button id="retry" class="retry hidden" type="button">重试本轮</button>
       <button id="send">发送</button>
     </div>
   </footer>

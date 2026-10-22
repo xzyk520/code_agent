@@ -177,7 +177,11 @@ class OpenAIClient:
                             )
                         raise ModelError(
                             _explain_http_error(response.status_code, body),
-                            code=_error_code_for_status(response.status_code),
+                            code=(
+                                "CONTEXT_OVERFLOW"
+                                if _is_context_overflow(response.status_code, body)
+                                else _error_code_for_status(response.status_code)
+                            ),
                             status=response.status_code,
                             retry_after=_retry_after_seconds(response.headers),
                         )
@@ -236,7 +240,11 @@ class OpenAIClient:
                 if response.status_code >= 400:
                     raise ModelError(
                         _explain_http_error(response.status_code, body[:500]),
-                        code=_error_code_for_status(response.status_code),
+                        code=(
+                            "CONTEXT_OVERFLOW"
+                            if _is_context_overflow(response.status_code, body[:500])
+                            else _error_code_for_status(response.status_code)
+                        ),
                         status=response.status_code,
                         retry_after=_retry_after_seconds(response.headers),
                     )
@@ -263,6 +271,22 @@ class OpenAIClient:
 
     async def close(self) -> None:
         """占位：目前每次请求自建连接池，无需显式关闭。"""
+
+
+def _is_context_overflow(status: int, body: str) -> bool:
+    if status not in (400, 413):
+        return False
+    lowered = body.lower()
+    hints = (
+        "context length",
+        "context window",
+        "too many tokens",
+        "maximum context",
+        "reduce the length",
+        "prompt is too long",
+        "input is too long",
+    )
+    return any(hint in lowered for hint in hints)
 
 
 def _error_code_for_status(status: int) -> str:

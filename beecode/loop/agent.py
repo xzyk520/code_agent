@@ -627,10 +627,15 @@ class AgentLoop:
         client: OpenAIClient,
         messages: list[dict[str, Any]],
         session: Session,
+        *,
+        force: bool = False,
     ) -> None:
         """轮内压缩：工具结果摘要 → 丢更早的交换 → 模型摘要（兜底）。"""
         budget = max(2_000, int(self._config.context_window_tokens * self._config.compact_ratio))
-        if self._estimate_messages_tokens(messages) <= budget:
+        if force:
+            # 服务端已明确报 context overflow：按半预算强制压缩，不再相信估算值
+            budget = max(2_000, int(budget * 0.5))
+        if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
         # ① 旧工具结果 → 观察摘要（保留最近 keep_raw_tool_results 条原文）
@@ -639,7 +644,7 @@ class AgentLoop:
         candidates = positions[:-keep] if keep and len(positions) > keep else ([] if keep else positions)
         replaced = 0
         for index in candidates:
-            if self._estimate_messages_tokens(messages) <= budget:
+            if not force and self._estimate_messages_tokens(messages) <= budget:
                 break
             message = messages[index]
             if id(message) in self._digested:
@@ -655,7 +660,7 @@ class AgentLoop:
         if self._estimate_messages_tokens(messages) > budget:
             extra = 0
             for index in positions:
-                if self._estimate_messages_tokens(messages) <= budget:
+                if not force and self._estimate_messages_tokens(messages) <= budget:
                     break
                 message = messages[index]
                 if id(message) in self._digested:
@@ -666,7 +671,7 @@ class AgentLoop:
             if extra:
                 self._compact_log(session, f"又折叠了 {extra} 条工具结果")
 
-        if self._estimate_messages_tokens(messages) <= budget:
+        if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
         # ② 丢掉更早的 assistant+tool 交换（保留当前用户消息及之后）
@@ -674,10 +679,12 @@ class AgentLoop:
         if dropped:
             self._compact_log(session, f"移除了 {dropped} 条更早的对话片段")
 
-        if self._estimate_messages_tokens(messages) <= budget:
+        if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
         # ③ 兜底：让模型把最早的一半过程压成一段（一轮最多一次）
+        if force:
+            self._l3_used = False
         if not self._l3_used:
             self._l3_used = True
             await self._l3_summarize(client, messages, session, budget)
@@ -823,6 +830,8 @@ class AgentLoop:
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         started = deadline_start or asyncio.get_running_loop().time()
         attempt = 0
+        had_retry = False
+        context_compactions = 0
 
         def timeout_error(reason: str) -> ModelError:
             return ModelError(f"主agent模型{reason}超时，已强制停止本轮。", code="TIMEOUT")
@@ -888,12 +897,26 @@ class AgentLoop:
                     raise StreamInterrupted(
                         str(exc), "".join(parts), "".join(reasoning_parts), calls
                     ) from exc
-                if getattr(exc, "code", "UNKNOWN") not in RETRYABLE_MODEL_CODES:
-                    raise
-                if attempt + 1 >= MODEL_RETRY_MAX_ATTEMPTS:
-                    raise
-                retry_reason = str(exc)
-                retry_after = getattr(exc, "retry_after", None)
+                code = getattr(exc, "code", "UNKNOWN")
+                if code == "CONTEXT_OVERFLOW" and context_compactions < 1:
+                    context_compactions += 1
+                    self._log("服务端报告上下文溢出，强制压缩后重试")
+                    self._l3_used = False
+                    try:
+                        await self._compact(client, messages, session, force=True)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as compact_exc:  # noqa: BLE001 - 压缩失败仍原样重试一次
+                        self._log(f"强制压缩失败：{compact_exc}")
+                    retry_reason = "上下文溢出，已强制压缩"
+                    retry_after = None
+                else:
+                    if code not in RETRYABLE_MODEL_CODES:
+                        raise
+                    if attempt + 1 >= MODEL_RETRY_MAX_ATTEMPTS:
+                        raise
+                    retry_reason = str(exc)
+                    retry_after = getattr(exc, "retry_after", None)
             except asyncio.CancelledError:
                 raise
             finally:
@@ -923,7 +946,28 @@ class AgentLoop:
             )
             self._log(retry_msg)
             self._notify("log", {"level": "warn", "msg": retry_msg})
+            had_retry = True
+            self._notify(
+                "ui.retry",
+                {
+                    "sessionId": session.id,
+                    "attempt": attempt,
+                    "max": MODEL_RETRY_MAX_ATTEMPTS - 1,
+                    "delayMs": int(delay * 1000),
+                    "reason": retry_reason,
+                    "status": "waiting",
+                },
+            )
             await asyncio.sleep(max(0.0, delay))
+            self._notify(
+                "ui.retry",
+                {
+                    "sessionId": session.id,
+                    "attempt": attempt,
+                    "max": MODEL_RETRY_MAX_ATTEMPTS - 1,
+                    "status": "starting",
+                },
+            )
 
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
@@ -934,6 +978,8 @@ class AgentLoop:
             if prompt_tokens > 0 and estimated > 0:
                 ratio = prompt_tokens / estimated
                 self._calibration = min(2.0, max(0.5, self._calibration * 0.5 + ratio * 0.5))
+        if had_retry:
+            self._notify("ui.retry", {"sessionId": session.id, "status": "done"})
         return "".join(parts), calls, usage, "".join(reasoning_parts)
 
     # ───────────────────────── 工具执行 ─────────────────────────
