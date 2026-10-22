@@ -175,6 +175,12 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
 
 
 async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    sandbox = str(params.get("sandbox") or "sandbox")
+    if sandbox not in ("sandbox", "host"):
+        raise ValueError("sandbox 只能是 sandbox 或 host")
+    justification = str(params.get("justification") or "").strip()
+    if sandbox == "host" and not justification:
+        raise ValueError("sandbox=host 必须提供 justification，说明为什么不能在沙箱里完成")
     timeout_ms = _int_or_none(params.get("timeout_ms"))
     if timeout_ms is None:
         # 命令默认用长工具时限，下载/构建不再被 120s 默认值误杀
@@ -187,6 +193,8 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         cwd=_str_or_none(params.get("cwd")),
         timeout_ms=timeout_ms,
         rpc_timeout=rpc_timeout,
+        sandbox=sandbox,
+        justification=justification,
     )
     stdout, out_omitted = _shape_text(result.stdout, head=100, tail=40)
     stderr, err_omitted = _shape_text(result.stderr, head=40, tail=10)

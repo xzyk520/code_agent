@@ -633,7 +633,7 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | `find_references` | 只读 | `path`, `symbol` | 引用位置（LSP） |
 | `get_diagnostics` | 只读 | `path?` | LSP 诊断（编译错误、lint） |
 | `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
-| `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?` | 受权限/沙箱约束（§12.4），可能要用户批准 |
+| `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?`, `sandbox?`, `justification?` | `sandbox=sandbox` 在 Docker 内执行（首次/会话批准）；`sandbox=host` 跳出沙箱（每次危险审批，必须 justification） |
 | `spawn_subagent` | 派生 | `task`, `max_steps?` | 只读子代理（独立上下文），只回传结论；仅主代理可用 |
 | `update_plan` | 面板 | `steps[]` | 3-6 步计划；状态只由模型更新，收尾前要求把最后一步标 done |
 | `diagram` | 展示 | `kind`, `source`, `title?` | Mermaid 图（flowchart/sequence/class/state/er）；前端懒加载渲染，图挂到助手消息并参与摘要；单轮最多 3 张、8KB |
@@ -1698,12 +1698,14 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | --- | --- | --- |
 | 工作区未受信任 | 只读（工作区内） | 只读（工作区内） |
 | 工作区外路径（读/写/执行） | **需审批** | **拒绝** |
-| 有 docker：执行命令 | 需审批（`fullAccess` 时免）；**强制在容器内** | 允许（容器内） |
+| 有 docker：`sandbox` 请求 | **首次必须审批**；可选「本会话都允许」 | 同主代理，提示标明子代理 |
+| 有 docker：`host` 请求 | **每次危险审批**，必须 `justification` | 每次危险审批；策略仍可拒绝 |
 | 有 docker：写文件 | 按规则/模式 | 需审批（`fullAccess` 时免） |
-| 无 docker：执行命令 | **每次都审批**（不给"记住"） | 仅允许只读命令，其余拒绝 |
+| 无 docker：`sandbox` 请求 | 退回直接执行，按普通命令审批 | 仅允许只读命令，其余拒绝 |
+| 无 docker：`host` 请求 | 每次危险审批 | 每次危险审批 |
 | 无 docker：写文件 | 按规则/模式 | **拒绝** |
 
-`fullAccess` 只免审批，**不**解除"未受信任只读"和"工作区外需审批"。
+`fullAccess` 只免普通权限审批，**不**跳过 `host` 危险审批或沙箱首次审批；`host` 永远逐次确认。
 
 启动时的 docker 检测（避免反复打扰）：
 

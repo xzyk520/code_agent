@@ -7,6 +7,9 @@
 
 ### Added
 
+- **沙箱内/跳出沙箱审批（协议 v36）**：`run_command` 增加 `sandbox` / `justification`；
+`host` 每次弹出危险警告并需说明理由；`sandbox` 首次询问，可选仅本次或本会话都允许；
+无 Docker 时退回原直接执行路径
 - **移除整轮硬墙钟**：不再默认 2 小时强制结束；长任务由每工具超时、步数/token 预算与用户停止控制
 - **协议 v35 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入
 - **只读工具并发**：同一批只读工具（read/list/search/outline/symbol/references/diagnostics）并发执行，结果按原 calls 顺序回填；写工具、命令、子代理仍串行。新增 `maxToolCallsPerBatch`（默认 8）

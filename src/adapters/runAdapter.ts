@@ -61,9 +61,18 @@ export function createRunAdapter(deps: RunAdapterDeps) {
       const cwd = resolveCwd(root, params.cwd);
       const timeoutMs = clamp(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000, MAX_TIMEOUT_MS);
       const policy = deps.policy();
-      const useDocker = policy.sandbox === "docker" || (policy.sandbox === "auto" && deps.dockerAvailable());
+      const requested = params.sandbox ?? "auto";
+      if (requested === "sandbox" && !deps.dockerAvailable()) {
+        throw new Error("请求在 Docker 沙箱内执行，但当前环境找不到 docker；如确需真实环境执行，请用 sandbox=host 并说明理由。");
+      }
+      const useDocker =
+        requested === "host"
+          ? false
+          : requested === "sandbox"
+            ? true
+            : policy.sandbox === "docker" || (policy.sandbox === "auto" && deps.dockerAvailable());
 
-      if (policy.sandbox === "docker" && !deps.dockerAvailable()) {
+      if (policy.sandbox === "docker" && !deps.dockerAvailable() && requested !== "host") {
         throw new Error("沙箱模式为 docker，但当前环境找不到 docker（请安装/启动 docker，或把 beeCode.permissions.sandbox 改为 auto/off）");
       }
 
@@ -83,7 +92,7 @@ export function createRunAdapter(deps: RunAdapterDeps) {
         stderr: result.stderr,
         truncated: result.truncated,
         durationMs,
-        sandbox: useDocker ? "docker" : "none",
+        sandbox: requested === "host" ? "host" : useDocker ? "docker" : "none",
         killed: result.killed,
       };
     },

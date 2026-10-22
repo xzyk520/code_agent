@@ -133,6 +133,8 @@ class Shell {
   };
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
+  /** 已在“本会话”批准过 Docker 沙箱执行的会话 */
+  private readonly sandboxApprovedSessions = new Set<string>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
   private readonly attachmentNotices: string[] = [];
   private attachmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -177,7 +179,7 @@ class Shell {
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
-        // 有 docker 就强制沙箱执行：这是策略，不是偏好（用户设 off 也不降级）
+        // 默认命令走 Docker；agent 显式请求 host 时由 runCommand 的审批门闸 override
         sandbox: this.dockerAvailable ? "docker" : "off",
         dockerImage: this.config.permissions.dockerImage,
       }),
@@ -1280,13 +1282,22 @@ class Shell {
 
   /**
    * 命令执行：
-   *   - 有 docker → 一律在容器内执行（不管用户把 sandbox 设成 off 还是 auto）
-   *   - 没有 docker → 主代理每条都要确认；子代理只允许只读命令
+   *   - sandbox 请求：Docker 可用时首次审批，可选本会话都允许
+   *   - host 请求：每次危险审批，必须 justification
+   *   - 没有 docker：sandbox 退回原有直接执行；host 仍逐次审批
    */
   private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
     const role: AgentRole = params.role === "subagent" ? "subagent" : "main";
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) throw deniedError("未打开工作区");
+
+    const requested = params.sandbox === "host" ? "host" : params.sandbox === "sandbox" ? "sandbox" : "auto";
+    // 没有 Docker 时，sandbox 请求退回原有 auto 行为，避免无沙箱环境无法执行命令
+    const effectiveParams: RunParams =
+      requested === "sandbox" && !this.dockerAvailable ? { ...params, sandbox: undefined } : params;
+    if (requested === "host" && !(params.justification ?? "").trim()) {
+      throw deniedError("sandbox=host 必须提供 justification，说明为什么不能在沙箱里完成");
+    }
 
     const cwdAbs = params.cwd ? nodePath.resolve(root, params.cwd) : root;
     const inside = isInside(root, cwdAbs);
@@ -1299,7 +1310,55 @@ class Shell {
     const evaluation = this.describePermission("run", params.command);
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
 
-    const needAsk = policy.decision === "ask" || evaluation.decision === "ask";
+    let gateHandled = false;
+    const roleLabel = role === "subagent" ? "子代理" : "主 agent";
+    if (requested === "host") {
+      // 跳出沙箱：必须逐次审批，不提供“本会话都允许”
+      const answer = await this.confirm.ask(
+        {
+          question: "⚠ 危险：允许 agent 跳出沙箱，在真实系统 Shell 中执行吗？",
+          detail:
+            `${roleLabel} 请求在真实环境执行：\n\n` +
+            `命令：${params.command}\n` +
+            `目录：${cwdAbs}\n` +
+            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
+            "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n" +
+            "只在你完全信任这条命令时继续。",
+          options: [
+            { id: "once", label: "仍然执行（危险）" },
+            { id: "cancel", label: "取消" },
+          ],
+        },
+        ctx,
+      );
+      if (answer.choice !== "once") throw deniedError("用户取消跳出沙箱执行");
+      gateHandled = true;
+    } else if (requested === "sandbox" && this.dockerAvailable && !this.sandboxApprovedSessions.has(this.sessionId)) {
+      const answer = await this.confirm.ask(
+        {
+          question: "允许 agent 在 Docker 沙箱内执行命令吗？",
+          detail:
+            `${roleLabel} 请求执行命令：\n\n` +
+            `命令：${params.command}\n` +
+            `目录：${cwdAbs}\n\n` +
+            "沙箱：Docker（无网络、只读根文件系统、内存/PID 限制；工作区可写）",
+          options: [
+            { id: "once", label: "仅本次允许" },
+            { id: "session", label: "本会话都允许" },
+            { id: "cancel", label: "取消" },
+          ],
+        },
+        ctx,
+      );
+      if (answer.choice === "session") {
+        this.sandboxApprovedSessions.add(this.sessionId);
+      } else if (answer.choice !== "once") {
+        throw deniedError("用户取消沙箱执行");
+      }
+      gateHandled = true;
+    }
+
+    const needAsk = !gateHandled && (policy.decision === "ask" || evaluation.decision === "ask");
     if (needAsk) {
       const answer = await this.confirm.ask(
         {
@@ -1307,7 +1366,7 @@ class Shell {
           detail:
             `${policy.reason}\n${evaluation.reason}\n\n` +
             `${params.command}\n\n` +
-            `沙箱：${this.dockerAvailable ? "docker" : "无（直接执行）"}`,
+            `执行环境：${requested === "host" ? "真实系统 Shell（危险）" : this.dockerAvailable ? "Docker 沙箱" : "无沙箱（直接执行）"}`,
           options: [
             { id: "yes", label: "执行" },
             { id: "no", label: "取消" },
@@ -1320,7 +1379,7 @@ class Shell {
       if (answer.choice !== "yes") throw deniedError("用户取消执行");
     }
 
-    return this.runner.run(params, ctx);
+    return this.runner.run(effectiveParams, ctx);
   }
 
   /** 点击「已读取文件」chip：打开文件并把光标放到对应行范围 */

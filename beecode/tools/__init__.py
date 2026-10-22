@@ -207,12 +207,19 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（受权限/沙箱约束，可能需要用户批准）。用于跑测试、构建、查看状态。",
+            "在工作区内执行命令（受权限/沙箱约束，必须用户批准）。默认 sandbox；"
+            "只有安装系统包、访问真实环境等确实无法在沙箱完成时，才用 sandbox=host，并填写 justification。",
             _obj(
                 {
                     "command": _str("要执行的命令"),
                     "cwd": _str("工作区相对目录（可选）"),
                     "timeout_ms": _int("超时毫秒（默认使用长工具时限，通常 600000）"),
+                    "sandbox": {
+                        "type": "string",
+                        "enum": ["sandbox", "host"],
+                        "description": "sandbox = Docker 沙箱（默认，需用户批准）；host = 跳出沙箱在真实系统 Shell 执行（危险，必须用户批准并填写 justification）",
+                    },
+                    "justification": _str("请求 host 执行时的理由（会展示给用户审批）"),
                 },
                 ["command"],
             ),
