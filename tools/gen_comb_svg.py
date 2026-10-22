@@ -77,6 +77,11 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="5
   </g>
 </svg>
 '''
+# 右下格的蜂蜜鼓出下缘（与 PNG 的 overflow bulge 对齐）
+hx, hy = centers[2]
+svg = svg.replace("</svg>", f'''  <ellipse cx="{hx}" cy="{hy + 67}" rx="34" ry="17" fill="url(#honey)" opacity="0.95"/>
+  <path d="M{hx - 24} {hy + 62} Q{hx} {hy + 78} {hx + 24} {hy + 62}" fill="none" stroke="#FFF6D2" stroke-width="3" opacity="0.55"/>
+</svg>''', 1)
 (ROOT / "tools" / "icon-comb-template.svg").write_text(svg, encoding="utf-8", newline="\n")
 
 centers24 = [(12, 8.84), (8.6, 14.74), (15.4, 14.74)]

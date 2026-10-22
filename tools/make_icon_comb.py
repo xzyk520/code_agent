@@ -20,8 +20,8 @@ BG_BOTTOM = (7, 12, 22)
 BORDER = (30, 44, 69)
 WALL_TOP = (255, 202, 82)
 WALL_BOTTOM = (200, 112, 0)
-HONEY_TOP = (255, 242, 190)
-HONEY_BOTTOM = (190, 92, 0)
+HONEY_TOP = (255, 245, 196)
+HONEY_BOTTOM = (226, 126, 0)
 AIR_TOP = (10, 17, 30)
 AIR_BOTTOM = (18, 29, 46)
 
@@ -209,6 +209,21 @@ def draw_cluster(w: int, level: str) -> Image.Image:
                   width=max(1, int(3 * w / 512)), joint="curve")
         draw.line(scaled([poly[1], poly[2], poly[3]], w), fill=(70, 32, 0, 120),
                   width=max(1, int(3 * w / 512)), joint="curve")
+
+    # 蜂蜜从右下格下缘鼓出，形成"溢出"的体积感（不画长滴，128px 更干净）
+    hx, hy = centers[honey_index]
+    bulge = Image.new("L", (w, w), 0)
+    ImageDraw.Draw(bulge).ellipse(
+        [(hx - 34) * w / 512, (hy + 50) * w / 512,
+         (hx + 34) * w / 512, (hy + 84) * w / 512],
+        fill=255,
+    )
+    fill_grad(img, bulge, (255, 232, 160), (204, 108, 0), alpha=245)
+    draw = ImageDraw.Draw(img)
+    draw.arc(
+        scaled([(hx - 24, hy + 56), (hx + 24, hy + 78)], w),
+        200, 340, fill=(255, 250, 220, 150), width=max(1, int(3 * w / 512)),
+    )
 
     # 房室之间的暗线
     for poly in outers:
