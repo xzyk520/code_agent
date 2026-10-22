@@ -7,6 +7,7 @@ tools/**
 media/icon-variants/**
 media/icon-comb/**
 media/icon-honey/**
+media/icon-source/**
 tests/**
 scripts/**
 webview/**
