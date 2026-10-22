@@ -11,6 +11,8 @@
 支持 Retry-After；已有输出后不重跑，保留部分内容并让模型续写一次；
 轮内摘要使用独立 2 次重试，自动压缩失败不拖垮主任务；服务端 context overflow 会强制压缩后重试一次
 - **重试 UI**：面板显示重试倒计时与原因，失败后提供「重试本轮」按钮
+- **重试事件持久化**：`<session>.retries.jsonl` 记录 waiting/starting/done/failed/cancelled，
+  `.pending.json` 保存最近请求；重载后恢复待重试状态和「重试本轮」
 - **沙箱分层审批（协议 v38）**：`run_command` 分 `sandbox-readonly`（默认）→
 `sandbox`（工作区可写）→ `sandbox-network`（+网络）→ `host`（真实系统）；
 每级升级都需 justification，可仅本次或本会话都允许；无 Docker 时非 host 请求拒绝

@@ -25,6 +25,7 @@ import { FocusHighlighter } from "./focusDecoration";
 import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { TurnStore } from "./turnStore";
 import { SummaryStore } from "./summaryStore";
+import { RetryStore, type PendingTurn, type RetryEvent } from "./retryStore";
 import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
@@ -109,6 +110,7 @@ class Shell {
   private readonly chatIndex: CheckpointChatIndex;
   private readonly turns: TurnStore;
   private readonly summaries: SummaryStore;
+  private readonly retries: RetryStore;
   private turnIntent?: { intent: string; mode: Mode; scale?: "small" | "large"; needsProposal?: boolean; reason?: string };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
@@ -181,6 +183,7 @@ class Shell {
     this.chatIndex = new CheckpointChatIndex(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
     this.turns = new TurnStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.summaries = new SummaryStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
+    this.retries = new RetryStore(nodePath.join(context.globalStorageUri.fsPath, "sessions"), this.log);
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
@@ -358,7 +361,11 @@ class Shell {
         createdAt: Date.now(),
       });
     }
-    if (existing.length === 0) return;
+    if (existing.length === 0) {
+      await this.restoreRetryState();
+      this.panel.pushState();
+      return;
+    }
 
     this.panel.restore(
       existing.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}), ...(m.diagrams ? { diagrams: m.diagrams } : {}) })),
@@ -388,6 +395,7 @@ class Shell {
       this.turnDetail = undefined;
       await this.sessions.updateStatus(this.sessionId, "idle");
     }
+    await this.restoreRetryState();
     this.panel.pushState();
   }
 
@@ -667,6 +675,39 @@ class Shell {
     await this.send("请重新生成上一次的改动提案。", this.panel.getMode(), []);
   }
 
+  /** 重载/切换会话后恢复“上次重试未完成”的状态和待重试请求 */
+  private async restoreRetryState(): Promise<void> {
+    const pending = await this.retries.loadPending(this.sessionId);
+    if (!pending) {
+      this.lastTurnRequest = undefined;
+      this.panel.setRetryAvailable(false);
+      return;
+    }
+    const latest = await this.retries.latest(this.sessionId);
+    if (latest?.status === "done" || latest?.status === "cancelled") {
+      await this.retries.clearPending(this.sessionId);
+      this.lastTurnRequest = undefined;
+      this.panel.setRetryAvailable(false);
+      return;
+    }
+    this.lastTurnRequest = {
+      text: pending.text,
+      mode: pending.mode as Mode,
+      attachments: pending.attachments as AttachedContext[],
+    };
+    this.panel.setRetryAvailable(true);
+    if (latest?.status === "waiting" || latest?.status === "starting") {
+      this.panel.setHint("检测到上次模型连接重试在等待/开始时中断，可点「重试本轮」。");
+    } else if (latest?.status === "failed") {
+      this.panel.setHint("检测到上次任务失败，可点「重试本轮」。");
+    } else {
+      this.panel.setHint("检测到上次任务未完成，可点「重试本轮」。");
+    }
+    this.log.info(
+      `已恢复待重试请求（${pending.text.slice(0, 40)}${latest ? `，最后状态 ${latest.status}` : ""}）`,
+    );
+  }
+
   /** 新建会话：换 id、清空面板、重开上下文 */
   private async newSession(): Promise<void> {
     await this.sessions.flush();
@@ -678,6 +719,8 @@ class Shell {
     this.turnDetail = undefined;
     this.persisted = 0;
     this.panel.restore([], this.panel.getMode());
+    this.lastTurnRequest = undefined;
+    this.panel.setRetryAvailable(false);
     this.sessions.create({
       id: this.sessionId,
       title: "新会话",
@@ -732,6 +775,7 @@ class Shell {
     await this.loadSummary(messages.length);
     await this.refreshTurns();
     await this.refreshTrajectory();
+    await this.restoreRetryState();
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
   }
@@ -856,6 +900,15 @@ class Shell {
       this.log.warn(`abort 失败: ${err instanceof Error ? err.message : String(err)}`);
     });
     this.busy = false;
+    void this.retries.append({
+      ts: Date.now(),
+      sessionId: this.sessionId,
+      status: "cancelled",
+      reason: "用户停止",
+    });
+    await this.retries.clearPending(this.sessionId);
+    this.lastTurnRequest = undefined;
+    this.panel.setRetryAvailable(false);
     this.panel.setBusy(false);
     this.updateStatus();
   }
@@ -915,6 +968,15 @@ class Shell {
     this.turnUsage = undefined;
     this.reasoningSegments.clear();
     this.remember("user", userText);
+    await this.retries
+      .savePending({
+        sessionId: this.sessionId,
+        text: userText,
+        mode,
+        attachments: effectiveAttachments,
+        savedAt: Date.now(),
+      })
+      .catch((err: unknown) => this.log.warn(`保存待重试请求失败: ${err instanceof Error ? err.message : String(err)}`));
     this.setBusy(true);
     this.assistantBuffer = "";
     this.turnIntent = undefined;
@@ -950,13 +1012,23 @@ class Shell {
       await core.chatSend(params);
     } catch (err) {
       this.turnError = err instanceof Error ? err.message : String(err);
-      this.panel.setRetryAvailable(true);
+      const canRetry = Boolean(this.lastTurnRequest);
+      if (canRetry) {
+        void this.retries.append({
+          ts: Date.now(),
+          sessionId: this.sessionId,
+          status: "failed",
+          reason: this.turnError.slice(0, 500),
+        });
+      }
+      this.panel.setRetryAvailable(canRetry);
       this.panel.addMessage({
         id: `e_${Date.now()}`,
         role: "system",
         text: this.turnError,
       });
     } finally {
+      const turnFailed = Boolean(this.turnError);
       const assistantText = this.assistantBuffer;
       if (assistantText.trim()) {
         // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
@@ -972,6 +1044,7 @@ class Shell {
         this.log.warn(`轮次记录失败：${err instanceof Error ? err.message : String(err)}`);
       });
       await this.refreshTurns();
+      if (!turnFailed) await this.retries.clearPending(this.sessionId);
       this.setBusy(false);
       this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
       void this.sessions.updateStatus(this.sessionId, this.turn);
@@ -998,15 +1071,15 @@ class Shell {
         break;
       }
     }
-    if (userIndex < 0) {
-      this.panel.setHint("找不到上一轮的用户消息，无法重试。");
-      return;
-    }
-    // 截掉失败的用户消息及之后的 assistant/error；send 会重新写入用户消息
-    const kept = await this.sessions.truncate(this.sessionId, userIndex);
+    // 只有最后一条用户消息确实属于这次请求时才回滚；否则保留历史，让 send 追加新消息
+    const canRollback = userIndex >= 0 && all[userIndex]?.text === request.text;
+    const truncateAt = canRollback ? userIndex : all.length;
+    const kept = await this.sessions.truncate(this.sessionId, truncateAt);
     this.persisted = kept.length;
-    await this.turns.truncate(this.sessionId, userIndex).catch(() => undefined);
-    await this.truncateSummary(userIndex).catch(() => undefined);
+    if (canRollback) {
+      await this.turns.truncate(this.sessionId, truncateAt).catch(() => undefined);
+      await this.truncateSummary(truncateAt).catch(() => undefined);
+    }
     this.panel.restore(
       kept.map((m) => ({
         id: m.id,
@@ -2112,6 +2185,9 @@ class Shell {
       // 轮次记录也截断到同一位置；摘要随之截断（已覆盖的轮次按 messageIndex 对齐）
       await this.turns.truncate(this.sessionId, snapshot.line);
       await this.truncateSummary(snapshot.line);
+      await this.retries.clearPending(this.sessionId);
+      this.lastTurnRequest = undefined;
+      this.panel.setRetryAvailable(false);
       const keptTurns = await this.turns.list(this.sessionId);
       const lastTurn = keptTurns[keptTurns.length - 1];
       this.sessions.updateLastIntent(
@@ -2382,7 +2458,18 @@ class Shell {
         return;
       }
       case "ui.retry": {
-        this.panel.retryEvent(params as UiRetryParams);
+        const retry = params as UiRetryParams;
+        const retrySessionId = retry.sessionId || this.sessionId;
+        this.retries.appendSync({
+          ts: Date.now(),
+          sessionId: retrySessionId,
+          status: (retry.status ?? "waiting") as RetryEvent["status"],
+          ...(retry.attempt !== undefined ? { attempt: retry.attempt } : {}),
+          ...(retry.max !== undefined ? { max: retry.max } : {}),
+          ...(retry.delayMs !== undefined ? { delayMs: retry.delayMs } : {}),
+          ...(retry.reason ? { reason: retry.reason.slice(0, 500) } : {}),
+        });
+        this.panel.retryEvent(retry);
         return;
       }
       case "proposal.changed": {
