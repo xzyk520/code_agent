@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.0" stop-color="#7AF7FF"/>
+      <stop offset="0.35" stop-color="#7C9BFF"/>
+      <stop offset="0.65" stop-color="#C77CFF"/>
+      <stop offset="1.0" stop-color="#FF8AE2"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="50%" cy="48%" r="55%">
+      <stop offset="0" stop-color="#6B7CFF" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#6B7CFF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#6B7CFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#080B12"/>
+      <stop offset="1" stop-color="#000000"/>
+    </radialGradient>
+    <filter id="blur18" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="16.2"/>
+    </filter>
+    <filter id="blur8" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6.8"/>
+    </filter>
+    <filter id="blur2" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <path d="M 256.0 82.0 L 408.4 170.0 L 408.4 346.0 L 256.0 434.0 L 103.6 346.0 L 103.6 170.0 Z" fill="none" stroke="url(#neon)" stroke-width="22"
+        stroke-linejoin="miter" opacity="0.22" filter="url(#blur18)"/>
+  <path d="M 256.0 82.0 L 408.4 170.0 L 408.4 346.0 L 256.0 434.0 L 103.6 346.0 L 103.6 170.0 Z" fill="none" stroke="url(#neon)" stroke-width="14"
+        stroke-linejoin="miter" opacity="0.5" filter="url(#blur8)"/>
+  <path d="M 256.0 82.0 L 408.4 170.0 L 408.4 346.0 L 256.0 434.0 L 103.6 346.0 L 103.6 170.0 Z" fill="none" stroke="url(#neon)" stroke-width="8"
+        stroke-linejoin="miter" opacity="1"/>
+  <path d="M 256.0 82.0 L 408.4 170.0 L 408.4 346.0 L 256.0 434.0 L 103.6 346.0 L 103.6 170.0 Z" fill="none" stroke="url(#neon)" stroke-width="8"
+        stroke-linejoin="miter" opacity="0.55" filter="url(#blur2)"/>
+  
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+</svg>
