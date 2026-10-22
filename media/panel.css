@@ -707,3 +707,141 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   font-size: 0.9em;
   padding: 2px 0;
 }
+
+
+/* ── Markdown 正文 ───────────────────────────────────────────── */
+.msg.markdown {
+  white-space: normal;
+}
+.msg.markdown > :first-child { margin-top: 0; }
+.msg.markdown > :last-child { margin-bottom: 0; }
+.msg.markdown p { margin: 0 0 0.65em; }
+.msg.markdown h1,
+.msg.markdown h2,
+.msg.markdown h3,
+.msg.markdown h4,
+.msg.markdown h5,
+.msg.markdown h6 {
+  margin: 0.9em 0 0.45em;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.msg.markdown h1 { font-size: 1.35em; }
+.msg.markdown h2 { font-size: 1.2em; }
+.msg.markdown h3 { font-size: 1.08em; }
+.msg.markdown ul,
+.msg.markdown ol { margin: 0.25em 0 0.7em; padding-left: 1.45em; }
+.msg.markdown li { margin: 0.15em 0; }
+.msg.markdown blockquote {
+  margin: 0.5em 0;
+  padding: 0.15em 0.8em;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+  background: var(--vscode-textBlockQuote-background, transparent);
+  opacity: 0.92;
+}
+.msg.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  margin: 0.9em 0;
+}
+.msg.markdown a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+.msg.markdown a:hover { text-decoration: underline; }
+.msg.markdown code {
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 0.94em;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.16));
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.msg.markdown table {
+  border-collapse: collapse;
+  margin: 0.6em 0 0.8em;
+  font-size: 0.95em;
+}
+.msg.markdown th,
+.msg.markdown td {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  padding: 4px 8px;
+  text-align: left;
+}
+.msg.markdown th {
+  background: var(--vscode-keybindingTable-headerBackground, rgba(128, 128, 128, 0.12));
+}
+
+/* ── 代码块 ─────────────────────────────────────────────────── */
+.msg.markdown .code-block {
+  margin: 0.55em 0 0.75em;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--vscode-textCodeBlock-background, #1e1e1e);
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.08));
+}
+.code-lang {
+  font-size: 11px;
+  opacity: 0.72;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.code-copy {
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.code-copy:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.18)); }
+.msg.markdown .code-block pre {
+  margin: 0;
+  padding: 9px 11px;
+  overflow: auto;
+  max-height: 420px;
+}
+.msg.markdown .code-block code {
+  display: block;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+  white-space: pre;
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.5;
+}
+
+/* highlight.js tokens：跟随 VS Code 主题变量 */
+.hljs-comment,
+.hljs-quote { color: var(--vscode-descriptionForeground, #6a9955); font-style: italic; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type { color: var(--vscode-debugTokenExpression-name, #c586c0); }
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-regexp { color: var(--vscode-debugTokenExpression-string, #ce9178); }
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
+.hljs-title,
+.hljs-section,
+.hljs-function .hljs-title { color: var(--vscode-debugTokenExpression-function, #dcdcaa); }
+.hljs-built_in,
+.hljs-class .hljs-title { color: var(--vscode-debugTokenExpression-type, #4ec9b0); }
+.hljs-meta,
+.hljs-meta .hljs-keyword { color: var(--vscode-debugTokenExpression-boolean, #569cd6); }
+.hljs-variable,
+.hljs-params,
+.hljs-property { color: var(--vscode-editor-foreground); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }

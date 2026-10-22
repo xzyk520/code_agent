@@ -7,6 +7,7 @@
 
 ### Added
 
+- **助手回复 Markdown 渲染**：标题/段落/列表/表格/引用/行内代码/链接；代码围栏按语言高亮（Python/C++/JS/TS/JSON/Bash 等，内置 highlight.js），代码块带语言标签和复制按钮；流式回答按帧重渲染，历史消息同样生效
 - **子代理结论保留**：轮内压缩的 digest 识别 `spawn_subagent` 结果，
   完整保留 `findings`（不截断），同时保留 steps/toolCalls/error
 

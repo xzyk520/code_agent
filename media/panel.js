@@ -50,6 +50,8 @@
   let state = { mode: "chat", busy: false };
   /** @type {HTMLElement | null} */
   let streamingNode = null;
+  let streamingRaw = "";
+  let streamRenderQueued = false;
 
   /** @param {unknown} message */
   function post(message) {
@@ -58,6 +60,19 @@
 
   function clearStreaming() {
     streamingNode = null;
+    streamingRaw = "";
+    streamRenderQueued = false;
+  }
+
+  function scheduleStreamRender() {
+    if (streamRenderQueued || !streamingNode) return;
+    streamRenderQueued = true;
+    requestAnimationFrame(() => {
+      streamRenderQueued = false;
+      if (!streamingNode) return;
+      streamingNode.innerHTML = renderMarkdown(streamingRaw);
+      el.messages.scrollTop = el.messages.scrollHeight;
+    });
   }
 
   /**
@@ -91,7 +106,12 @@
   function addMessage(role, text, extraClass, id) {
     const node = document.createElement("div");
     node.className = "msg " + role + (extraClass ? " " + extraClass : "");
-    node.textContent = text;
+    if (role === "assistant") {
+      node.classList.add("markdown");
+      node.innerHTML = renderMarkdown(text);
+    } else {
+      node.textContent = text;
+    }
     if (id) node.dataset.messageId = id;
     el.messages.appendChild(node);
     el.messages.scrollTop = el.messages.scrollHeight;
@@ -104,6 +124,253 @@
    * 形态参考工业级 agent：一个可折叠的「子代理」块，标题是任务，正文是它调用过的工具，
    * 结束时补一行统计与结论。默认展开（用户想看过程），完成后可折叠。
    */
+  /** @type {any} */
+  const win = window;
+
+  /** @param {string} text */
+  function escapeHtml(text) {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  const LANG_ALIASES = /** @type {Record<string, string>} */ ({
+    py: "python",
+    python: "python",
+    cpp: "cpp",
+    "c++": "cpp",
+    cxx: "cpp",
+    cc: "cpp",
+    c: "c",
+    cs: "csharp",
+    "c#": "csharp",
+    js: "javascript",
+    javascript: "javascript",
+    ts: "typescript",
+    typescript: "typescript",
+    sh: "bash",
+    shell: "bash",
+    zsh: "bash",
+    bash: "bash",
+    yml: "yaml",
+    yaml: "yaml",
+    md: "markdown",
+    json: "json",
+    html: "xml",
+    xml: "xml",
+    css: "css",
+    sql: "sql",
+    go: "go",
+    rust: "rust",
+    rs: "rust",
+    java: "java",
+    kotlin: "kotlin",
+    swift: "swift",
+    php: "php",
+    ruby: "ruby",
+  });
+
+  /** @param {string} raw */
+  function normalizeLang(raw) {
+    const key = raw.trim().toLowerCase();
+    return LANG_ALIASES[key] || key || "text";
+  }
+
+  /**
+   * 行内 Markdown：先转义，再处理代码、链接、粗体、斜体、删除线。
+   * @param {string} text
+   */
+  function renderInline(text) {
+    /** @type {string[]} */
+    const codes = [];
+    let html = escapeHtml(text).replace(/`([^`]+)`/g, (_, code) => {
+      codes.push(code);
+      return `@@BEE_CODE_${codes.length - 1}@@`;
+    });
+    html = html.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>',
+    );
+    html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    html = html.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    html = html.replace(/@@BEE_CODE_(\d+)@@/g, (_, index) => `<code>${codes[Number(index)]}</code>`);
+    return html;
+  }
+
+  /** @param {string} code @param {string} lang */
+  function renderCodeBlock(code, lang) {
+    const language = normalizeLang(lang);
+    let body = escapeHtml(code);
+    const highlighter = win.hljs;
+    if (highlighter && language !== "text" && highlighter.getLanguage(language)) {
+      try {
+        body = highlighter.highlight(code, { language }).value;
+      } catch {
+        body = escapeHtml(code);
+      }
+    }
+    return (
+      '<div class="code-block">' +
+      `<div class="code-head"><span class="code-lang">${escapeHtml(language)}</span>` +
+      '<button type="button" class="code-copy">复制</button></div>' +
+      `<pre><code class="hljs language-${escapeHtml(language)}">${body}</code></pre>` +
+      "</div>"
+    );
+  }
+
+  /** @param {string} line */
+  function tableCells(line) {
+    return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+  }
+
+  /**
+   * 轻量 Markdown 渲染（不引入完整 parser，避免 raw HTML 注入）。
+   * @param {string} text
+   */
+  function renderMarkdown(text) {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    /** @type {string[]} */
+    const out = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i] ?? "";
+
+      const fence = /^\s*(```+|~~~+)\s*([A-Za-z0-9_+#.-]*)\s*$/.exec(line);
+      if (fence) {
+        const marker = (fence[1] || "```")[0];
+        const lang = fence[2] || "";
+        const code = [];
+        i += 1;
+        while (i < lines.length && !new RegExp(`^\\s*${marker}{3,}\\s*$`).test(lines[i] || "")) {
+          code.push(lines[i] || "");
+          i += 1;
+        }
+        if (i < lines.length) i += 1;
+        out.push(renderCodeBlock(code.join("\n"), lang));
+        continue;
+      }
+
+      if (!line.trim()) {
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) {
+        out.push("<hr />");
+        i += 1;
+        continue;
+      }
+
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (heading) {
+        const level = (heading[1] || "#").length;
+        out.push(`<h${level}>${renderInline(heading[2] || "")}</h${level}>`);
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*>/.test(line)) {
+        const quote = [];
+        while (i < lines.length && /^\s*>/.test(lines[i] || "")) {
+          quote.push((lines[i] || "").replace(/^\s*>\s?/, ""));
+          i += 1;
+        }
+        out.push(`<blockquote>${renderMarkdown(quote.join("\n"))}</blockquote>`);
+        continue;
+      }
+
+      if (/^\s*[-*+]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i] || "")) {
+          items.push((lines[i] || "").replace(/^\s*[-*+]\s+/, ""));
+          i += 1;
+        }
+        out.push("<ul>" + items.map((item) => `<li>${renderInline(item)}</li>`).join("") + "</ul>");
+        continue;
+      }
+
+      if (/^\s*\d+[.)]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i] || "")) {
+          items.push((lines[i] || "").replace(/^\s*\d+[.)]\s+/, ""));
+          i += 1;
+        }
+        out.push("<ol>" + items.map((item) => `<li>${renderInline(item)}</li>`).join("") + "</ol>");
+        continue;
+      }
+
+      if (
+        line.includes("|") &&
+        i + 1 < lines.length &&
+        /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(lines[i + 1] || "")
+      ) {
+        const head = tableCells(line);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && (lines[i] || "").includes("|") && (lines[i] || "").trim()) {
+          rows.push(tableCells(lines[i] || ""));
+          i += 1;
+        }
+        const headHtml = "<tr>" + head.map((cell) => `<th>${renderInline(cell)}</th>`).join("") + "</tr>";
+        const bodyHtml = rows
+          .map((row) => "<tr>" + row.map((cell) => `<td>${renderInline(cell)}</td>`).join("") + "</tr>")
+          .join("");
+        out.push(`<table><thead>${headHtml}</thead><tbody>${bodyHtml}</tbody></table>`);
+        continue;
+      }
+
+      const para = [line];
+      i += 1;
+      while (i < lines.length) {
+        const next = lines[i] ?? "";
+        if (
+          !next.trim() ||
+          /^\s*(```+|~~~+)/.test(next) ||
+          /^\s*(?:#{1,6})\s+/.test(next) ||
+          /^\s*>/.test(next) ||
+          /^\s*[-*+]\s+/.test(next) ||
+          /^\s*\d+[.)]\s+/.test(next) ||
+          /^\s*(?:---|\*\*\*|___)\s*$/.test(next)
+        ) {
+          break;
+        }
+        para.push(next);
+        i += 1;
+      }
+      out.push(`<p>${renderInline(para.join("\n")).replace(/\n/g, "<br />")}</p>`);
+    }
+
+    return out.join("\n");
+  }
+
+  el.messages.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const button = target.closest(".code-copy");
+    if (!(button instanceof HTMLButtonElement)) return;
+    const block = button.closest(".code-block");
+    const code = block ? block.querySelector("code") : null;
+    if (!code) return;
+    const text = code.textContent || "";
+    void navigator.clipboard.writeText(text).then(
+      () => {
+        button.textContent = "已复制";
+        setTimeout(() => {
+          button.textContent = "复制";
+        }, 1200);
+      },
+      () => {
+        button.textContent = "复制失败";
+      },
+    );
+  });
+
   const subagents = new Map();
 
   /**
@@ -409,7 +676,6 @@
   /** ── Mermaid：只有出现图时才懒加载（历史会话打开 / 本轮新图） ── */
   const SCRIPT_NONCE = document.currentScript && document.currentScript.nonce ? document.currentScript.nonce : "";
   /** @type {any} */
-  const win = window;
   /** @type {Promise<any> | null} */
   let mermaidPromise = null;
   let diagramSeq = 0;
@@ -869,7 +1135,7 @@
         const message = /** @type {ChatMessage} */ (msg.message);
         if (message.role === "assistant" && streamingNode) {
           // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
-          streamingNode.textContent = message.text;
+          streamingNode.innerHTML = renderMarkdown(message.text);
           clearStreaming();
           setMessagesBusy(false);   // 流式结束：现在可以播报了
           announce("助手回复完成，共 " + message.text.length + " 字");
@@ -891,8 +1157,8 @@
           setMessagesBusy(true);   // 开始流式：先不自动播报
           announce("助手开始回复");
         }
-        streamingNode.textContent += text;
-        el.messages.scrollTop = el.messages.scrollHeight;
+        streamingRaw += text;
+        scheduleStreamRender();
         break;
       }
 

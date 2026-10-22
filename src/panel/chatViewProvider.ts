@@ -412,6 +412,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   const script = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.js"));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.css"));
   const mermaid = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "vendor", "mermaid.min.js"));
+  const highlight = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "vendor", "highlight.min.js"));
   const csp = [
     "default-src 'none'",
     `img-src ${webview.cspSource} data:`,
@@ -466,6 +467,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
     </div>
   </footer>
 
+<script nonce="${nonce}" src="${highlight}"></script>
 <script nonce="${nonce}" src="${script}"></script>
 </body>
 </html>`;
