@@ -25,7 +25,23 @@ READ_TIMEOUT = 180.0
 
 
 class ModelError(RuntimeError):
-    """模型调用失败。`message` 会直接显示给用户，所以要写人话。"""
+    """模型调用失败。
+
+    `message` 会直接显示给用户；`code` 用于决定是否重试（不要靠解析 message）。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "UNKNOWN",
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.retry_after = retry_after
 
 
 class ModelCapabilityError(ModelError):
@@ -159,7 +175,12 @@ class OpenAIClient:
                             raise ReasoningReplayRequired(
                                 f"服务端要求回传思考内容（HTTP {response.status_code}）：{body[:200]}"
                             )
-                        raise ModelError(_explain_http_error(response.status_code, body))
+                        raise ModelError(
+                            _explain_http_error(response.status_code, body),
+                            code=_error_code_for_status(response.status_code),
+                            status=response.status_code,
+                            retry_after=_retry_after_seconds(response.headers),
+                        )
 
                     calls: dict[int, dict[str, str]] = {}
                     async for line in response.aiter_lines():
@@ -170,9 +191,11 @@ class OpenAIClient:
                     if finished:
                         yield ChatDelta(tool_calls=finished)
         except httpx.TimeoutException as exc:
-            raise ModelError(f"模型响应超时（{READ_TIMEOUT:.0f}s）：{exc}") from exc
+            raise ModelError(f"模型响应超时（{READ_TIMEOUT:.0f}s）：{exc}", code="TIMEOUT") from exc
         except httpx.HTTPError as exc:
-            raise ModelError(f"连接模型失败：{exc}") from exc
+            # TLS/证书问题不是瞬时网络抖动，重试只会重复失败
+            code = "INVALID" if "certificate" in str(exc).lower() else "TRANSPORT"
+            raise ModelError(f"连接模型失败：{exc}", code=code) from exc
 
     async def complete(
         self,
@@ -211,12 +234,19 @@ class OpenAIClient:
                 response = await client.post(self.chat_url, json=payload, headers=headers)
                 body = response.text
                 if response.status_code >= 400:
-                    raise ModelError(_explain_http_error(response.status_code, body[:500]))
+                    raise ModelError(
+                        _explain_http_error(response.status_code, body[:500]),
+                        code=_error_code_for_status(response.status_code),
+                        status=response.status_code,
+                        retry_after=_retry_after_seconds(response.headers),
+                    )
                 data = json.loads(body)
         except httpx.TimeoutException as exc:
-            raise ModelError(f"模型响应超时（{timeout:.0f}s）：{exc}") from exc
+            raise ModelError(f"模型响应超时（{timeout:.0f}s）：{exc}", code="TIMEOUT") from exc
         except httpx.HTTPError as exc:
-            raise ModelError(f"连接模型失败：{exc}") from exc
+            # TLS/证书问题不是瞬时网络抖动，重试只会重复失败
+            code = "INVALID" if "certificate" in str(exc).lower() else "TRANSPORT"
+            raise ModelError(f"连接模型失败：{exc}", code=code) from exc
 
         choices = data.get("choices") or []
         content = ""
@@ -233,6 +263,31 @@ class OpenAIClient:
 
     async def close(self) -> None:
         """占位：目前每次请求自建连接池，无需显式关闭。"""
+
+
+def _error_code_for_status(status: int) -> str:
+    if status in (408, 504):
+        return "TIMEOUT"
+    if status == 429:
+        return "RATE_LIMIT"
+    if status in (401, 403):
+        return "AUTH"
+    if status == 404:
+        return "CONFIG"
+    if status >= 500:
+        return "SERVER"
+    return "INVALID"
+
+
+def _retry_after_seconds(headers: httpx.Headers) -> float | None:
+    raw = headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _explain_http_error(status: int, body: str) -> str:

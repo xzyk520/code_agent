@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import random
 import uuid
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
@@ -48,6 +49,23 @@ Notify = Callable[[str, dict[str, Any]], None]
 Propose = Callable[[str, str, str], Awaitable[str]]
 
 #: 子代理的固定前缀：只读、给结论与引用、不复述代码
+#: 模型请求在"还没产生任何输出"时的安全重试策略
+MODEL_RETRY_MAX_ATTEMPTS = 6
+MODEL_RETRY_INITIAL_S = 0.5
+MODEL_RETRY_MAX_S = 10.0
+RETRYABLE_MODEL_CODES = frozenset({"RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT", "EMPTY_RESPONSE"})
+
+
+class StreamInterrupted(Exception):
+    """模型流在已经产生部分输出后断开；保留部分内容，由上层决定是否续写。"""
+
+    def __init__(self, message: str, text: str, reasoning: str, calls: list[ToolCall]) -> None:
+        super().__init__(message)
+        self.text = text
+        self.reasoning = reasoning
+        self.calls = calls
+
+
 PARALLEL_READONLY = frozenset({
     "read_file",
     "list_files",
@@ -386,14 +404,57 @@ class AgentLoop:
                 }
             )
         final_text = ""
+        interruptions = 0
+
+        async def stream_model(**kwargs: Any):
+            """调用模型；中途断流时保留部分输出并让模型续写一次。"""
+            nonlocal interruptions
+            try:
+                return await self._stream_with_deadline(
+                    client, messages, session, stats, **kwargs
+                )
+            except StreamInterrupted as exc:
+                if interruptions >= 1:
+                    raise ModelError(
+                        "模型连接在输出中途连续中断，已保留部分内容；请检查网络后重试。"
+                    ) from exc
+                interruptions += 1
+                self._log(f"模型输出中断，保留部分内容：{exc}")
+                self._emit(
+                    "ui.tool",
+                    {
+                        "sessionId": session.id,
+                        "name": "guard",
+                        "status": "error",
+                        "summary": "模型输出中断，已保留部分内容",
+                    },
+                )
+                self._notify(
+                    "log",
+                    {"level": "warn", "msg": "模型连接在输出中途中断；已保留部分内容，正在尝试续写。"},
+                )
+                if exc.text.strip():
+                    messages.append({"role": "assistant", "content": exc.text})
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "上一次模型输出在传输中断前只完成了一部分；已保留内容。"
+                            "不要重复任何已经执行过的工具调用；基于已有内容继续回答。"
+                            "如果无法安全继续，请明确说明需要用户重试。"
+                        ),
+                    }
+                )
+                return None
 
         self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "start"})
         try:
             while stats.steps < max_steps:
                 stats.steps += 1
-                answer, calls, usage, reasoning = await self._stream_with_deadline(
-                    client, messages, session, stats, round_index=stats.steps
-                )
+                streamed = await stream_model(round_index=stats.steps)
+                if streamed is None:
+                    continue
+                answer, calls, usage, reasoning = streamed
                 self._emit_usage(session, stats, started_at)
                 warning = self._budget_warning(stats, started_at)
                 if warning and not self._budget_warned:
@@ -507,9 +568,11 @@ class AgentLoop:
                     "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
                                "如果不需要改，请明确说明原因。",
                 })
-                answer, calls, _usage, reasoning = await self._stream_with_deadline(
-                    client, messages, session, stats, round_index=stats.steps
-                )
+                streamed = await stream_model(round_index=stats.steps)
+                if streamed is None:
+                    final_text = ""
+                    raise ModelError("模型在收尾阶段输出中断；请检查网络后重试。")
+                answer, calls, _usage, reasoning = streamed
                 if calls:
                     assistant_msg = _assistant_tool_message(answer, calls)
                     self._attach_reasoning(assistant_msg, reasoning)
@@ -520,9 +583,10 @@ class AgentLoop:
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
-                    answer, _calls, _usage, _reasoning = await self._stream_with_deadline(
-                        client, messages, session, stats, round_index=stats.steps
-                    )
+                    streamed = await stream_model(round_index=stats.steps)
+                    if streamed is None:
+                        raise ModelError("模型在收尾阶段输出中断；请检查网络后重试。")
+                    answer, _calls, _usage, _reasoning = streamed
                 final_text = answer
         finally:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
@@ -634,19 +698,30 @@ class AgentLoop:
         )[:12_000]
         if not text.strip():
             return
-        try:
-            summary, _usage = await client.complete(
-                [
-                    {
-                        "role": "system",
-                        "content": "把下面的 agent 执行过程压缩成不超过 200 字的中文要点：保留结论、涉及的文件、失败原因。只输出要点。",
-                    },
-                    {"role": "user", "content": text},
-                ],
-                timeout=45.0,
-            )
-        except ModelError as exc:
-            self._log(f"轮内摘要失败：{exc}")
+        summary = ""
+        for attempt in range(2):
+            try:
+                summary, _usage = await client.complete(
+                    [
+                        {
+                            "role": "system",
+                            "content": "把下面的 agent 执行过程压缩成不超过 200 字的中文要点：保留结论、涉及的文件、失败原因。只输出要点。",
+                        },
+                        {"role": "user", "content": text},
+                    ],
+                    timeout=45.0,
+                )
+                break
+            except ModelError as exc:
+                retryable = getattr(exc, "code", "UNKNOWN") in RETRYABLE_MODEL_CODES
+                if retryable and attempt == 0:
+                    self._log(f"轮内摘要失败，1s 后重试：{exc}")
+                    await asyncio.sleep(1.0)
+                    continue
+                # 自动压缩失败不拖垮主任务：保留现有历史继续
+                self._log(f"轮内摘要失败：{exc}")
+                return
+        if not summary.strip():
             return
         note = {"role": "system", "content": f"【轮内压缩摘要】{summary.strip()[:600]}"}
         messages[1:last_user] = [note]
@@ -746,54 +821,109 @@ class AgentLoop:
         round_index: int = 1,
         deadline_start: float | None = None,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
-        parts: list[str] = []
-        reasoning_parts: list[str] = []
-        calls: list[ToolCall] = []
-        usage: dict[str, int] | None = None
         started = deadline_start or asyncio.get_running_loop().time()
-        iterator = client.stream_chat(messages, tools=self._schemas if allow_tools else None)
-        first = True
+        attempt = 0
 
         def timeout_error(reason: str) -> ModelError:
-            return ModelError(f"主agent模型{reason}超时，已强制停止本轮。")
+            return ModelError(f"主agent模型{reason}超时，已强制停止本轮。", code="TIMEOUT")
 
-        try:
-            while True:
-                now = asyncio.get_running_loop().time()
-                model_left = self._turn_time_budget - (now - started)
-                if model_left <= 0:
-                    raise timeout_error("响应")
-                idle_budget = self._config.first_token_seconds if first else self._config.idle_seconds
-                model_bound = model_left <= idle_budget
-                wait = min(idle_budget, model_left)
-                try:
-                    delta = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError as exc:
+        while True:
+            parts: list[str] = []
+            reasoning_parts: list[str] = []
+            calls: list[ToolCall] = []
+            usage: dict[str, int] | None = None
+            attempt_started = asyncio.get_running_loop().time()
+            iterator = client.stream_chat(messages, tools=self._schemas if allow_tools else None)
+            first = True
+            retry_reason: str | None = None
+            retry_after: float | None = None
+
+            try:
+                while True:
                     now = asyncio.get_running_loop().time()
-                    if model_bound or now - started >= self._turn_time_budget:
-                        raise timeout_error("响应") from exc
-                    raise timeout_error("首 token" if first else "空闲") from exc
+                    model_left = self._turn_time_budget - (now - started)
+                    if model_left <= 0:
+                        raise timeout_error("响应")
+                    idle_budget = self._config.first_token_seconds if first else self._config.idle_seconds
+                    model_bound = model_left <= idle_budget
+                    wait = min(idle_budget, model_left)
+                    try:
+                        delta = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError as exc:
+                        now = asyncio.get_running_loop().time()
+                        if model_bound or now - started >= self._turn_time_budget:
+                            raise timeout_error("响应") from exc
+                        # 已经产生部分输出：不重放，交给上层保留/续写
+                        if parts or reasoning_parts or calls:
+                            raise StreamInterrupted(
+                                "模型流在输出中途超时",
+                                "".join(parts),
+                                "".join(reasoning_parts),
+                                calls,
+                            ) from exc
+                        if attempt + 1 < MODEL_RETRY_MAX_ATTEMPTS:
+                            retry_reason = "首 token 超时"
+                            break
+                        raise timeout_error("首 token") from exc
 
-                first = False
-                if delta.usage:
-                    usage = delta.usage
-                if delta.tool_calls:
-                    calls.extend(delta.tool_calls)
-                if delta.text:
-                    parts.append(delta.text)
-                    self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
-                if delta.reasoning:
-                    reasoning_parts.append(delta.reasoning)
-                    self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning, "round": round_index})
-        finally:
-            with contextlib.suppress(Exception):
-                aclose = getattr(iterator, "aclose", None)
-                if aclose is not None:
-                    await aclose()
-            if stats is not None:
-                stats.model_wait_ms += int((asyncio.get_running_loop().time() - started) * 1000)
+                    first = False
+                    if delta.usage:
+                        usage = delta.usage
+                    if delta.tool_calls:
+                        calls.extend(delta.tool_calls)
+                    if delta.text:
+                        parts.append(delta.text)
+                        self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
+                    if delta.reasoning:
+                        reasoning_parts.append(delta.reasoning)
+                        self._emit(
+                            "ui.reasoning",
+                            {"sessionId": session.id, "text": delta.reasoning, "round": round_index},
+                        )
+            except ModelError as exc:
+                if parts or reasoning_parts or calls:
+                    # 已经吐出的内容不能丢弃，也不能自动重跑（否则工具可能重复执行）
+                    raise StreamInterrupted(
+                        str(exc), "".join(parts), "".join(reasoning_parts), calls
+                    ) from exc
+                if getattr(exc, "code", "UNKNOWN") not in RETRYABLE_MODEL_CODES:
+                    raise
+                if attempt + 1 >= MODEL_RETRY_MAX_ATTEMPTS:
+                    raise
+                retry_reason = str(exc)
+                retry_after = getattr(exc, "retry_after", None)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                with contextlib.suppress(Exception):
+                    aclose = getattr(iterator, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+                if stats is not None:
+                    stats.model_wait_ms += int((asyncio.get_running_loop().time() - attempt_started) * 1000)
+
+            if retry_reason is None:
+                break
+
+            attempt += 1
+            delay = (
+                min(retry_after, MODEL_RETRY_MAX_S)
+                if retry_after
+                else min(MODEL_RETRY_INITIAL_S * (2 ** (attempt - 1)), MODEL_RETRY_MAX_S)
+            )
+            delay *= 1.0 + random.uniform(-0.1, 0.1)
+            remaining = self._turn_time_budget - (asyncio.get_running_loop().time() - started)
+            if delay >= remaining:
+                raise timeout_error("响应")
+            retry_msg = (
+                f"模型请求失败（{retry_reason}），{delay:.1f}s 后重试 "
+                f"({attempt + 1}/{MODEL_RETRY_MAX_ATTEMPTS})"
+            )
+            self._log(retry_msg)
+            self._notify("log", {"level": "warn", "msg": retry_msg})
+            await asyncio.sleep(max(0.0, delay))
 
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
@@ -1022,9 +1152,12 @@ class AgentLoop:
             },
         )
         messages.append({"role": "user", "content": notice})
-        answer, _calls, _usage, _reasoning = await self._stream_with_deadline(
-            client, messages, session, stats, allow_tools=False, round_index=stats.steps
-        )
+        try:
+            answer, _calls, _usage, _reasoning = await self._stream_with_deadline(
+                client, messages, session, stats, allow_tools=False, round_index=stats.steps
+            )
+        except StreamInterrupted as exc:
+            raise ModelError(f"模型在收尾阶段输出中断：{exc}") from exc
         return answer
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:

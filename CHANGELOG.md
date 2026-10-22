@@ -7,6 +7,9 @@
 
 ### Added
 
+- **模型连接恢复**：首 token 前最多 5 次指数退避重试（429/5xx/超时/传输），
+支持 Retry-After；已有输出后不重跑，保留部分内容并让模型续写一次；
+轮内摘要使用独立 2 次重试，自动压缩失败不拖垮主任务
 - **沙箱分层审批（协议 v38）**：`run_command` 分 `sandbox-readonly`（默认）→
 `sandbox`（工作区可写）→ `sandbox-network`（+网络）→ `host`（真实系统）；
 每级升级都需 justification，可仅本次或本会话都允许；无 Docker 时非 host 请求拒绝

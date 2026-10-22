@@ -657,6 +657,9 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | 单批工具数 | `maxToolCallsPerBatch`（默认 8） | 超出部分回填 `batch_limit` 错误，要求模型拆批 |
 | 工具异常 | 任意异常 | 捕获后回填 `{error, kind}`；**不中断循环**，模型可改策略 |
 | 用户中断 | 随时 | `task.cancel()` → `CancelledError` 穿透；壳侧 abort 在飞请求，`runAdapter` 杀掉进程树/`docker rm -f` 容器，子代理随父任务取消，`chat.send` 返回「本轮已取消」 |
+| 模型连接失败 | 首 token 之前：最多 5 次，500ms→10s 指数退避 + 10% jitter，优先 `Retry-After`；可重试 `RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE` | 失败后报错；401/404/证书错误不重试 |
+| 输出中途断流 | 已有文本/思考/工具调用时 | 不自动重跑；保留部分内容 + 一条系统续写提示，最多续写一次；已执行工具不重放 |
+| 轮内摘要失败 | 独立 2 次尝试；自动压缩失败不拖垮主任务 | 保留当前可用历史继续；手动压缩错误明确返回 |
 
 > 设计要点：守卫要「先提醒、再停止」。直接硬停会让用户觉得模型「卡住了」；先插入一条系统提示纠正策略，往往能自愈。
 
