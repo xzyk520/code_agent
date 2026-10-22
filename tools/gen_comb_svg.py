@@ -54,9 +54,14 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="5
     <polygon points="{pts(outer[1])}" fill="url(#wall)" stroke="#0A101C" stroke-width="4"/>
     <polygon points="{pts(outer[2])}" fill="url(#wall)" stroke="#0A101C" stroke-width="4"/>
   </g>
-  <polygon points="{pts(inners[0])}" fill="url(#air)"/>
-  <polygon points="{pts(inners[1])}" fill="url(#air)"/>
-  <polygon points="{pts(inners[2])}" fill="url(#air)"/>
+  <polygon points="{pts(inners[0])}" fill="url(#honey)"/>
+  <polygon points="{pts(inners[1])}" fill="url(#honey)"/>
+  <polygon points="{pts(inners[2])}" fill="url(#honey)"/>
+  <g fill="none" stroke="#FFF6D2" stroke-width="3" opacity="0.55">
+    <path d="M244 124 Q256 130 268 124"/>
+    <path d="M172 250 Q184 256 196 250"/>
+    <path d="M316 250 Q328 256 340 250"/>
+  </g>
   <g clip-path="url(#honey-cell)">
     <polygon points="{pts(honey)}" fill="url(#honey)"/>
     <ellipse cx="{hx}" cy="{hy + 42}" rx="44" ry="24" fill="#FFE7A0" opacity="0.28" filter="url(#blur)"/>

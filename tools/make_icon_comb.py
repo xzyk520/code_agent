@@ -132,65 +132,38 @@ def draw_cluster(w: int, level: str) -> Image.Image:
     # 每个房室的内腔
     for i, poly in enumerate(inners):
         cavity = mask_of(poly, w)
+        # 所有房室都装满蜂蜜：整格填充，只留一道液面高光
+        cx, cy = centers[i]
+        fill_grad(img, cavity, HONEY_TOP, HONEY_BOTTOM, alpha=240)
+        img.alpha_composite(soft_blob(
+            w,
+            [(cx - 42) * w / 512, (cy + 6) * w / 512,
+             (cx + 42) * w / 512, (cy + inner_r) * w / 512],
+            (255, 246, 205, 70), 14, cavity,
+        ))
+        surface = cy - 44
+        draw = ImageDraw.Draw(img)
+        draw.line(
+            scaled([(cx - 46, surface), (cx, surface + 7), (cx + 46, surface)], w),
+            fill=(255, 248, 214, 190), width=max(1, int(3 * w / 512)), joint="curve",
+        )
+        # 高光
+        gloss = Image.new("RGBA", (w, w), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(gloss)
+        gd.ellipse(scaled([(cx - 36, cy - 30), (cx - 12, cy + 12)], w),
+                   fill=(255, 253, 236, 80))
+        gd.ellipse(scaled([(cx - 28, cy - 24), (cx - 20, cy - 16)], w),
+                   fill=(255, 253, 236, 190))
+        gloss = gloss.filter(ImageFilter.GaussianBlur(3 * w / 512))
+        gloss.putalpha(ImageChops.multiply(gloss.getchannel("A"), cavity))
+        img.alpha_composite(gloss)
+        # 只有溢出那一格放气泡，避免三格重复
         if i == honey_index:
-            cx, cy = centers[i]
-            # 上半格空气
-            fill_grad(img, cavity, AIR_TOP, AIR_BOTTOM)
-            # 下半格蜂蜜池
-            surface = cy - 18
-            honey = [
-                (cx - 80, surface), (cx, surface + 8), (cx + 80, surface),
-                (cx + 80, cy + inner_r + 10), (cx, cy + inner_r + 10),
-                (cx - 80, cy + inner_r + 10),
-            ]
-            honey_mask = ImageChops.multiply(mask_of(honey, w), cavity)
-            fill_grad(img, honey_mask, HONEY_TOP, HONEY_BOTTOM, alpha=235)
-            # 底部透光（焦散）
-            img.alpha_composite(soft_blob(
-                w,
-                [(cx - 42) * w / 512, (cy + 10) * w / 512,
-                 (cx + 42) * w / 512, (cy + inner_r) * w / 512],
-                (255, 246, 205, 85), 14, honey_mask,
-            ))
-            # 液面 + 下方暗影
-            draw = ImageDraw.Draw(img)
-            draw.line(
-                scaled([(cx - 70, surface), (cx, surface + 8), (cx + 70, surface)], w),
-                fill=(255, 248, 214, 225), width=max(1, int(4 * w / 512)), joint="curve",
-            )
-            draw.line(
-                scaled([(cx - 62, surface + 10), (cx, surface + 18), (cx + 62, surface + 10)], w),
-                fill=(90, 40, 0, 100), width=max(1, int(8 * w / 512)), joint="curve",
-            )
-            # 高光
-            gloss = Image.new("RGBA", (w, w), (0, 0, 0, 0))
-            gd = ImageDraw.Draw(gloss)
-            gd.ellipse(scaled([(cx - 36, cy + 4), (cx - 12, cy + 44)], w),
-                       fill=(255, 253, 236, 85))
-            gd.ellipse(scaled([(cx - 30, cy + 8), (cx - 22, cy + 16)], w),
-                       fill=(255, 253, 236, 200))
-            gloss = gloss.filter(ImageFilter.GaussianBlur(3 * w / 512))
-            gloss.putalpha(ImageChops.multiply(gloss.getchannel("A"), cavity))
-            img.alpha_composite(gloss)
-            # 气泡
             draw = ImageDraw.Draw(img)
             draw.ellipse(
-                scaled([(cx + 14, cy + 24), (cx + 28, cy + 38)], w),
+                scaled([(cx + 16, cy + 12), (cx + 30, cy + 26)], w),
                 outline=(255, 248, 220, 150), width=max(1, int(2 * w / 512)),
             )
-        else:
-            fill_grad(img, cavity, AIR_TOP, AIR_BOTTOM)
-            # 空房室：斜向的玻璃反光
-            cx, cy = centers[i]
-            band = Image.new("RGBA", (w, w), (0, 0, 0, 0))
-            ImageDraw.Draw(band).polygon(
-                scaled([(cx - 58, cy + 6), (cx - 20, cy - 50),
-                        (cx + 14, cy - 46), (cx - 30, cy + 18)], w),
-                fill=(235, 244, 255, 36),
-            )
-            band = band.filter(ImageFilter.GaussianBlur(7 * w / 512))
-            band.putalpha(ImageChops.multiply(band.getchannel("A"), cavity))
-            img.alpha_composite(band)
 
         # 内腔边缘的内阴影（做出"凹陷"）
         ring = ImageChops.subtract(
