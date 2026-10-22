@@ -143,6 +143,93 @@ const READ_ONLY_COMMANDS = [
   "node --version",
 ];
 
+/**
+ * 无 Docker 时真正允许在 host 上执行的“受限只读”命令。
+ *
+ * 这不是沙箱，只是严格白名单：命令仍以当前用户权限运行。这里刻意比
+ * `isReadOnlyCommand` 保守得多——禁止 find/fd/sed/awk/less、禁止
+ * -exec/--pre/--output/--ext-diff 这类能执行或写文件的选项，也禁止
+ * shell 元字符。
+ */
+const HOST_READONLY_COMMANDS = new Set([
+  "cat",
+  "type",
+  "head",
+  "tail",
+  "wc",
+  "ls",
+  "dir",
+  "pwd",
+  "rg",
+  "grep",
+  "npm",
+  "pip",
+  "python",
+  "python3",
+  "node",
+]);
+
+const HOST_READONLY_GIT = new Set(["status", "diff", "log", "show", "blame", "ls-files"]);
+
+const HOST_READONLY_BANNED = new Set([
+  "sed",
+  "awk",
+  "find",
+  "fd",
+  "tree",
+  "less",
+  "more",
+  "vi",
+  "vim",
+  "nano",
+  "bash",
+  "sh",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "perl",
+  "ruby",
+  "php",
+  "docker",
+]);
+
+export function isHostReadOnlyCommand(command: string): boolean {
+  const text = command.trim();
+  if (!text || /[|;&<>`$(){}\[\]\r\n]/.test(text)) return false;
+  const parts = text.split(/\s+/);
+  const name = (parts[0] ?? "").toLowerCase();
+  if (HOST_READONLY_BANNED.has(name)) return false;
+
+  if (name === "git") {
+    const sub = (parts[1] ?? "").toLowerCase();
+    if (!HOST_READONLY_GIT.has(sub)) return false;
+    return !parts.slice(2).some((arg) => {
+      const lower = arg.toLowerCase();
+      return (
+        lower.startsWith("-c") ||
+        lower.startsWith("--config-env") ||
+        ["--ext-diff", "--textconv", "--output", "--exec-path", "--open-files-in-pager", "--paginate", "--no-index"].some(
+          (flag) => lower === flag || lower.startsWith(`${flag}=`),
+        )
+      );
+    });
+  }
+
+  if (!HOST_READONLY_COMMANDS.has(name)) return false;
+  if (name === "rg") {
+    return !parts.slice(1).some((arg) => {
+      const lower = arg.toLowerCase();
+      return lower === "--pre" || lower.startsWith("--pre=") || lower === "--pre-glob" || lower === "--hostname-bin" || lower === "--search-zip" || lower === "-z";
+    });
+  }
+  if (name === "npm") return parts[1]?.toLowerCase() === "ls";
+  if (name === "pip") return parts[1]?.toLowerCase() === "list";
+  if (name === "python" || name === "python3" || name === "node") {
+    return parts[1]?.toLowerCase() === "--version" || parts[1]?.toLowerCase() === "-v";
+  }
+  return true;
+}
+
 export function isReadOnlyCommand(command: string): boolean {
   const text = command.trim().toLowerCase();
   if (!text) return false;

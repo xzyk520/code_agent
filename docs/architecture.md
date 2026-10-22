@@ -1715,12 +1715,14 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | 有 docker：`sandbox-network` 请求 | 升级审批；可本会话都允许；需 justification | 同主代理 |
 | 有 docker：`host` 请求 | 最高危险审批；可本会话都允许；需 justification | 同主代理；策略仍可拒绝 |
 | 有 docker：写文件 | 按规则/模式 | 需审批（`fullAccess` 时免） |
-| 无 docker：`sandbox-readonly` / `sandbox` 请求 | **拒绝**，要求显式 `host`（不静默降级） | **拒绝** |
-| 无 docker：`sandbox-network` 请求 | **拒绝**（无法提供沙箱网络） | **拒绝** |
+| 无 docker：`sandbox-readonly` + 严格白名单命令 | **host 受限只读**，首次审批；可选本会话都允许；结果标 `host-readonly` | 同主代理 |
+| 无 docker：`sandbox-readonly` + 非白名单命令 | **拒绝**，要求显式 `host` | **拒绝** |
+| 无 docker：`sandbox` / `sandbox-network` 请求 | **host 审批 + 命令级 checkpoint**；需 justification；执行环境明确标注无沙箱 | **拒绝**（子代理不允许写） |
 | 无 docker：`host` 请求 | 每次危险审批 | 每次危险审批 |
-| 无 docker：写文件 | 按规则/模式 | **拒绝** |
 
 `fullAccess` 只免普通权限审批，**不**跳过沙箱等级审批；每级升级都可选「仅本次」或「本会话都允许」。
+
+> 无 Docker 的 `host-readonly` 和 host 写回退都**不是沙箱**：前者只做严格命令白名单和 shell 元字符拦截，后者只做用户审批与工作区 checkpoint；两者都不提供文件系统、网络或凭据隔离。
 
 启动时的 docker 检测（避免反复打扰）：
 

@@ -7,6 +7,8 @@
 
 ### Added
 
+- **无 Docker 回退**：`sandbox-readonly` 对严格白名单命令走 host 受限只读（结果 `host-readonly`）；
+`sandbox`/`sandbox-network` 走 host 审批 + 命令级 checkpoint；非白名单只读命令仍拒绝
 - **模型连接恢复**：首 token 前最多 5 次指数退避重试（429/5xx/超时/传输），
 支持 Retry-After；已有输出后不重跑，保留部分内容并让模型续写一次；
 轮内摘要使用独立 2 次重试，自动压缩失败不拖垮主任务；服务端 context overflow 会强制压缩后重试一次
@@ -15,7 +17,7 @@
   `.pending.json` 保存最近请求；重载后恢复待重试状态和「重试本轮」
 - **沙箱分层审批（协议 v38）**：`run_command` 分 `sandbox-readonly`（默认）→
 `sandbox`（工作区可写）→ `sandbox-network`（+网络）→ `host`（真实系统）；
-每级升级都需 justification，可仅本次或本会话都允许；无 Docker 时非 host 请求拒绝
+每级升级都需 justification，可仅本次或本会话都允许；无 Docker 时只读白名单走 host 受限只读，写请求走 host 审批 + checkpoint
 - **命令级 checkpoint**：写操作前自动快照，命令结束后列出变更文件，可在面板一键撤销本次修改
 - **移除整轮硬墙钟**：不再默认 2 小时强制结束；长任务由每工具超时、步数/token 预算与用户停止控制
 - **协议 v35–v38 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入

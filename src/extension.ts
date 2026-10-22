@@ -30,7 +30,7 @@ import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
-import { decide as decidePolicy, isReadOnlyCommand, type AgentRole, type PolicyDecision } from "./policy";
+import { decide as decidePolicy, isHostReadOnlyCommand, isReadOnlyCommand, type AgentRole, type PolicyDecision } from "./policy";
 import { addApprovedRoot, isInside, resolveTarget } from "./paths";
 import { buildContext } from "./contextBuilder";
 import { SessionStore, type TurnStatus } from "./sessionStore";
@@ -138,6 +138,10 @@ class Shell {
   private readonly reasoningSegments = new Map<number, string>();
   /** 每个会话已批准的最高沙箱权限等级 */
   private readonly sandboxApprovals = new Map<string, number>();
+  /** 无 Docker 时，用户已批准受限只读 host 执行的会话 */
+  private readonly hostReadonlyApprovals = new Set<string>();
+  /** 无 Docker 时，用户已批准 host 写回退的最高等级（与 Docker 审批分开） */
+  private readonly hostFallbackApprovals = new Map<string, number>();
   /** 最近一次发送的请求，用于“重试本轮” */
   private lastTurnRequest?: { text: string; mode: Mode; attachments: AttachedContext[] };
   /** 命令级 checkpoint：命令结束后可一键撤销 */
@@ -1410,7 +1414,7 @@ class Shell {
    * 命令执行：
    *   - sandbox 请求：Docker 可用时首次审批，可选本会话都允许
    *   - host 请求：每次危险审批，必须 justification
-   *   - 没有 docker：sandbox 退回原有直接执行；host 仍逐次审批
+   *   - 没有 docker：只读白名单走 host 受限只读；写请求走 host 审批 + checkpoint
    */
   private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
     const role: AgentRole = params.role === "subagent" ? "subagent" : "main";
@@ -1432,19 +1436,27 @@ class Shell {
           : params.sandbox === "sandbox"
             ? "sandbox"
             : "sandbox-readonly";
-    if (requested !== "host" && !this.dockerAvailable) {
+    const noDocker = !this.dockerAvailable;
+    const hostReadonlyFallback = noDocker && requested === "sandbox-readonly";
+    const hostWriteFallback =
+      noDocker && requested !== "sandbox-readonly" && requested !== "host";
+    if (hostReadonlyFallback && !isHostReadOnlyCommand(params.command)) {
       throw deniedError(
-        "没有 Docker：无法提供沙箱环境。如确需在真实系统执行，请用 sandbox=host 并说明理由；不要静默降级为直接执行。",
+        "没有 Docker：受限只读模式只允许严格白名单内的只读命令（git status/diff/log、ls、rg、cat 等）。" +
+          "这条命令不在白名单内；如确需执行，请用 sandbox=host 并说明理由。",
       );
     }
-    const effectiveParams: RunParams = { ...params, sandbox: requested };
     if (requested !== "sandbox-readonly" && !(params.justification ?? "").trim()) {
       throw deniedError(`sandbox=${requested} 必须提供 justification，说明为什么需要额外权限`);
     }
+    const effectiveParams: RunParams = {
+      ...params,
+      sandbox: hostReadonlyFallback || hostWriteFallback ? "host" : requested,
+    };
 
     const cwdAbs = params.cwd ? nodePath.resolve(root, params.cwd) : root;
     const inside = isInside(root, cwdAbs);
-    const readOnly = isReadOnlyCommand(params.command);
+    const readOnly = noDocker ? isHostReadOnlyCommand(params.command) : isReadOnlyCommand(params.command);
 
     const policy = this.policyFor("run", { role, insideWorkspace: inside, readOnlyCommand: readOnly });
     if (policy.decision === "deny") throw deniedError(policy.reason);
@@ -1456,7 +1468,7 @@ class Shell {
     let gateHandled = false;
     const roleLabel = role === "subagent" ? "子代理" : "主 agent";
     const approved = this.sandboxApprovals.get(this.sessionId) ?? -1;
-    if (requested !== "host" && this.dockerAvailable && ranks[requested] > approved) {
+    if (!noDocker && requested !== "host" && ranks[requested] > approved) {
       const labels: Record<SandboxLevel, { question: string; detail: string }> = {
         "sandbox-readonly": {
           question: "允许 agent 在 Docker 只读沙箱内执行命令吗？",
@@ -1496,6 +1508,75 @@ class Shell {
         throw deniedError("用户取消权限申请");
       }
       gateHandled = true;
+    } else if (hostReadonlyFallback) {
+      const fallbackApproved =
+        this.hostReadonlyApprovals.has(this.sessionId) ||
+        (this.hostFallbackApprovals.get(this.sessionId) ?? -1) >= 1;
+      if (!fallbackApproved) {
+        const answer = await this.confirm.ask(
+          {
+            question: "没有 Docker：允许以“受限只读”方式在本机执行命令吗？",
+            detail:
+              `${roleLabel} 请求执行只读命令：
+
+` +
+              `命令：${params.command}
+` +
+              `目录：${cwdAbs}
+
+` +
+              "这不是 Docker 沙箱：命令以当前用户权限在本机运行，没有文件系统或网络隔离。\n" +
+              "只放行严格白名单中的只读命令（git status/diff/log、ls、rg、cat 等，禁 shell 元字符与可执行子选项）。\n" +
+              "写操作不会走这条路径，会单独要求 host 审批并创建 checkpoint。",
+            options: [
+              { id: "once", label: "仅本次允许" },
+              { id: "session", label: "本会话都允许" },
+              { id: "cancel", label: "取消" },
+            ],
+          },
+          ctx,
+        );
+        if (answer.choice === "session") {
+          this.hostReadonlyApprovals.add(this.sessionId);
+        } else if (answer.choice !== "once") {
+          throw deniedError("用户取消受限只读执行");
+        }
+      }
+      gateHandled = true;
+    } else if (hostWriteFallback) {
+      const approvedFallback = this.hostFallbackApprovals.get(this.sessionId) ?? -1;
+      if (ranks[requested] > approvedFallback) {
+        const answer = await this.confirm.ask(
+          {
+            question: "没有 Docker：允许这条命令以 host 权限执行吗？",
+            detail:
+              `${roleLabel} 请求在 host 上执行写操作：
+
+` +
+              `命令：${params.command}
+` +
+              `目录：${cwdAbs}
+` +
+              `理由：${(params.justification ?? "").trim() || "（未提供）"}
+
+` +
+              "没有 Docker，无法提供文件系统或网络隔离。命令将以当前用户权限在真实系统运行，工作区可写、网络可用，可能读取凭据或影响其他项目。\n" +
+              "执行前会创建命令级 checkpoint；checkpoint 只覆盖工作区内的改动，命令仍可能写入工作区外。",
+            options: [
+              { id: "once", label: "仅本次允许" },
+              { id: "session", label: "本会话都允许" },
+              { id: "cancel", label: "取消" },
+            ],
+          },
+          ctx,
+        );
+        if (answer.choice === "session") {
+          this.hostFallbackApprovals.set(this.sessionId, ranks[requested]);
+        } else if (answer.choice !== "once") {
+          throw deniedError("用户取消 host 写回退");
+        }
+      }
+      gateHandled = true;
     } else if (requested === "host" && ranks.host > approved) {
       const answer = await this.confirm.ask(
         {
@@ -1505,7 +1586,9 @@ class Shell {
             `命令：${params.command}\n` +
             `目录：${cwdAbs}\n` +
             `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
-            "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n" +
+            (this.dockerAvailable
+              ? "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n"
+              : "危险：当前没有 Docker，真实系统本来就没有沙箱；命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n") +
             "只在你完全信任这条命令时继续。",
           options: [
             { id: "once", label: "仅本次执行（危险）" },
@@ -1523,6 +1606,11 @@ class Shell {
       gateHandled = true;
     }
 
+    // 已有会话级沙箱批准时，不再重复弹普通命令确认
+    if (!gateHandled) {
+      if (!noDocker && requested !== "host" && ranks[requested] <= approved) gateHandled = true;
+      if (requested === "host" && ranks.host <= approved) gateHandled = true;
+    }
     const needAsk = !gateHandled && (policy.decision === "ask" || evaluation.decision === "ask");
     if (needAsk) {
       const answer = await this.confirm.ask(
@@ -1533,7 +1621,11 @@ class Shell {
             `${params.command}\n\n` +
             `执行环境：${
               requested === "host"
-                ? "真实系统 Shell（危险）"
+                ? hostReadonlyFallback
+                  ? "host 受限只读（非沙箱）"
+                  : hostWriteFallback
+                    ? "host（无沙箱，工作区可写）"
+                    : "真实系统 Shell（危险）"
                 : requested === "sandbox-network"
                   ? "Docker 沙箱 + 网络"
                   : requested === "sandbox"
@@ -1555,7 +1647,8 @@ class Shell {
     }
 
     // 命令级 checkpoint：写操作前快照，结束后给出变更清单与一键撤销
-    const writesPossible = !this.dockerAvailable || requested !== "sandbox-readonly";
+    const writesPossible =
+      requested === "host" || hostWriteFallback || (!noDocker && requested !== "sandbox-readonly");
     const checkpointId = writesPossible
       ? await this.checkpoint
           .create({ label: `command: ${params.command.slice(0, 80)}` })
@@ -1567,7 +1660,8 @@ class Shell {
       : "";
 
     try {
-      return await this.runner.run(effectiveParams, ctx);
+      const result = await this.runner.run(effectiveParams, ctx);
+      return hostReadonlyFallback ? { ...result, sandbox: "host-readonly" as const } : result;
     } finally {
       if (checkpointId) {
         void this.checkpoint

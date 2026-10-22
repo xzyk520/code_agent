@@ -343,7 +343,7 @@ export interface RunResult {
   /** 输出超过上限被截断 */
   truncated: boolean;
   durationMs: number;
-  sandbox: "none" | "docker-readonly" | "docker" | "docker-network" | "host";
+  sandbox: "none" | "docker-readonly" | "docker" | "docker-network" | "host" | "host-readonly";
   /** 超时被杀（exitCode 通常为 124） */
   killed: boolean;
 }
