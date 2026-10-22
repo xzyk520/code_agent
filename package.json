@@ -615,7 +615,7 @@
           "default": 1800,
           "minimum": 60,
           "maximum": 14400,
-          "markdownDescription": "意图判定为「大任务」时的单轮墙钟预算（秒）；普通任务用 `beeCode.agent.maxTurnSeconds`。"
+          "markdownDescription": "意图判定为「大任务」时，主 agent 单次等待模型响应的时限（秒）；工具执行时间不计入。普通任务用 `beeCode.agent.maxTurnSeconds`。"
         },
         "beeCode.agent.maxTurnSeconds": {
           "type": "number",
@@ -624,7 +624,7 @@
           "default": 600,
           "minimum": 60,
           "maximum": 7200,
-          "markdownDescription": "普通任务的单轮墙钟预算（秒）。超时后 agent 会收尾并报告未完成部分；大任务另见 `largeTaskSeconds`。"
+          "markdownDescription": "主 agent 单次等待模型响应的时限（秒）。工具执行本身不计入；模型超时会被强制停止。大任务另见 `largeTaskSeconds`。"
         },
         "beeCode.agent.maxSteps": {
           "type": "number",
@@ -632,7 +632,16 @@
         },
         "beeCode.agent.toolTimeoutMs": {
           "type": "number",
-          "default": 30000
+          "default": 30000,
+          "markdownDescription": "普通工具的单次时限（毫秒）。命令执行和派生子代理改用 `beeCode.agent.longToolTimeoutMs`。"
+        },
+        "beeCode.agent.longToolTimeoutMs": {
+          "type": "number",
+          "scope": "window",
+          "default": 600000,
+          "minimum": 30000,
+          "maximum": 3600000,
+          "markdownDescription": "命令执行（run_command）与派生子代理（spawn_subagent）这类长工具的时限（毫秒）。工具执行时间不计入主 agent 的模型响应超时。"
         },
         "beeCode.checkpoint.enabled": {
           "type": "boolean",

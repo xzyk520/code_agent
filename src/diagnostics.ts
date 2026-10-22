@@ -81,6 +81,7 @@ function render(input: RenderInput): string {
   lines.push(`| supportsTools | ${config.model.supportsTools} |`);
   lines.push(`| agent.maxSteps | ${config.maxSteps} |`);
   lines.push(`| agent.toolTimeoutMs | ${config.toolTimeoutMs} |`);
+  lines.push(`| agent.longToolTimeoutMs | ${config.longToolTimeoutMs} |`);
   lines.push(`| review.granularity | ${config.granularity} |`);
   lines.push(`| checkpoint | enabled=${config.checkpointEnabled}, retention=${config.checkpointRetention} |`);
   lines.push(`| apiKey 是否已配置 | ${config.apiKeyId ? "见 SecretStorage（本文件不读取）" : "-"} |`);

@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
@@ -11,8 +12,8 @@ const execFileAsync = promisify(execFile);
 
 /** 输出上限：stdout / stderr 各 64KB（模型不需要更多，多了反而撑爆上下文） */
 const MAX_OUTPUT_BYTES = 64 * 1024;
-const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 600_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
+const MAX_TIMEOUT_MS = 3_600_000;
 /** 命令长度上限：防止把整个脚本塞进来（真脚本应该写文件） */
 const MAX_COMMAND_LENGTH = 4_000;
 
@@ -68,8 +69,8 @@ export function createRunAdapter(deps: RunAdapterDeps) {
 
       const startedAt = Date.now();
       const result = useDocker
-        ? await runInDocker(deps, policy.dockerImage, root, cwd, command, timeoutMs)
-        : await runDirect(deps, cwd, command, timeoutMs);
+        ? await runInDocker(deps, policy.dockerImage, root, cwd, command, timeoutMs, ctx.signal)
+        : await runDirect(deps, cwd, command, timeoutMs, ctx.signal);
 
       const durationMs = Date.now() - startedAt;
       deps.logger.info(
@@ -99,7 +100,16 @@ interface RawResult {
   killed: boolean;
 }
 
-function runDirect(deps: RunAdapterDeps, cwd: string, command: string, timeoutMs: number): Promise<RawResult> {
+function runDirect(
+  deps: RunAdapterDeps,
+  cwd: string,
+  command: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<RawResult> {
+  if (signal?.aborted) {
+    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "已取消", truncated: false, killed: true });
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       cwd,
@@ -115,19 +125,30 @@ function runDirect(deps: RunAdapterDeps, cwd: string, command: string, timeoutMs
     child.stdout?.on("data", (chunk: Buffer) => appendCapped(state, "stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer) => appendCapped(state, "stderr", chunk));
 
-    const timer = setTimeout(() => {
+    const kill = () => {
+      if (state.killed) return;
       state.killed = true;
       killTree(child, deps.logger);
-    }, timeoutMs);
+    };
+    const timer = setTimeout(kill, timeoutMs);
     timer.unref?.();
+    const onAbort = () => {
+      kill();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) kill();
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
 
     child.on("error", (err) => {
-      clearTimeout(timer);
+      cleanup();
       reject(new Error(`启动命令失败：${err.message}`));
     });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
+      cleanup();
       resolve({
         exitCode: code ?? (state.killed ? 124 : -1),
         stdout: state.stdout,
@@ -154,6 +175,7 @@ function runInDocker(
   cwd: string,
   command: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<RawResult> {
   const relative = path.relative(root, cwd).split(path.sep).join("/");
   if (relative.startsWith("..")) {
@@ -161,9 +183,12 @@ function runInDocker(
     throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
   }
   const workdir = relative ? `/workspace/${relative}` : "/workspace";
+  const container = `bee-code-${randomUUID().slice(0, 8)}`;
   const args = [
     "run",
     "--rm",
+    "--name",
+    container,
     "-i",
     "--network",
     "none",
@@ -187,7 +212,7 @@ function runInDocker(
     "-lc",
     command,
   ];
-  return runProcess("docker", args, root, timeoutMs, deps.logger);
+  return runProcess("docker", args, root, timeoutMs, deps.logger, signal, container);
 }
 
 function runProcess(
@@ -196,7 +221,12 @@ function runProcess(
   cwd: string,
   timeoutMs: number,
   logger: Logger,
+  signal?: AbortSignal,
+  containerName?: string,
 ): Promise<RawResult> {
+  if (signal?.aborted) {
+    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "已取消", truncated: false, killed: true });
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
       cwd,
@@ -208,18 +238,30 @@ function runProcess(
     child.stdout?.on("data", (chunk: Buffer) => appendCapped(state, "stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer) => appendCapped(state, "stderr", chunk));
 
-    const timer = setTimeout(() => {
+    const kill = () => {
+      if (state.killed) return;
       state.killed = true;
       killTree(child, logger);
-    }, timeoutMs);
+      if (containerName) stopContainer(containerName);
+    };
+    const timer = setTimeout(kill, timeoutMs);
     timer.unref?.();
+    const onAbort = () => {
+      kill();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) kill();
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
 
     child.on("error", (err) => {
-      clearTimeout(timer);
+      cleanup();
       reject(new Error(`启动 ${file} 失败：${err.message}`));
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      cleanup();
       resolve({
         exitCode: code ?? (state.killed ? 124 : -1),
         stdout: state.stdout,
@@ -263,6 +305,16 @@ function killTree(child: ReturnType<typeof spawn>, logger: Logger): void {
       /* 已经退出 */
     }
   }
+}
+
+function stopContainer(name: string): void {
+  const attempt = (remaining: number): void => {
+    void execFileAsync("docker", ["rm", "-f", name]).catch(() => {
+      // 容器可能还没创建完：短重试，避免 abort 后容器才开始跑
+      if (remaining > 0) setTimeout(() => attempt(remaining - 1), 150);
+    });
+  };
+  attempt(3);
 }
 
 function sanitizedEnv(): NodeJS.ProcessEnv {

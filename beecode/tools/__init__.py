@@ -38,6 +38,8 @@ class ToolContext:
     plan: Callable[[list[dict[str, str]]], None] | None = None
     #: 生成一张图（渲染到面板，并挂到本轮助手消息上）
     diagram: Callable[[dict[str, Any]], None] | None = None
+    #: 命令执行等长工具的外层时限（秒），供 run_command 设置 RPC 超时
+    long_tool_timeout_s: float = 600.0
 
 
 ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -210,7 +212,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                 {
                     "command": _str("要执行的命令"),
                     "cwd": _str("工作区相对目录（可选）"),
-                    "timeout_ms": _int("超时毫秒（默认 120000）"),
+                    "timeout_ms": _int("超时毫秒（默认使用长工具时限，通常 600000）"),
                 },
                 ["command"],
             ),

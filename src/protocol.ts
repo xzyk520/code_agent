@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 32;
+export const PROTOCOL_VERSION = 33;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -441,6 +441,8 @@ export interface InitializeParams {
   modelConfig: ModelConfigDto;
   maxSteps?: number;
   toolTimeoutMs?: number;
+  /** 命令执行 / 派生子代理等长工具的超时（毫秒） */
+  longToolTimeoutMs?: number;
   /** 大任务自动放宽后的步数上限 */
   largeTaskSteps?: number;
   /** 一轮的 token 预算（输入 + 输出） */

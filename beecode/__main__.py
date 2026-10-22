@@ -92,6 +92,7 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["api_key"] = params.get("apiKey")
     _state["max_steps"] = int(params.get("maxSteps") or 12)
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
+    _state["long_tool_timeout_ms"] = int(params.get("longToolTimeoutMs") or 600_000)
     _state["large_task_steps"] = int(params.get("largeTaskSteps") or 24)
     _state["max_turn_tokens"] = int(params.get("maxTurnTokens") or 200_000)
     _state["max_turn_seconds"] = float(params.get("maxTurnSeconds") or 600)
@@ -178,6 +179,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
         config=TurnConfig(
             max_steps=int(_state.get("max_steps") or 12),
             tool_timeout_s=max(5.0, float(_state.get("tool_timeout_ms") or 60_000) / 1000.0),
+            long_tool_timeout_s=max(5.0, float(_state.get("long_tool_timeout_ms") or 600_000) / 1000.0),
             context_window_tokens=int((_state.get("model_config") or {}).get("contextWindow") or 32_768),
             large_task_steps=int(_state.get("large_task_steps") or 24),
             max_turn_tokens=int(_state.get("max_turn_tokens") or 200_000),

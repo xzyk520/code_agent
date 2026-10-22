@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-PROTOCOL_VERSION = 32
+PROTOCOL_VERSION = 33
 
 # ---------------------------------------------------------------------------
 # 错误码（与 src/protocol.ts 的 RpcError 保持一致）
@@ -100,9 +100,21 @@ class JsonRpcPeer:
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError as exc:
+            self._cancel_outbound(req_id)
             raise RpcError(SHELL_ERROR, f"RPC 超时：{method}（{timeout}s）") from exc
+        except asyncio.CancelledError:
+            # 父任务被取消时，必须通知壳中止对应的入站请求，
+            # 否则 run_command 的进程/容器会继续跑（见 runAdapter 的 abort 处理）。
+            self._cancel_outbound(req_id)
+            raise
         finally:
             self._pending.pop(req_id, None)
+
+    def _cancel_outbound(self, req_id: int) -> None:
+        try:
+            self._write({"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": req_id}})
+        except Exception:  # noqa: BLE001 - 对端可能已经关闭
+            pass
 
     # ───────────────────────── 主循环 ─────────────────────────
 

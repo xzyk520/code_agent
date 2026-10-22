@@ -175,10 +175,18 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
 
 
 async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    timeout_ms = _int_or_none(params.get("timeout_ms"))
+    if timeout_ms is None:
+        # 命令默认用长工具时限，下载/构建不再被 120s 默认值误杀
+        timeout_ms = int(ctx.long_tool_timeout_s * 1000)
+    rpc_timeout = max(600.0, ctx.long_tool_timeout_s + 60.0)
+    if timeout_ms:
+        rpc_timeout = max(rpc_timeout, timeout_ms / 1000.0 + 60.0)
     result = await ctx.shell.run(
         str(params["command"]),
         cwd=_str_or_none(params.get("cwd")),
-        timeout_ms=_int_or_none(params.get("timeout_ms")),
+        timeout_ms=timeout_ms,
+        rpc_timeout=rpc_timeout,
     )
     stdout, out_omitted = _shape_text(result.stdout, head=100, tail=40)
     stderr, err_omitted = _shape_text(result.stderr, head=40, tail=10)

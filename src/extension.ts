@@ -121,7 +121,7 @@ class Shell {
   private turnPlan: PlanStep[] = [];
   /** 本轮用户消息 id（右侧轨迹跳转用） */
   private turnUserMessageId: string | undefined;
-  /** 本轮意图规模（决定墙钟预算） */
+  /** 本轮意图规模（决定模型响应时限） */
   private turnScale: "small" | "large" = "small";
   /** 本轮累计消耗（ui.usage 推送） */
   private turnUsage?: { inputTokens: number; outputTokens: number; elapsedMs: number };
@@ -760,6 +760,7 @@ class Shell {
         modelConfig: this.config.model,
         maxSteps: this.config.maxSteps,
         toolTimeoutMs: this.config.toolTimeoutMs,
+        longToolTimeoutMs: this.config.longToolTimeoutMs,
         largeTaskSteps: this.config.largeTaskSteps,
         maxTurnTokens: this.config.maxTurnTokens,
         maxTurnSeconds: this.config.maxTurnSeconds,
@@ -2130,11 +2131,9 @@ class Shell {
         const tokens = (p.inputTokens ?? 0) + (p.outputTokens ?? 0);
         const seconds = (p.elapsedMs ?? 0) / 1000;
         const nearTokens = tokens > this.config.maxTurnTokens * 0.8;
-        const timeBudget = this.turnScale === "large" ? this.config.largeTaskSeconds : this.config.maxTurnSeconds;
-        const nearTime = seconds > timeBudget * 0.8;
         const fmtTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
         this.panel.setCost(
-          `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens || nearTime ? " · ⚠ 接近预算" : ""}`,
+          `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens ? " · ⚠ 接近 token 预算" : ""}`,
         );
         this.updateStatus();
         return;

@@ -36,6 +36,7 @@ export interface ShellConfig {
   apiKeyId: string;
   maxSteps: number;
   toolTimeoutMs: number;
+  longToolTimeoutMs: number;
   largeTaskSteps: number;
   maxTurnTokens: number;
   maxTurnSeconds: number;
@@ -134,6 +135,7 @@ export function readConfig(): ConfigReadResult {
     maxTurnSeconds: reader.num("agent.maxTurnSeconds", 600, 60, 7_200),
     largeTaskSeconds: reader.num("agent.largeTaskSeconds", 1_800, 60, 14_400),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),
+    longToolTimeoutMs: reader.num("agent.longToolTimeoutMs", 600_000, 30_000, 3_600_000),
     granularity: reader.oneOf("review.granularity", "function", ["function", "change", "file"] as const),
     checkpointEnabled: reader.bool("checkpoint.enabled", true),
     checkpointRetention: reader.num("checkpoint.retention", 50, 1, 1_000),

@@ -7,6 +7,10 @@
 
 ### Added
 
+- **停止传播到命令/容器**：用户停止时壳侧 abort 在飞的 `run` 请求，`runAdapter` 杀整棵进程树，Docker 运行命名容器并在取消时 `docker rm -f`；子代理随父任务取消，不再出现“界面已停止、命令还在跑”
+- **协议 v33**：`initialize` 增加 `longToolTimeoutMs`，用于命令/子代理的长工具时限
+- **主 agent 超时改为模型响应计时**：每次模型调用单独计时，工具执行时间不计入；所有工具返回后重新开始，模型返回工具调用/最终回答即结束，超时强制停止本轮
+- **长工具时限**：`run_command` / `spawn_subagent` 使用 `beeCode.agent.longToolTimeoutMs`（默认 600s），普通工具仍用 `toolTimeoutMs`（默认 30s）；命令默认超时同步放宽
 - **助手回复 Markdown 渲染**：标题/段落/列表/表格/引用/行内代码/链接；代码围栏按语言高亮（Python/C++/JS/TS/JSON/Bash 等，内置 highlight.js），代码块带语言标签和复制按钮；流式回答按帧重渲染，历史消息同样生效
 - **子代理结论保留**：轮内压缩的 digest 识别 `spawn_subagent` 结果，
   完整保留 `findings`（不截断），同时保留 steps/toolCalls/error

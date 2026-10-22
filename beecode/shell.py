@@ -449,7 +449,14 @@ class ShellClient:
         result = await self._call("diff.open", {"path": path, "baseText": base_text, "title": title or ""})
         return bool(result.get("opened"))
 
-    async def run(self, command: str, *, cwd: str | None = None, timeout_ms: int | None = None) -> RunResult:
+    async def run(
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        timeout_ms: int | None = None,
+        rpc_timeout: float = 600.0,
+    ) -> RunResult:
         """在工作区内执行命令（沙箱与否由壳的 `beeCode.permissions.sandbox` 决定）。
 
         ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
@@ -460,7 +467,7 @@ class ShellClient:
             payload["cwd"] = cwd
         if timeout_ms is not None:
             payload["timeoutMs"] = timeout_ms
-        result = await self._call("run", payload, timeout=600.0)
+        result = await self._call("run", payload, timeout=rpc_timeout)
         return RunResult(
             exit_code=int(result.get("exitCode", -1)),
             stdout=result.get("stdout", ""),

@@ -60,6 +60,8 @@ _SUBAGENT_PREFIX = (
 class TurnConfig:
     max_steps: int = 12
     tool_timeout_s: float = 60.0
+    #: 命令执行 / 派生子代理这类长工具的超时（秒）
+    long_tool_timeout_s: float = 600.0
     #: 同一工具+参数最多执行几次（超过就拦截）
     repeat_limit: int = 3
     #: 允许的"催促"次数（空响应 / 只说不做 / 提前收工）
@@ -72,10 +74,11 @@ class TurnConfig:
     keep_raw_tool_results: int = 3
     #: 大任务放宽后的步数上限
     large_task_steps: int = 24
-    #: 单轮 token / 墙钟预算（普通任务）
+    #: 单轮 token 预算
     max_turn_tokens: int = 200_000
+    #: 主 agent 单次模型响应超时（秒）：工具执行时间不计入
     max_turn_seconds: float = 600.0
-    #: 大任务的墙钟预算（按意图 scale 切换）
+    #: 大任务的主 agent 单次模型响应超时（按意图 scale 切换）
     large_task_seconds: float = 1_800.0
 
 
@@ -130,7 +133,7 @@ class AgentLoop:
         self._diagrams: list[dict[str, Any]] = []
         #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
         self._replay_reasoning = False
-        #: 本轮墙钟预算（按 scale 动态设置）
+        #: 主 agent 单次模型响应预算（按 scale 动态设置；工具执行不计入）
         self._turn_time_budget = self._config.max_turn_seconds
         #: 80% 预算预警是否已经发过
         self._budget_warned = False
@@ -259,6 +262,7 @@ class AgentLoop:
             shell=self._shell,
             propose=self._propose or _no_propose,
             log=self._log,
+            long_tool_timeout_s=self._config.long_tool_timeout_s,
             spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._spawn_enabled else None,
             plan=(lambda steps: self._emit_plan(session, steps)),
             diagram=(lambda payload: self._emit_diagram(session, payload)),
@@ -369,7 +373,9 @@ class AgentLoop:
         try:
             while stats.steps < max_steps:
                 stats.steps += 1
-                answer, calls, usage, reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
+                answer, calls, usage, reasoning = await self._stream_with_deadline(
+                    client, messages, session, stats, round_index=stats.steps
+                )
                 self._emit_usage(session, stats, started_at)
                 warning = self._budget_warning(stats, started_at)
                 if warning and not self._budget_warned:
@@ -451,7 +457,9 @@ class AgentLoop:
                     "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
                                "如果不需要改，请明确说明原因。",
                 })
-                answer, calls, _usage, reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
+                answer, calls, _usage, reasoning = await self._stream_with_deadline(
+                    client, messages, session, stats, round_index=stats.steps
+                )
                 if calls:
                     assistant_msg = _assistant_tool_message(answer, calls)
                     self._attach_reasoning(assistant_msg, reasoning)
@@ -462,7 +470,9 @@ class AgentLoop:
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
-                    answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, round_index=stats.steps)
+                    answer, _calls, _usage, _reasoning = await self._stream_with_deadline(
+                        client, messages, session, stats, round_index=stats.steps
+                    )
                 final_text = answer
         finally:
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
@@ -712,10 +722,22 @@ class AgentLoop:
             _brief_args(args),
             args=_short(json.dumps(args, ensure_ascii=False), 1200),
         )
+        timeout_s = (
+            self._config.long_tool_timeout_s
+            if call.name in ("run_command", "spawn_subagent")
+            else self._config.tool_timeout_s
+        )
+        if call.name == "run_command":
+            requested_ms = args.get("timeout_ms")
+            if isinstance(requested_ms, (int, float)) and requested_ms > 0:
+                timeout_s = max(timeout_s, float(requested_ms) / 1000.0 + 30.0)
+        elif call.name == "spawn_subagent":
+            # 子代理收尾/回传结论需要一点余量
+            timeout_s += 30.0
         started = asyncio.get_running_loop().time()
         try:
             result = await asyncio.wait_for(
-                tool.fn(ctx, args), timeout=self._config.tool_timeout_s
+                tool.fn(ctx, args), timeout=timeout_s
             )
             elapsed = asyncio.get_running_loop().time() - started
             brief = _brief_args(args)
@@ -796,6 +818,43 @@ class AgentLoop:
 
         return None
 
+    async def _stream_with_deadline(
+        self,
+        client: OpenAIClient,
+        messages: list[dict[str, Any]],
+        session: Session,
+        stats: TurnStats,
+        *,
+        allow_tools: bool = True,
+        round_index: int = 1,
+    ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
+        """主 agent 的模型响应时限：只包住模型调用，不包工具执行。
+
+        计时起点在每次"上一批工具全部返回"之后；模型一旦返回工具调用或最终回答，
+        本轮计时自然结束。下一次模型调用重新开始。
+        """
+        timeout = self._turn_time_budget
+        try:
+            return await asyncio.wait_for(
+                self._stream(
+                    client,
+                    messages,
+                    session,
+                    stats,
+                    allow_tools=allow_tools,
+                    round_index=round_index,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            message = f"主agent等待模型响应超过 {timeout:g}s，已强制停止本轮。"
+            self._emit(
+                "ui.tool",
+                {"sessionId": session.id, "name": "model", "status": "error", "summary": "等待模型超时"},
+            )
+            self._log(message)
+            raise ModelError(message) from exc
+
     async def _finish_max_steps(
         self,
         messages: list[dict[str, Any]],
@@ -833,7 +892,9 @@ class AgentLoop:
             },
         )
         messages.append({"role": "user", "content": notice})
-        answer, _calls, _usage, _reasoning = await self._stream(client, messages, session, stats, allow_tools=False, round_index=stats.steps)
+        answer, _calls, _usage, _reasoning = await self._stream_with_deadline(
+            client, messages, session, stats, allow_tools=False, round_index=stats.steps
+        )
         return answer
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
@@ -878,28 +939,21 @@ class AgentLoop:
             self._log(f"硬截断前快照失败：{exc}")
 
     def _budget_warning(self, stats: TurnStats, started_at: float) -> str | None:
-        """到 80% 预算时提前提醒模型收尾（硬截断在 100%）。"""
+        """到 80% token 预算时提前提醒模型收尾。"""
+        del started_at
         used = stats.input_tokens + stats.output_tokens
         if used > self._config.max_turn_tokens * 0.8:
             return (
                 f"本轮已使用约 {used} token（预算 {self._config.max_turn_tokens} 的 80% 以上）。"
                 "请优先完成当前关键改动并收尾，跳过非必要探索。"
             )
-        elapsed = asyncio.get_running_loop().time() - started_at
-        if elapsed > self._turn_time_budget * 0.8:
-            return (
-                f"本轮已耗时 {elapsed:.0f}s（预算 {self._turn_time_budget:.0f}s 的 80% 以上）。"
-                "请优先完成当前关键改动并收尾，跳过非必要探索。"
-            )
         return None
 
     def _budget_reason(self, stats: TurnStats, started_at: float) -> str | None:
+        del started_at
         used = stats.input_tokens + stats.output_tokens
         if used > self._config.max_turn_tokens:
             return f"token {used} > {self._config.max_turn_tokens}"
-        elapsed = asyncio.get_running_loop().time() - started_at
-        if elapsed > self._turn_time_budget:
-            return f"耗时 {elapsed:.0f}s > {self._turn_time_budget:.0f}s"
         return None
 
     def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:
@@ -985,9 +1039,12 @@ class AgentLoop:
             config=TurnConfig(
                 max_steps=min(max(1, max_steps), self._spawn_max_steps),
                 tool_timeout_s=self._config.tool_timeout_s,
+                long_tool_timeout_s=self._config.long_tool_timeout_s,
                 repeat_limit=self._config.repeat_limit,
                 nudge_limit=1,
                 context_window_tokens=self._config.context_window_tokens,
+                max_turn_seconds=self._config.max_turn_seconds,
+                large_task_seconds=self._config.large_task_seconds,
             ),
             propose=None,
             client_factory=self._client_factory,
