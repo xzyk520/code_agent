@@ -646,14 +646,6 @@
           "maximum": 600,
           "markdownDescription": "主 agent 流式输出中，两个 token 之间的最大空闲时间（秒）。超过即强制停止本轮。"
         },
-        "beeCode.agent.maxTurnWallClockSeconds": {
-          "type": "number",
-          "scope": "window",
-          "default": 7200,
-          "minimum": 300,
-          "maximum": 86400,
-          "markdownDescription": "整轮硬墙钟安全阀（秒）。工具执行不计入主 agent 的模型响应计时，但仍受这个总上限保护。"
-        },
         "beeCode.agent.maxToolCallsPerBatch": {
           "type": "number",
           "scope": "window",

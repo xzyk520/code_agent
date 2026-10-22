@@ -43,7 +43,6 @@ export interface ShellConfig {
   largeTaskSeconds: number;
   firstTokenSeconds: number;
   idleSeconds: number;
-  maxTurnWallClockSeconds: number;
   maxToolCallsPerBatch: number;
   granularity: "function" | "change" | "file";
   checkpointEnabled: boolean;
@@ -140,7 +139,6 @@ export function readConfig(): ConfigReadResult {
     largeTaskSeconds: reader.num("agent.largeTaskSeconds", 1_800, 60, 14_400),
     firstTokenSeconds: reader.num("agent.modelFirstTokenSeconds", 60, 5, 600),
     idleSeconds: reader.num("agent.modelIdleSeconds", 45, 5, 600),
-    maxTurnWallClockSeconds: reader.num("agent.maxTurnWallClockSeconds", 7_200, 300, 86_400),
     maxToolCallsPerBatch: reader.num("agent.maxToolCallsPerBatch", 8, 1, 32),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),
     longToolTimeoutMs: reader.num("agent.longToolTimeoutMs", 600_000, 30_000, 3_600_000),

@@ -777,7 +777,6 @@ class Shell {
         largeTaskSeconds: this.config.largeTaskSeconds,
         firstTokenSeconds: this.config.firstTokenSeconds,
         idleSeconds: this.config.idleSeconds,
-        maxTurnWallClockSeconds: this.config.maxTurnWallClockSeconds,
         maxToolCallsPerBatch: this.config.maxToolCallsPerBatch,
         checkpointEnabled: this.config.checkpointEnabled,
         ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),

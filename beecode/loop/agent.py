@@ -94,8 +94,6 @@ class TurnConfig:
     #: 首 token 超时 / 流式空闲超时
     first_token_seconds: float = 60.0
     idle_seconds: float = 45.0
-    #: 整轮硬墙钟安全阀（秒）；与模型响应计时无关
-    max_turn_wall_seconds: float = 7_200.0
     #: 一次 assistant 消息里最多执行多少个工具调用
     max_tool_calls_per_batch: int = 8
 
@@ -175,7 +173,6 @@ class AgentLoop:
         plan: list[dict[str, str]] | None = None,
     ) -> TurnStats:
         started_at = asyncio.get_running_loop().time()
-        self._wall_deadline = started_at + max(1.0, self._config.max_turn_wall_seconds)
         # —— 视觉能力：显式设置 > 服务端反馈（缓存） > 乐观尝试 ——
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
@@ -393,8 +390,6 @@ class AgentLoop:
         self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "start"})
         try:
             while stats.steps < max_steps:
-                if self._wall_expired():
-                    raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
                 stats.steps += 1
                 answer, calls, usage, reasoning = await self._stream_with_deadline(
                     client, messages, session, stats, round_index=stats.steps
@@ -766,29 +761,18 @@ class AgentLoop:
             while True:
                 now = asyncio.get_running_loop().time()
                 model_left = self._turn_time_budget - (now - started)
-                wall_deadline = getattr(self, "_wall_deadline", None)
-                wall_left = (wall_deadline - now) if wall_deadline is not None else float("inf")
-                if wall_left <= 0:
-                    raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
                 if model_left <= 0:
                     raise timeout_error("响应")
-                wait = min(
-                    self._config.first_token_seconds if first else self._config.idle_seconds,
-                    model_left,
-                    wall_left,
-                )
+                idle_budget = self._config.first_token_seconds if first else self._config.idle_seconds
+                model_bound = model_left <= idle_budget
+                wait = min(idle_budget, model_left)
                 try:
                     delta = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError as exc:
                     now = asyncio.get_running_loop().time()
-                    wall_deadline = getattr(self, "_wall_deadline", None)
-                    if wall_deadline is not None and now >= wall_deadline:
-                        raise ModelError(
-                            f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。"
-                        ) from exc
-                    if now - started >= self._turn_time_budget:
+                    if model_bound or now - started >= self._turn_time_budget:
                         raise timeout_error("响应") from exc
                     raise timeout_error("首 token" if first else "空闲") from exc
 
@@ -887,10 +871,6 @@ class AgentLoop:
         elif call.name == "spawn_subagent":
             # 子代理收尾/回传结论需要一点余量
             timeout_s += 30.0
-        wall_left = self._wall_remaining()
-        if wall_left <= 0:
-            raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
-        timeout_s = min(timeout_s, wall_left)
         started = asyncio.get_running_loop().time()
         try:
             result = await asyncio.wait_for(
@@ -912,10 +892,6 @@ class AgentLoop:
         except asyncio.TimeoutError:
             if stats is not None:
                 stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
-            if self._wall_expired():
-                raise ModelError(
-                    f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。"
-                ) from None
             message = (
                 f"工具 {call.name} 超时（{timeout_s:g}s）。"
                 "请缩小范围或换一种方式，不要用相同参数重试。"
@@ -1050,15 +1026,6 @@ class AgentLoop:
             client, messages, session, stats, allow_tools=False, round_index=stats.steps
         )
         return answer
-
-    def _wall_remaining(self) -> float:
-        deadline = getattr(self, "_wall_deadline", None)
-        if deadline is None:
-            return float("inf")
-        return deadline - asyncio.get_running_loop().time()
-
-    def _wall_expired(self) -> bool:
-        return self._wall_remaining() <= 0
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
         self._notify(
@@ -1210,7 +1177,6 @@ class AgentLoop:
                 large_task_seconds=self._config.large_task_seconds,
                 first_token_seconds=self._config.first_token_seconds,
                 idle_seconds=self._config.idle_seconds,
-                max_turn_wall_seconds=self._config.max_turn_wall_seconds,
                 max_tool_calls_per_batch=self._config.max_tool_calls_per_batch,
             ),
             propose=None,

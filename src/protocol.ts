@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 34;
+export const PROTOCOL_VERSION = 35;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -455,8 +455,6 @@ export interface InitializeParams {
   firstTokenSeconds?: number;
   /** 流式 token 空闲超时（秒） */
   idleSeconds?: number;
-  /** 整轮硬墙钟安全阀（秒），与模型响应计时无关 */
-  maxTurnWallClockSeconds?: number;
   /** 一次 assistant 消息里最多执行多少个工具调用 */
   maxToolCallsPerBatch?: number;
   checkpointEnabled?: boolean;
