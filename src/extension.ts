@@ -1291,12 +1291,22 @@ class Shell {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) throw deniedError("未打开工作区");
 
-    const requested = params.sandbox === "host" ? "host" : params.sandbox === "sandbox" ? "sandbox" : "auto";
-    // 没有 Docker 时，sandbox 请求退回原有 auto 行为，避免无沙箱环境无法执行命令
+    const requested =
+      params.sandbox === "host"
+        ? "host"
+        : params.sandbox === "sandbox-network"
+          ? "sandbox-network"
+          : params.sandbox === "sandbox"
+            ? "sandbox"
+            : "auto";
+    // 没有 Docker 时，基础 sandbox 请求退回原有 auto 行为；需要网络的 sandbox 不能伪造
+    if (requested === "sandbox-network" && !this.dockerAvailable) {
+      throw deniedError("没有 Docker：无法提供带网络的沙箱。如确需真实环境，请用 sandbox=host 并说明理由");
+    }
     const effectiveParams: RunParams =
       requested === "sandbox" && !this.dockerAvailable ? { ...params, sandbox: undefined } : params;
-    if (requested === "host" && !(params.justification ?? "").trim()) {
-      throw deniedError("sandbox=host 必须提供 justification，说明为什么不能在沙箱里完成");
+    if (requested !== "sandbox" && requested !== "auto" && !(params.justification ?? "").trim()) {
+      throw deniedError(`sandbox=${requested} 必须提供 justification，说明为什么需要额外权限`);
     }
 
     const cwdAbs = params.cwd ? nodePath.resolve(root, params.cwd) : root;
@@ -1333,6 +1343,27 @@ class Shell {
       );
       if (answer.choice !== "once") throw deniedError("用户取消跳出沙箱执行");
       gateHandled = true;
+    } else if (requested === "sandbox-network") {
+      // 额外网络权限：每次都要审批，不提供“本会话都允许”
+      const answer = await this.confirm.ask(
+        {
+          question: "允许 agent 在 Docker 沙箱内访问网络吗？",
+          detail:
+            `${roleLabel} 申请额外权限：网络访问\n\n` +
+            `命令：${params.command}\n` +
+            `目录：${cwdAbs}\n` +
+            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
+            "沙箱仍保留：根文件系统只读、capability 清空、内存/PID 限制、工作区可写。\n" +
+            "网络访问可能下载依赖、访问外部服务或泄露请求内容；仅在确实需要时允许。",
+          options: [
+            { id: "once", label: "仅本次允许" },
+            { id: "cancel", label: "取消" },
+          ],
+        },
+        ctx,
+      );
+      if (answer.choice !== "once") throw deniedError("用户取消网络权限");
+      gateHandled = true;
     } else if (requested === "sandbox" && this.dockerAvailable && !this.sandboxApprovedSessions.has(this.sessionId)) {
       const answer = await this.confirm.ask(
         {
@@ -1366,7 +1397,15 @@ class Shell {
           detail:
             `${policy.reason}\n${evaluation.reason}\n\n` +
             `${params.command}\n\n` +
-            `执行环境：${requested === "host" ? "真实系统 Shell（危险）" : this.dockerAvailable ? "Docker 沙箱" : "无沙箱（直接执行）"}`,
+            `执行环境：${
+              requested === "host"
+                ? "真实系统 Shell（危险）"
+                : requested === "sandbox-network"
+                  ? "Docker 沙箱 + 网络"
+                  : this.dockerAvailable
+                    ? "Docker 沙箱（无网络）"
+                    : "无沙箱（直接执行）"
+            }`,
           options: [
             { id: "yes", label: "执行" },
             { id: "no", label: "取消" },

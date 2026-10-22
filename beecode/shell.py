@@ -461,9 +461,10 @@ class ShellClient:
     ) -> RunResult:
         """在工作区内执行命令。
 
-        `sandbox="sandbox"`：请求 Docker 沙箱；壳会首次/会话审批。
-        `sandbox="host"`：跳出沙箱在真实系统 Shell 执行；壳会逐次危险审批，
-        且必须提供 `justification`。
+        `sandbox="sandbox"`：Docker 沙箱，无网络；壳会首次/会话审批。
+        `sandbox="sandbox-network"`：Docker 沙箱 + 网络；每次都要审批。
+        `sandbox="host"`：跳出沙箱在真实系统 Shell 执行；每次危险审批。
+        `sandbox-network` / `host` 必须提供 `justification`。
 
         ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
         需要确认时会弹窗。不要用它做只读探测——读文件用 `read_file`。

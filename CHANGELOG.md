@@ -7,11 +7,11 @@
 
 ### Added
 
-- **沙箱内/跳出沙箱审批（协议 v36）**：`run_command` 增加 `sandbox` / `justification`；
-`host` 每次弹出危险警告并需说明理由；`sandbox` 首次询问，可选仅本次或本会话都允许；
-无 Docker 时退回原直接执行路径
+- **沙箱分层审批（协议 v37）**：`run_command` 分 `sandbox`（Docker 无网络）→
+`sandbox-network`（Docker + 网络）→ `host`（真实系统）；`sandbox-network`/`host` 每次审批并需理由；
+基础 `sandbox` 首次询问，可选仅本次或本会话都允许；无 Docker 时基础沙箱退回直接执行，网络层拒绝
 - **移除整轮硬墙钟**：不再默认 2 小时强制结束；长任务由每工具超时、步数/token 预算与用户停止控制
-- **协议 v35 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入
+- **协议 v35–v37 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入
 - **只读工具并发**：同一批只读工具（read/list/search/outline/symbol/references/diagnostics）并发执行，结果按原 calls 顺序回填；写工具、命令、子代理仍串行。新增 `maxToolCallsPerBatch`（默认 8）
 - **轨迹用量细分**：`ui.usage` 增加 `modelWaitMs` / `toolMs`，轨迹卡片显示模型等待与工具执行耗时
 - **停止传播到命令/容器**：用户停止时壳侧 abort 在飞的 `run` 请求，`runAdapter` 杀整棵进程树，Docker 运行命名容器并在取消时 `docker rm -f`；子代理随父任务取消，不再出现“界面已停止、命令还在跑”

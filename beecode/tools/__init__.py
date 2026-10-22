@@ -207,8 +207,9 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（受权限/沙箱约束，必须用户批准）。默认 sandbox；"
-            "只有安装系统包、访问真实环境等确实无法在沙箱完成时，才用 sandbox=host，并填写 justification。",
+            "在工作区内执行命令（必须用户批准）。按最小权限逐级申请：默认 sandbox（无网络）；"
+            "需要下载依赖/访问网络时才用 sandbox-network；只有必须真实系统（如安装系统包）才用 host。"
+            "每升一级都要填写 justification，不要一次性申请不必要的权限。",
             _obj(
                 {
                     "command": _str("要执行的命令"),
@@ -216,10 +217,10 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                     "timeout_ms": _int("超时毫秒（默认使用长工具时限，通常 600000）"),
                     "sandbox": {
                         "type": "string",
-                        "enum": ["sandbox", "host"],
-                        "description": "sandbox = Docker 沙箱（默认，需用户批准）；host = 跳出沙箱在真实系统 Shell 执行（危险，必须用户批准并填写 justification）",
+                        "enum": ["sandbox", "sandbox-network", "host"],
+                        "description": "sandbox = Docker 沙箱，无网络（默认）；sandbox-network = Docker 沙箱 + 网络（需用户逐次批准）；host = 跳出沙箱在真实系统 Shell 执行（最高风险，需用户逐次批准）",
                     },
-                    "justification": _str("请求 host 执行时的理由（会展示给用户审批）"),
+                    "justification": _str("申请 sandbox-network 或 host 时的理由（会展示给用户审批）"),
                 },
                 ["command"],
             ),

@@ -633,7 +633,7 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | `find_references` | 只读 | `path`, `symbol` | 引用位置（LSP） |
 | `get_diagnostics` | 只读 | `path?` | LSP 诊断（编译错误、lint） |
 | `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
-| `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?`, `sandbox?`, `justification?` | `sandbox=sandbox` 在 Docker 内执行（首次/会话批准）；`sandbox=host` 跳出沙箱（每次危险审批，必须 justification） |
+| `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?`, `sandbox?`, `justification?` | `sandbox`（Docker，无网络，首次/会话批准）→ `sandbox-network`（Docker + 网络，每次批准）→ `host`（真实系统，每次危险审批）；升级必须 justification |
 | `spawn_subagent` | 派生 | `task`, `max_steps?` | 只读子代理（独立上下文），只回传结论；仅主代理可用 |
 | `update_plan` | 面板 | `steps[]` | 3-6 步计划；状态只由模型更新，收尾前要求把最后一步标 done |
 | `diagram` | 展示 | `kind`, `source`, `title?` | Mermaid 图（flowchart/sequence/class/state/er）；前端懒加载渲染，图挂到助手消息并参与摘要；单轮最多 3 张、8KB |
@@ -1690,6 +1690,14 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | **L2 进程** | L1 + 无网 + 资源限制 + 只读系统目录 | 中 | ⬜ 平台 API 各自实现，暂缓 |
 | **L3 容器** | `docker run --network none --read-only --cap-drop ALL --memory 2g --pids-limit 256 --security-opt no-new-privileges` | 强 | ✅（`sandbox: docker/auto`） |
 
+命令执行的权限分层：
+
+| 层级 | 请求值 | 隔离 | 审批 |
+| --- | --- | --- | --- |
+| L0 | `sandbox` | Docker，`--network none`，根只读、工作区可写 | 首次；可选本会话都允许 |
+| L1 | `sandbox-network` | Docker + `--network bridge`，其余限制不变 | **每次**，需 justification |
+| L2 | `host` | 无沙箱，真实系统 Shell | **每次危险审批**，需 justification |
+
 **没有 L3 时不要把命令执行交给 `auto`/`bypass`**。
 
 #### 12.5.5 有效策略表（按 docker / 角色 / 位置判定）
@@ -1699,9 +1707,11 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | 工作区未受信任 | 只读（工作区内） | 只读（工作区内） |
 | 工作区外路径（读/写/执行） | **需审批** | **拒绝** |
 | 有 docker：`sandbox` 请求 | **首次必须审批**；可选「本会话都允许」 | 同主代理，提示标明子代理 |
+| 有 docker：`sandbox-network` 请求 | **每次网络审批**，必须 `justification` | 同主代理；策略仍可拒绝 |
 | 有 docker：`host` 请求 | **每次危险审批**，必须 `justification` | 每次危险审批；策略仍可拒绝 |
 | 有 docker：写文件 | 按规则/模式 | 需审批（`fullAccess` 时免） |
 | 无 docker：`sandbox` 请求 | 退回直接执行，按普通命令审批 | 仅允许只读命令，其余拒绝 |
+| 无 docker：`sandbox-network` 请求 | **拒绝**（无法提供沙箱网络） | **拒绝** |
 | 无 docker：`host` 请求 | 每次危险审批 | 每次危险审批 |
 | 无 docker：写文件 | 按规则/模式 | **拒绝** |
 

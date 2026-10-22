@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 36;
+export const PROTOCOL_VERSION = 37;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -331,9 +331,9 @@ export interface RunParams {
   /** 工作区相对目录；省略 = 工作区根 */
   cwd?: string;
   timeoutMs?: number;
-  /** 执行环境请求：sandbox = Docker 沙箱；host = 真实系统 Shell */
-  sandbox?: "sandbox" | "host";
-  /** host 请求必须说明理由（会展示给用户） */
+  /** 执行环境请求：sandbox = Docker（无网络）；sandbox-network = Docker + 网络；host = 真实系统 Shell */
+  sandbox?: "sandbox" | "sandbox-network" | "host";
+  /** sandbox-network / host 请求必须说明理由（会展示给用户审批） */
   justification?: string;
 }
 export interface RunResult {
@@ -343,7 +343,7 @@ export interface RunResult {
   /** 输出超过上限被截断 */
   truncated: boolean;
   durationMs: number;
-  sandbox: "none" | "docker" | "host";
+  sandbox: "none" | "docker" | "docker-network" | "host";
   /** 超时被杀（exitCode 通常为 124） */
   killed: boolean;
 }
