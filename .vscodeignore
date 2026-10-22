@@ -5,6 +5,8 @@ node_modules/**
 docs/**
 tools/**
 media/icon-variants/**
+media/icon-comb/**
+media/icon-honey/**
 tests/**
 scripts/**
 webview/**

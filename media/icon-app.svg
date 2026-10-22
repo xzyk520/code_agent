@@ -1,8 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs><clipPath id="body-d"><polygon points="256,132 388,208 388,356 256,432 124,356 124,208"/></clipPath></defs>
-  <rect width="512" height="512" rx="112" fill="#0B1220"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101A2E"/><stop offset="1" stop-color="#070C16"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFCA52"/><stop offset="1" stop-color="#C87800"/>
+    </linearGradient>
+    <linearGradient id="air" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A111E"/><stop offset="1" stop-color="#12202F"/>
+    </linearGradient>
+    <linearGradient id="honey" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF2BE"/><stop offset="0.4" stop-color="#FFD36A"/><stop offset="1" stop-color="#B85E00"/>
+    </linearGradient>
+    <clipPath id="honey-cell"><polygon points="328.0,244.0 388.6,279.0 388.6,349.0 328.0,384.0 267.4,349.0 267.4,279.0"/></clipPath>
+    <filter id="blur"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="blur2"><feGaussianBlur stdDeviation="1"/></filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#1E2C45" stroke-width="2"/>
-  <polygon points="152,224 120,238 78,262 68,246 94,216 140,202" fill="#4FD1FF"/><polygon points="360,224 392,238 434,262 444,246 418,216 372,202" fill="#4FD1FF"/>
-  <g clip-path="url(#body-d)"><polygon points="256,132 388,208 388,356 256,432 124,356 124,208" fill="#FFB100"/><rect x="0" y="214" width="512" height="24" fill="#0B1220"/><rect x="0" y="276" width="512" height="24" fill="#0B1220"/><rect x="0" y="338" width="512" height="24" fill="#0B1220"/></g>
-  <line x1="240" y1="142" x2="216" y2="96" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="216" cy="96" r="6" fill="#4FD1FF"/><line x1="272" y1="142" x2="296" y2="96" stroke="#4FD1FF" stroke-width="9" stroke-linecap="square"/><circle cx="296" cy="96" r="6" fill="#4FD1FF"/>
+  <g>
+    <polygon points="256.0,104.0 328.7,146.0 328.7,230.0 256.0,272.0 183.3,230.0 183.3,146.0" fill="url(#wall)" stroke="#0A101C" stroke-width="4"/>
+    <polygon points="184.0,230.0 256.7,272.0 256.7,356.0 184.0,398.0 111.3,356.0 111.3,272.0" fill="url(#wall)" stroke="#0A101C" stroke-width="4"/>
+    <polygon points="328.0,230.0 400.7,272.0 400.7,356.0 328.0,398.0 255.3,356.0 255.3,272.0" fill="url(#wall)" stroke="#0A101C" stroke-width="4"/>
+  </g>
+  <polygon points="256.0,118.0 316.6,153.0 316.6,223.0 256.0,258.0 195.4,223.0 195.4,153.0" fill="url(#air)"/>
+  <polygon points="184.0,244.0 244.6,279.0 244.6,349.0 184.0,384.0 123.4,349.0 123.4,279.0" fill="url(#air)"/>
+  <polygon points="328.0,244.0 388.6,279.0 388.6,349.0 328.0,384.0 267.4,349.0 267.4,279.0" fill="url(#air)"/>
+  <g clip-path="url(#honey-cell)">
+    <polygon points="248.0,296.0 328.0,304.0 408.0,296.0 408.0,394.0 328.0,394.0 248.0,394.0" fill="url(#honey)"/>
+    <ellipse cx="328" cy="356" rx="44" ry="24" fill="#FFE7A0" opacity="0.28" filter="url(#blur)"/>
+  </g>
+  <line x1="258" y1="296" x2="398" y2="296" stroke="#FFF6D2" stroke-width="4" opacity="0.85"/>
+  <ellipse cx="304" cy="336" rx="12" ry="18" fill="#FFFDF0" opacity="0.35" filter="url(#blur)"/>
+  <circle cx="348" cy="344" r="8" fill="none" stroke="#FFF8DC" stroke-width="2" opacity="0.55"/>
+  <circle cx="345" cy="341" r="2.5" fill="#FFFDF0" opacity="0.8"/>
+
+  <g fill="none" stroke="#FFE9B0" stroke-width="2" opacity="0.28">
+    <polygon points="256.0,118.0 316.6,153.0 316.6,223.0 256.0,258.0 195.4,223.0 195.4,153.0"/>
+    <polygon points="184.0,244.0 244.6,279.0 244.6,349.0 184.0,384.0 123.4,349.0 123.4,279.0"/>
+    <polygon points="328.0,244.0 388.6,279.0 388.6,349.0 328.0,384.0 267.4,349.0 267.4,279.0"/>
+  </g>
+  <g fill="#EAF2FF" opacity="0.05">
+    <polygon points="228.0,110.0 256.0,124.0 240.0,200.0 212.0,186.0" filter="url(#blur)"/>
+    <polygon points="146.0,216.0 170.0,228.0 156.0,300.0 130.0,286.0" filter="url(#blur)"/>
+  </g>
 </svg>
