@@ -44,7 +44,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, trace?: Array<any> }>, hint?: string }} PanelState */
+  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -583,13 +583,17 @@
   }
 
   /** 一轮的轨迹卡片：默认折叠；外层摘要 + 内层步骤 + 完整内容三层 */
-  /** @param {{ inputTokens?: number, outputTokens?: number, elapsedMs?: number }} turn */
+  /** @param {{ inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number }} turn */
   function formatUsage(turn) {
     const tokens = (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0);
     const seconds = (turn.elapsedMs ?? 0) / 1000;
+    const modelSeconds = (turn.modelWaitMs ?? 0) / 1000;
+    const toolSeconds = (turn.toolMs ?? 0) / 1000;
     const parts = [];
     if (tokens > 0) parts.push(tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`);
     if (seconds > 0) parts.push(`${seconds.toFixed(1)}s`);
+    if (modelSeconds > 0) parts.push(`模型 ${modelSeconds.toFixed(1)}s`);
+    if (toolSeconds > 0) parts.push(`工具 ${toolSeconds.toFixed(1)}s`);
     return parts.join(" · ");
   }
 

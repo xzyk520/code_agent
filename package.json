@@ -630,6 +630,38 @@
           "type": "number",
           "default": 30
         },
+        "beeCode.agent.modelFirstTokenSeconds": {
+          "type": "number",
+          "scope": "window",
+          "default": 60,
+          "minimum": 5,
+          "maximum": 600,
+          "markdownDescription": "主 agent 等待模型首个 token 的时限（秒）。超过即判定模型卡住。"
+        },
+        "beeCode.agent.modelIdleSeconds": {
+          "type": "number",
+          "scope": "window",
+          "default": 45,
+          "minimum": 5,
+          "maximum": 600,
+          "markdownDescription": "主 agent 流式输出中，两个 token 之间的最大空闲时间（秒）。超过即强制停止本轮。"
+        },
+        "beeCode.agent.maxTurnWallClockSeconds": {
+          "type": "number",
+          "scope": "window",
+          "default": 7200,
+          "minimum": 300,
+          "maximum": 86400,
+          "markdownDescription": "整轮硬墙钟安全阀（秒）。工具执行不计入主 agent 的模型响应计时，但仍受这个总上限保护。"
+        },
+        "beeCode.agent.maxToolCallsPerBatch": {
+          "type": "number",
+          "scope": "window",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 32,
+          "markdownDescription": "一次 assistant 消息里最多执行多少个工具调用；超过的部分回填错误，要求模型拆批。"
+        },
         "beeCode.agent.toolTimeoutMs": {
           "type": "number",
           "default": 30000,

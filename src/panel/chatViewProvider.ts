@@ -68,6 +68,8 @@ export interface TurnView {
   inputTokens?: number;
   outputTokens?: number;
   elapsedMs?: number;
+  modelWaitMs?: number;
+  toolMs?: number;
   trace?: TraceStepDto[];
 }
 

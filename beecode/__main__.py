@@ -93,6 +93,10 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["max_steps"] = int(params.get("maxSteps") or 12)
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
     _state["long_tool_timeout_ms"] = int(params.get("longToolTimeoutMs") or 600_000)
+    _state["first_token_seconds"] = float(params.get("firstTokenSeconds") or 60)
+    _state["idle_seconds"] = float(params.get("idleSeconds") or 45)
+    _state["max_turn_wall_seconds"] = float(params.get("maxTurnWallClockSeconds") or 7_200)
+    _state["max_tool_calls_per_batch"] = int(params.get("maxToolCallsPerBatch") or 8)
     _state["large_task_steps"] = int(params.get("largeTaskSteps") or 24)
     _state["max_turn_tokens"] = int(params.get("maxTurnTokens") or 200_000)
     _state["max_turn_seconds"] = float(params.get("maxTurnSeconds") or 600)
@@ -185,6 +189,10 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             max_turn_tokens=int(_state.get("max_turn_tokens") or 200_000),
             max_turn_seconds=float(_state.get("max_turn_seconds") or 600),
             large_task_seconds=float(_state.get("large_task_seconds") or 1800),
+            first_token_seconds=float(_state.get("first_token_seconds") or 60),
+            idle_seconds=float(_state.get("idle_seconds") or 45),
+            max_turn_wall_seconds=float(_state.get("max_turn_wall_seconds") or 7200),
+            max_tool_calls_per_batch=int(_state.get("max_tool_calls_per_batch") or 8),
         ),
         propose=_propose,
         log=_log,

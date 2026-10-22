@@ -124,7 +124,13 @@ class Shell {
   /** 本轮意图规模（决定模型响应时限） */
   private turnScale: "small" | "large" = "small";
   /** 本轮累计消耗（ui.usage 推送） */
-  private turnUsage?: { inputTokens: number; outputTokens: number; elapsedMs: number };
+  private turnUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    elapsedMs: number;
+    modelWaitMs: number;
+    toolMs: number;
+  };
   /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
   private readonly reasoningSegments = new Map<number, string>();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -481,6 +487,8 @@ class Shell {
         inputTokens: turn.inputTokens,
         outputTokens: turn.outputTokens,
         elapsedMs: turn.elapsedMs,
+        modelWaitMs: turn.modelWaitMs,
+        toolMs: turn.toolMs,
         trace: turn.trace,
       })),
     );
@@ -611,6 +619,8 @@ class Shell {
             inputTokens: this.turnUsage.inputTokens,
             outputTokens: this.turnUsage.outputTokens,
             elapsedMs: this.turnUsage.elapsedMs,
+            modelWaitMs: this.turnUsage.modelWaitMs,
+            toolMs: this.turnUsage.toolMs,
           }
         : {}),
       userText: userText.slice(0, 400),
@@ -765,6 +775,10 @@ class Shell {
         maxTurnTokens: this.config.maxTurnTokens,
         maxTurnSeconds: this.config.maxTurnSeconds,
         largeTaskSeconds: this.config.largeTaskSeconds,
+        firstTokenSeconds: this.config.firstTokenSeconds,
+        idleSeconds: this.config.idleSeconds,
+        maxTurnWallClockSeconds: this.config.maxTurnWallClockSeconds,
+        maxToolCallsPerBatch: this.config.maxToolCallsPerBatch,
         checkpointEnabled: this.config.checkpointEnabled,
         ...(resolvedKey.key ? { apiKey: resolvedKey.key } : {}),
         subagentConfig: {
@@ -2127,6 +2141,8 @@ class Shell {
           inputTokens: p.inputTokens ?? 0,
           outputTokens: p.outputTokens ?? 0,
           elapsedMs: p.elapsedMs ?? 0,
+          modelWaitMs: p.modelWaitMs ?? 0,
+          toolMs: p.toolMs ?? 0,
         };
         const tokens = (p.inputTokens ?? 0) + (p.outputTokens ?? 0);
         const seconds = (p.elapsedMs ?? 0) / 1000;

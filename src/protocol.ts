@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 33;
+export const PROTOCOL_VERSION = 34;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -449,8 +449,16 @@ export interface InitializeParams {
   maxTurnTokens?: number;
   /** 一轮的墙钟预算（秒）；普通任务用 */
   maxTurnSeconds?: number;
-  /** 大任务的墙钟预算（秒）；按意图规模动态切换 */
+  /** 大任务的主 agent 模型响应时限（秒） */
   largeTaskSeconds?: number;
+  /** 首 token 超时（秒） */
+  firstTokenSeconds?: number;
+  /** 流式 token 空闲超时（秒） */
+  idleSeconds?: number;
+  /** 整轮硬墙钟安全阀（秒），与模型响应计时无关 */
+  maxTurnWallClockSeconds?: number;
+  /** 一次 assistant 消息里最多执行多少个工具调用 */
+  maxToolCallsPerBatch?: number;
   checkpointEnabled?: boolean;
   /** 只在握手时通过 stdin 传入；内核只应放内存，不落盘、不进日志 */
   apiKey?: string;
@@ -653,6 +661,10 @@ export interface UiUsageParams {
   costUsd?: number;
   /** 本轮已耗时（毫秒），用于面板实时显示成本 */
   elapsedMs?: number;
+  /** 等待模型响应的累计耗时（毫秒） */
+  modelWaitMs?: number;
+  /** 工具执行累计耗时（毫秒） */
+  toolMs?: number;
 }
 /** 提案集合变化（只有元数据，正文用 `proposal.read` 按需拉取） */
 export interface ProposalChangedParams {

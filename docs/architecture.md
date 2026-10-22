@@ -653,6 +653,9 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | 计划未完成 | 计划里**非最后一步**仍有 pending/doing，且模型不再调用工具 | 催一次「计划里还有未完成步骤」；最后一步规定为总结，可以留到最后 |
 | 提前收工 | 用户要求改代码但本轮 0 个提案 | 追问「你还没有提交任何修改」，允许一次补提案 |
 | 单工具超时 | 普通工具 `toolTimeoutMs`（默认 30s）；`run_command` / `spawn_subagent` 用 `longToolTimeoutMs`（默认 600s） | 中止该工具，把 `timeout` 错误回填给模型，并标记 `ui.tool(error)`；取消会继续传播到壳侧进程/容器 |
+| 主 agent 模型响应 | 首 token `modelFirstTokenSeconds`（60s）+ 空闲 `modelIdleSeconds`（45s）+ 总响应 `maxTurnSeconds` / `largeTaskSeconds`（600s / 1800s） | 只计模型调用，不计工具；超时强制停止本轮 |
+| 整轮硬墙钟 | `maxTurnWallClockSeconds`（默认 7200s） | 独立安全阀，工具和模型都计入；到点强制停止 |
+| 单批工具数 | `maxToolCallsPerBatch`（默认 8） | 超出部分回填 `batch_limit` 错误，要求模型拆批 |
 | 工具异常 | 任意异常 | 捕获后回填 `{error, kind}`；**不中断循环**，模型可改策略 |
 | 用户中断 | 随时 | `task.cancel()` → `CancelledError` 穿透；壳侧 abort 在飞请求，`runAdapter` 杀掉进程树/`docker rm -f` 容器，子代理随父任务取消，`chat.send` 返回「本轮已取消」 |
 
@@ -713,7 +716,7 @@ system_prompt(mode) → loop
 | 计划收尾提示 | 系统提示词与计划模板都明确要求：**收尾前先 `update_plan` 把最后一步（总结）标为 done，再输出总结**；内核不再替模型自动标记 |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
-| 轮预算 | token：`agent.maxTurnTokens`（默认 200k），到 **80%** 先注入"优先收尾"提示，用尽后自动建**检查点**、禁用工具要求收尾。模型响应：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；**只计主 agent 等待模型响应的时间**，工具执行不计入，超时直接强制停止本轮 |
+| 轮预算 | token：`agent.maxTurnTokens`（默认 200k），到 **80%** 先注入"优先收尾"提示，用尽后自动建**检查点**、禁用工具要求收尾。模型响应：首 token / 空闲 / 总响应三层时限；普通任务 `maxTurnSeconds`（600s），大任务 `largeTaskSeconds`（1800s）；**只计主 agent 等待模型响应的时间**，工具执行不计入；另有 `maxTurnWallClockSeconds` 整轮硬上限。只读工具可并发，结果按原 calls 顺序回填 |
 
 收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
 
@@ -725,7 +728,7 @@ system_prompt(mode) → loop
 | 计划状态 | **只由模型 `update_plan` 修改**；内核不根据 `propose_edit` / 收尾自动推断完成度 |
 | 提案联动 | 接受提案后，面板把提到该路径的步骤标为 done，并同步到 session meta |
 | 自动快照 | `needs_proposal=true` 的轮次开始时自动 `checkpoint.create`（失败只记日志） |
-| 轮预算 | token：`agent.maxTurnTokens`（默认 200k），到 **80%** 先注入"优先收尾"提示，用尽后自动建**检查点**、禁用工具要求收尾。模型响应：普通任务 `agent.maxTurnSeconds`（默认 600s），大任务 `agent.largeTaskSeconds`（默认 1800s）；**只计主 agent 等待模型响应的时间**，工具执行不计入，超时直接强制停止本轮 |
+| 轮预算 | token：`agent.maxTurnTokens`（默认 200k），到 **80%** 先注入"优先收尾"提示，用尽后自动建**检查点**、禁用工具要求收尾。模型响应：首 token / 空闲 / 总响应三层时限；普通任务 `maxTurnSeconds`（600s），大任务 `largeTaskSeconds`（1800s）；**只计主 agent 等待模型响应的时间**，工具执行不计入；另有 `maxTurnWallClockSeconds` 整轮硬上限。只读工具可并发，结果按原 calls 顺序回填 |
 
 收尾时不会再给工具（`tools=None`），避免模型在"该总结了"的时候继续调工具。
 

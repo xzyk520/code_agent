@@ -7,6 +7,9 @@
 
 ### Added
 
+- **协议 v34 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入；新增整轮硬墙钟 `maxTurnWallClockSeconds`
+- **只读工具并发**：同一批只读工具（read/list/search/outline/symbol/references/diagnostics）并发执行，结果按原 calls 顺序回填；写工具、命令、子代理仍串行。新增 `maxToolCallsPerBatch`（默认 8）
+- **轨迹用量细分**：`ui.usage` 增加 `modelWaitMs` / `toolMs`，轨迹卡片显示模型等待与工具执行耗时
 - **停止传播到命令/容器**：用户停止时壳侧 abort 在飞的 `run` 请求，`runAdapter` 杀整棵进程树，Docker 运行命名容器并在取消时 `docker rm -f`；子代理随父任务取消，不再出现“界面已停止、命令还在跑”
 - **协议 v33**：`initialize` 增加 `longToolTimeoutMs`，用于命令/子代理的长工具时限
 - **主 agent 超时改为模型响应计时**：每次模型调用单独计时，工具执行时间不计入；所有工具返回后重新开始，模型返回工具调用/最终回答即结束，超时强制停止本轮

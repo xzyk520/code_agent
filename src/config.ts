@@ -41,6 +41,10 @@ export interface ShellConfig {
   maxTurnTokens: number;
   maxTurnSeconds: number;
   largeTaskSeconds: number;
+  firstTokenSeconds: number;
+  idleSeconds: number;
+  maxTurnWallClockSeconds: number;
+  maxToolCallsPerBatch: number;
   granularity: "function" | "change" | "file";
   checkpointEnabled: boolean;
   checkpointRetention: number;
@@ -134,6 +138,10 @@ export function readConfig(): ConfigReadResult {
     maxTurnTokens: reader.num("agent.maxTurnTokens", 200_000, 10_000, 2_000_000),
     maxTurnSeconds: reader.num("agent.maxTurnSeconds", 600, 60, 7_200),
     largeTaskSeconds: reader.num("agent.largeTaskSeconds", 1_800, 60, 14_400),
+    firstTokenSeconds: reader.num("agent.modelFirstTokenSeconds", 60, 5, 600),
+    idleSeconds: reader.num("agent.modelIdleSeconds", 45, 5, 600),
+    maxTurnWallClockSeconds: reader.num("agent.maxTurnWallClockSeconds", 7_200, 300, 86_400),
+    maxToolCallsPerBatch: reader.num("agent.maxToolCallsPerBatch", 8, 1, 32),
     toolTimeoutMs: reader.num("agent.toolTimeoutMs", 30_000, 1_000, 600_000),
     longToolTimeoutMs: reader.num("agent.longToolTimeoutMs", 600_000, 30_000, 3_600_000),
     granularity: reader.oneOf("review.granularity", "function", ["function", "change", "file"] as const),

@@ -26,6 +26,8 @@ export interface TurnRecord {
   inputTokens?: number;
   outputTokens?: number;
   elapsedMs?: number;
+  modelWaitMs?: number;
+  toolMs?: number;
   /** 用户原话（截断） */
   userText: string;
   /** AI 这一轮的回答（截断） */

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import uuid
@@ -47,6 +48,16 @@ Notify = Callable[[str, dict[str, Any]], None]
 Propose = Callable[[str, str, str], Awaitable[str]]
 
 #: 子代理的固定前缀：只读、给结论与引用、不复述代码
+PARALLEL_READONLY = frozenset({
+    "read_file",
+    "list_files",
+    "search_code",
+    "file_outline",
+    "find_symbol",
+    "find_references",
+    "get_diagnostics",
+})
+
 _SUBAGENT_PREFIX = (
     "你是一个只读探索子代理，运行在沙箱化的工具环境中。"
     "只能用只读工具（读文件/搜索/符号/诊断）；不能修改文件，也不能再派生子代理。"
@@ -80,6 +91,13 @@ class TurnConfig:
     max_turn_seconds: float = 600.0
     #: 大任务的主 agent 单次模型响应超时（按意图 scale 切换）
     large_task_seconds: float = 1_800.0
+    #: 首 token 超时 / 流式空闲超时
+    first_token_seconds: float = 60.0
+    idle_seconds: float = 45.0
+    #: 整轮硬墙钟安全阀（秒）；与模型响应计时无关
+    max_turn_wall_seconds: float = 7_200.0
+    #: 一次 assistant 消息里最多执行多少个工具调用
+    max_tool_calls_per_batch: int = 8
 
 
 @dataclass(slots=True)
@@ -89,6 +107,8 @@ class TurnStats:
     input_tokens: int = 0
     output_tokens: int = 0
     proposals: int = 0
+    model_wait_ms: int = 0
+    tool_ms: int = 0
 
 
 class AgentLoop:
@@ -154,6 +174,8 @@ class AgentLoop:
         focus: dict[str, Any] | None = None,
         plan: list[dict[str, str]] | None = None,
     ) -> TurnStats:
+        started_at = asyncio.get_running_loop().time()
+        self._wall_deadline = started_at + max(1.0, self._config.max_turn_wall_seconds)
         # —— 视觉能力：显式设置 > 服务端反馈（缓存） > 乐观尝试 ——
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
@@ -284,7 +306,6 @@ class AgentLoop:
             max_steps = max(max_steps, self._config.large_task_steps)
             time_budget = self._config.large_task_seconds
         self._turn_time_budget = time_budget
-        started_at = asyncio.get_running_loop().time()
         budget_hit: str | None = None
         forced_end = False
 
@@ -372,6 +393,8 @@ class AgentLoop:
         self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "start"})
         try:
             while stats.steps < max_steps:
+                if self._wall_expired():
+                    raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
                 stats.steps += 1
                 answer, calls, usage, reasoning = await self._stream_with_deadline(
                     client, messages, session, stats, round_index=stats.steps
@@ -398,8 +421,51 @@ class AgentLoop:
                 assistant_msg = _assistant_tool_message(answer, calls)
                 self._attach_reasoning(assistant_msg, reasoning)
                 messages.append(assistant_msg)
+
+                max_batch = max(1, self._config.max_tool_calls_per_batch)
+                if len(calls) > max_batch:
+                    for extra in calls[max_batch:]:
+                        messages.append(
+                            _tool_message(
+                                extra,
+                                {
+                                    "error": f"本批工具调用超过 {max_batch} 个，已跳过这条；请拆成更小的批次。",
+                                    "kind": "batch_limit",
+                                },
+                            )
+                        )
+                    calls = calls[:max_batch]
+
+                def call_key(call: ToolCall) -> str:
+                    return f"{call.name}:{_canonical(call.arguments)}"
+
+                parallel = (
+                    len(calls) > 1
+                    and all(call.name in PARALLEL_READONLY for call in calls)
+                    and len({call_key(call) for call in calls}) == len(calls)
+                    and all(repeat[call_key(call)] + 1 < self._config.repeat_limit for call in calls)
+                )
+
+                if parallel:
+                    for call in calls:
+                        repeat[call_key(call)] += 1
+                    results = await asyncio.gather(
+                        *(self._execute(ctx, call, session, stats) for call in calls),
+                        return_exceptions=True,
+                    )
+                    for call, raw in zip(calls, results):
+                        if isinstance(raw, (asyncio.CancelledError, ModelError)):
+                            raise raw
+                        result = (
+                            raw
+                            if isinstance(raw, dict)
+                            else {"error": f"工具并发执行失败：{type(raw).__name__}: {raw}", "kind": "error"}
+                        )
+                        self._record_tool_result(session, call, result, stats, recent_results, messages)
+                    continue
+
                 for call in calls:
-                    key = f"{call.name}:{_canonical(call.arguments)}"
+                    key = call_key(call)
                     repeat[key] += 1
 
                     if repeat[key] > self._config.repeat_limit:
@@ -418,19 +484,8 @@ class AgentLoop:
                         messages.append(_tool_message(call, {"error": warning, "kind": "repeat"}))
                         continue
 
-                    result = await self._execute(ctx, call, session)
-                    stats.tool_calls += 1
-                    if call.name == "propose_edit" and result.get("ok"):
-                        stats.proposals += 1
-                    self._emit_read(session, call, result)
-
-                    digest = _digest(result)
-                    if digest in recent_results and len(recent_results) == recent_results.maxlen:
-                        warning = "连续多次工具结果完全相同，继续调用没有意义。请换策略或总结。"
-                        self._emit_tool(session, call, "error", "结果无变化")
-                        result = {"error": warning, "kind": "no_progress"}
-                    recent_results.append(digest)
-                    messages.append(_tool_message(call, result))
+                    result = await self._execute(ctx, call, session, stats)
+                    self._record_tool_result(session, call, result, stats, recent_results, messages)
 
             else:
                 forced_end = True
@@ -465,7 +520,7 @@ class AgentLoop:
                     self._attach_reasoning(assistant_msg, reasoning)
                     messages.append(assistant_msg)
                     for call in calls:
-                        result = await self._execute(ctx, call, session)
+                        result = await self._execute(ctx, call, session, stats)
                         stats.tool_calls += 1
                         if call.name == "propose_edit" and result.get("ok"):
                             stats.proposals += 1
@@ -486,6 +541,8 @@ class AgentLoop:
                 "inputTokens": stats.input_tokens or _estimate_input(messages),
                 "outputTokens": stats.output_tokens or estimate_tokens(final_text),
                 "elapsedMs": int((asyncio.get_running_loop().time() - started_at) * 1000),
+                "modelWaitMs": stats.model_wait_ms,
+                "toolMs": stats.tool_ms,
             },
         )
         return stats
@@ -623,8 +680,17 @@ class AgentLoop:
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
         await self._compact(client, messages, session)
+        model_started = asyncio.get_running_loop().time()
         try:
-            result = await self._stream_once(client, messages, session, stats, allow_tools=allow_tools, round_index=round_index)
+            result = await self._stream_once(
+                client,
+                messages,
+                session,
+                stats,
+                allow_tools=allow_tools,
+                round_index=round_index,
+                deadline_start=model_started,
+            )
             if has_image_parts(messages):
                 remember(model_name, base_url, True)
             return result
@@ -650,14 +716,29 @@ class AgentLoop:
                     "msg": "当前模型不接受图片：本轮已改为文字描述，后续不再发送图片。",
                 },
             )
-            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools, round_index=round_index)
+            return await self._stream_once(
+                client,
+                messages,
+                session,
+                stats,
+                allow_tools=allow_tools,
+                round_index=round_index,
+                deadline_start=model_started,
+            )
         except ReasoningReplayRequired as exc:
             if self._replay_reasoning or str(session.model_config.get("reasoningReplay") or "auto").lower() == "never":
                 raise
             self._replay_reasoning = True
             self._enable_replay(messages)
             self._log(f"服务端要求回传思考内容，已补上并重试：{exc}")
-            return await self._stream_once(client, messages, session, stats, allow_tools=allow_tools)
+            return await self._stream_once(
+                client,
+                messages,
+                session,
+                stats,
+                allow_tools=allow_tools,
+                deadline_start=model_started,
+            )
 
     async def _stream_once(
         self,
@@ -668,23 +749,67 @@ class AgentLoop:
         *,
         allow_tools: bool = True,
         round_index: int = 1,
+        deadline_start: float | None = None,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
         parts: list[str] = []
         reasoning_parts: list[str] = []
         calls: list[ToolCall] = []
         usage: dict[str, int] | None = None
+        started = deadline_start or asyncio.get_running_loop().time()
+        iterator = client.stream_chat(messages, tools=self._schemas if allow_tools else None)
+        first = True
 
-        async for delta in client.stream_chat(messages, tools=self._schemas if allow_tools else None):
-            if delta.usage:
-                usage = delta.usage
-            if delta.tool_calls:
-                calls.extend(delta.tool_calls)
-            if delta.text:
-                parts.append(delta.text)
-                self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
-            if delta.reasoning:
-                reasoning_parts.append(delta.reasoning)
-                self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning, "round": round_index})
+        def timeout_error(reason: str) -> ModelError:
+            return ModelError(f"主agent模型{reason}超时，已强制停止本轮。")
+
+        try:
+            while True:
+                now = asyncio.get_running_loop().time()
+                model_left = self._turn_time_budget - (now - started)
+                wall_deadline = getattr(self, "_wall_deadline", None)
+                wall_left = (wall_deadline - now) if wall_deadline is not None else float("inf")
+                if wall_left <= 0:
+                    raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
+                if model_left <= 0:
+                    raise timeout_error("响应")
+                wait = min(
+                    self._config.first_token_seconds if first else self._config.idle_seconds,
+                    model_left,
+                    wall_left,
+                )
+                try:
+                    delta = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError as exc:
+                    now = asyncio.get_running_loop().time()
+                    wall_deadline = getattr(self, "_wall_deadline", None)
+                    if wall_deadline is not None and now >= wall_deadline:
+                        raise ModelError(
+                            f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。"
+                        ) from exc
+                    if now - started >= self._turn_time_budget:
+                        raise timeout_error("响应") from exc
+                    raise timeout_error("首 token" if first else "空闲") from exc
+
+                first = False
+                if delta.usage:
+                    usage = delta.usage
+                if delta.tool_calls:
+                    calls.extend(delta.tool_calls)
+                if delta.text:
+                    parts.append(delta.text)
+                    self._emit("ui.delta", {"sessionId": session.id, "text": delta.text})
+                if delta.reasoning:
+                    reasoning_parts.append(delta.reasoning)
+                    self._emit("ui.reasoning", {"sessionId": session.id, "text": delta.reasoning, "round": round_index})
+        finally:
+            with contextlib.suppress(Exception):
+                aclose = getattr(iterator, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+            if stats is not None:
+                stats.model_wait_ms += int((asyncio.get_running_loop().time() - started) * 1000)
 
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
@@ -699,7 +824,35 @@ class AgentLoop:
 
     # ───────────────────────── 工具执行 ─────────────────────────
 
-    async def _execute(self, ctx: ToolContext, call: ToolCall, session: Session) -> dict[str, Any]:
+    def _record_tool_result(
+        self,
+        session: Session,
+        call: ToolCall,
+        result: dict[str, Any],
+        stats: TurnStats,
+        recent_results: deque[str],
+        messages: list[dict[str, Any]],
+    ) -> None:
+        stats.tool_calls += 1
+        if call.name == "propose_edit" and result.get("ok"):
+            stats.proposals += 1
+        self._emit_read(session, call, result)
+
+        digest = _digest(result)
+        if digest in recent_results and len(recent_results) == recent_results.maxlen:
+            warning = "连续多次工具结果完全相同，继续调用没有意义。请换策略或总结。"
+            self._emit_tool(session, call, "error", "结果无变化")
+            result = {"error": warning, "kind": "no_progress"}
+        recent_results.append(digest)
+        messages.append(_tool_message(call, result))
+
+    async def _execute(
+        self,
+        ctx: ToolContext,
+        call: ToolCall,
+        session: Session,
+        stats: TurnStats | None = None,
+    ) -> dict[str, Any]:
         tool = self._tools.get(call.name)
         if tool is None:
             message = f"未知工具：{call.name}（可用：{', '.join(self._tools)}）"
@@ -734,12 +887,18 @@ class AgentLoop:
         elif call.name == "spawn_subagent":
             # 子代理收尾/回传结论需要一点余量
             timeout_s += 30.0
+        wall_left = self._wall_remaining()
+        if wall_left <= 0:
+            raise ModelError(f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。")
+        timeout_s = min(timeout_s, wall_left)
         started = asyncio.get_running_loop().time()
         try:
             result = await asyncio.wait_for(
                 tool.fn(ctx, args), timeout=timeout_s
             )
             elapsed = asyncio.get_running_loop().time() - started
+            if stats is not None:
+                stats.tool_ms += int(elapsed * 1000)
             brief = _brief_args(args)
             self._emit_tool(
                 session,
@@ -751,8 +910,14 @@ class AgentLoop:
             )
             return result
         except asyncio.TimeoutError:
+            if stats is not None:
+                stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
+            if self._wall_expired():
+                raise ModelError(
+                    f"本轮硬墙钟上限（{self._config.max_turn_wall_seconds:g}s）已用尽，已强制停止。"
+                ) from None
             message = (
-                f"工具 {call.name} 超时（{self._config.tool_timeout_s:g}s）。"
+                f"工具 {call.name} 超时（{timeout_s:g}s）。"
                 "请缩小范围或换一种方式，不要用相同参数重试。"
             )
             self._emit_tool(session, call, "error", "超时")
@@ -761,6 +926,8 @@ class AgentLoop:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 工具错误必须回灌给模型
+            if stats is not None:
+                stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
             message = f"工具 {call.name} 失败：{type(exc).__name__}: {exc}"
             self._emit_tool(session, call, "error", _short(str(exc)))
             ctx.log(message)
@@ -828,32 +995,19 @@ class AgentLoop:
         allow_tools: bool = True,
         round_index: int = 1,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
-        """主 agent 的模型响应时限：只包住模型调用，不包工具执行。
+        """模型响应计时入口。
 
-        计时起点在每次"上一批工具全部返回"之后；模型一旦返回工具调用或最终回答，
-        本轮计时自然结束。下一次模型调用重新开始。
+        真正的首 token / 空闲 / 总响应 deadline 在 `_stream_once` 内，
+        从上下文压缩之后开始计时；工具执行不在其中。
         """
-        timeout = self._turn_time_budget
-        try:
-            return await asyncio.wait_for(
-                self._stream(
-                    client,
-                    messages,
-                    session,
-                    stats,
-                    allow_tools=allow_tools,
-                    round_index=round_index,
-                ),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            message = f"主agent等待模型响应超过 {timeout:g}s，已强制停止本轮。"
-            self._emit(
-                "ui.tool",
-                {"sessionId": session.id, "name": "model", "status": "error", "summary": "等待模型超时"},
-            )
-            self._log(message)
-            raise ModelError(message) from exc
+        return await self._stream(
+            client,
+            messages,
+            session,
+            stats,
+            allow_tools=allow_tools,
+            round_index=round_index,
+        )
 
     async def _finish_max_steps(
         self,
@@ -896,6 +1050,15 @@ class AgentLoop:
             client, messages, session, stats, allow_tools=False, round_index=stats.steps
         )
         return answer
+
+    def _wall_remaining(self) -> float:
+        deadline = getattr(self, "_wall_deadline", None)
+        if deadline is None:
+            return float("inf")
+        return deadline - asyncio.get_running_loop().time()
+
+    def _wall_expired(self) -> bool:
+        return self._wall_remaining() <= 0
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
         self._notify(
@@ -1045,6 +1208,10 @@ class AgentLoop:
                 context_window_tokens=self._config.context_window_tokens,
                 max_turn_seconds=self._config.max_turn_seconds,
                 large_task_seconds=self._config.large_task_seconds,
+                first_token_seconds=self._config.first_token_seconds,
+                idle_seconds=self._config.idle_seconds,
+                max_turn_wall_seconds=self._config.max_turn_wall_seconds,
+                max_tool_calls_per_batch=self._config.max_tool_calls_per_batch,
             ),
             propose=None,
             client_factory=self._client_factory,
