@@ -162,6 +162,7 @@ class Shell {
       backgrounded: boolean;
       resultDelivered: boolean;
       noticeSent: boolean;
+      cancelled: boolean;
     }
   >();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -926,6 +927,7 @@ class Shell {
   private killSessionCommandJobs(): void {
     for (const [id, record] of this.commandJobs) {
       if (record.sessionId !== this.sessionId) continue;
+      record.cancelled = true;
       record.job.kill();
       this.commandJobs.delete(id);
     }
@@ -1705,6 +1707,7 @@ class Shell {
       backgrounded: false,
       resultDelivered: false,
       noticeSent: false,
+      cancelled: false,
     };
     this.commandJobs.set(job.id, record);
     job.onFinished(() => {
@@ -1819,7 +1822,7 @@ class Shell {
   }
 
   private notifyCommandJobFinished(record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>): void {
-    if (record.noticeSent || record.resultDelivered || !record.backgrounded) return;
+    if (record.noticeSent || record.resultDelivered || record.cancelled || !record.backgrounded) return;
     if (this.disposed || record.sessionId !== this.sessionId) return;
     record.noticeSent = true;
     const snap = record.job.peek();
