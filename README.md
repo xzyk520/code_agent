@@ -79,7 +79,7 @@ npm run typecheck      # tsc --noEmit + 面板侧 checkJs，必须单独跑（es
 
 ### 接真实内核
 
-内核目前是**协议骨架**（`initialize` / `shutdown` / `model.reload` 可用，`chat.send` 待实现）。开发环境：
+内核已经实现完整对话、工具循环、提案、检查点、Skills 与 MCP。开发环境：
 
 ```bash
 conda activate beeagent          # Python 3.11；也可用任意 venv
@@ -137,3 +137,5 @@ npm run package        # → bee-code-0.0.1.vsix（14 个文件，约 80 KB）
 ## 许可证
 
 [MIT](LICENSE)。欢迎 Issue / PR。
+
+- [用户验收测试 / User acceptance testing](docs/testing.md)

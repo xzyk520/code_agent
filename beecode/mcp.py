@@ -135,6 +135,8 @@ async def load_mcp_manager(log: Any = None) -> MCPManager:
             await client.close()
             continue
         clients.append(client)
+        if log:
+            log(f"MCP server {server_name} ready: {len((listed or {}).get('tools', []))} tools")
         for item in (listed or {}).get("tools", []):
             name = str(item.get("name") or "").strip()
             if not name:

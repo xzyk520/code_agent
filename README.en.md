@@ -138,3 +138,5 @@ npm run package        # → bee-code-<version>.vsix
 ## License
 
 [MIT](LICENSE). Issues and PRs are welcome.
+
+- [用户验收测试 / User acceptance testing](docs/testing.md)
