@@ -39,6 +39,7 @@
     rejectAll: must("rejectAll", HTMLButtonElement),
     retry: must("retry", HTMLButtonElement),
     jumpLatest: must("jump-latest", HTMLButtonElement),
+    sessions: must("sessions", HTMLButtonElement),
     retryBanner: must("retry-banner", HTMLElement),
   };
 
@@ -80,6 +81,8 @@
   function applyLocale() {
     document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
     el.stop.title = tr("停止", "Stop");
+    el.sessions.textContent = tr("会话", "Sessions");
+    el.sessions.title = tr("切换会话", "Switch session");
     el.reads.setAttribute("aria-label", tr("agent 最近读取的文件", "Files recently read by the agent"));
     el.messages.setAttribute("aria-label", tr("对话记录", "Conversation"));
     el.trajectory.setAttribute("aria-label", tr("会话轨迹", "Session trace"));
@@ -1234,6 +1237,7 @@
   }
 
   el.send.addEventListener("click", send);
+  el.sessions.addEventListener("click", () => post({ type: "sessions" }));
   el.stop.addEventListener("click", () => post({ type: "stop" }));
   el.acceptAll.addEventListener("click", () => post({ type: "acceptAll" }));
   el.rejectAll.addEventListener("click", () => post({ type: "rejectAll" }));

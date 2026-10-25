@@ -236,6 +236,7 @@ class Shell {
       onOpenRead: (path, startLine, endLine) => void this.openRead(path, startLine, endLine),
       onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
       onRetryTurn: () => void this.retryLastTurn(),
+      onSessions: () => void this.showSessionSwitcher(),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments, this.config.language, this.config.fontSize);
 
@@ -797,6 +798,29 @@ class Shell {
   }
 
   /** Switch to a historical session */
+  /** Panel header: one button for creating or switching sessions. */
+  private async showSessionSwitcher(): Promise<void> {
+    const picked = await vscode.window.showQuickPick(
+      [
+        {
+          label: tr(this.config.language, "$(add) 新建会话", "$(add) New session"),
+          action: "new" as const,
+        },
+        {
+          label: tr(this.config.language, "$(history) 历史会话…", "$(history) Session history…"),
+          action: "history" as const,
+        },
+      ],
+      {
+        title: tr(this.config.language, "Bee Code · 会话", "Bee Code · Sessions"),
+        placeHolder: tr(this.config.language, "新建会话或切换到历史会话", "Create a new session or switch to history"),
+      },
+    );
+    if (!picked) return;
+    if (picked.action === "new") await this.newSession();
+    else await this.pickSession();
+  }
+
   private async pickSession(): Promise<void> {
     const metas = this.sessions.list();
     const items = await Promise.all(

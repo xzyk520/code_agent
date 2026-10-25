@@ -62,6 +62,8 @@ export interface PanelHandlers {
   onRestoreCommand(id: string): void;
   /** Retry the request that failed in the previous turn */
   onRetryTurn(): void;
+  /** Open the session switcher from the panel header */
+  onSessions(): void;
   /** Explicit notice to the user when an attachment is truncated or ignored (toast + panel system message) */
   onAttachmentNotice(message: string): void;
 }
@@ -451,6 +453,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "retry":
         this.handlers.onRetryTurn();
         return;
+      case "sessions":
+        this.handlers.onSessions();
+        return;
       case "restoreCommand": {
         const id = typeof msg.id === "string" ? msg.id : "";
         if (id) this.handlers.onRestoreCommand(id);
@@ -503,6 +508,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
       <span id="mode-badge" class="mode-badge">Chat</span>
     </div>
     <span id="cost" class="cost"></span>
+    <button id="sessions" class="sessions" title="${tr(locale, "Switch session", "Switch session")}">${tr(locale, "会话", "Sessions")}</button>
     <button id="stop" class="stop" title="${tr(locale, "Stop", "Stop")}">■</button>
   </header>
 
