@@ -26,7 +26,7 @@ import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { TurnStore } from "./turnStore";
 import { SummaryStore } from "./summaryStore";
 import { RetryStore, type PendingTurn, type RetryEvent } from "./retryStore";
-import { tr } from "./i18n";
+import { tr, type Locale } from "./i18n";
 import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker, type CommandJob, type CommandJobSnapshot } from "./adapters/runAdapter";
@@ -441,11 +441,11 @@ class Shell {
   private interruptionNote(status: TurnStatus, detail?: string): string {
     switch (status) {
       case "thinking":
-        return "上一轮在模型生成过程中被重载中断，已作废（不会自动续写）。";
+        return tr(this.config.language, "上一轮在模型生成过程中被重载中断，已作废（不会自动续写）。", "The previous turn was interrupted by a reload during model generation and was discarded (it will not continue automatically).");
       case "tool":
-        return `上一轮停在工具调用${detail ? `（${detail}）` : ""}后中断。想接着做，请发送「继续上次的操作」。`;
+        return tr(this.config.language, `上一轮停在工具调用${detail ? `（${detail}）` : ""}后中断。想接着做，请发送「继续上次的操作」。`, `The previous turn stopped after a tool call${detail ? `（${detail}）` : ""}. To continue, send "Continue the previous operation".`);
       case "awaiting-decision":
-        return "上次的待审提案没有保留（重载会清空未决提案）。需要的话发送「重新生成提案」。";
+        return tr(this.config.language, "上次的待审提案没有保留（重载会清空未决提案）。需要的话发送「重新生成提案」。", "The pending proposal from last time was not kept (a reload clears unresolved proposals). If you still need it, send \"Regenerate proposal\".");
       default:
         return "";
     }
@@ -503,7 +503,7 @@ class Shell {
       covered: lines.length,
       coveredMessageIndex,
       lines,
-      text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
+      text: tr(this.config.language, `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`, `[Earlier conversation summary · model-generated]\n${lines.join("\n")}`),
     };
     await this.summaries.save(this.sessionId, { covered: lines.length, coveredMessageIndex, lines });
     this.log.info(`Summary truncated with chat rollback to ${lines.length} turns`);
@@ -597,7 +597,7 @@ class Shell {
       covered: lines.length,
       coveredMessageIndex: stored.coveredMessageIndex,
       lines,
-      text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
+      text: tr(this.config.language, `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`, `[Earlier conversation summary · model-generated]\n${lines.join("\n")}`),
     };
     this.log.info(`Summary restored: ${lines.length} turns (${this.sessionId})`);
   }
@@ -638,7 +638,7 @@ class Shell {
       let lines: string[] = [];
       if (newLines.length === fresh.length) {
         lines = [...(cached?.lines ?? []), ...newLines];
-        text = `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`;
+        text = tr(this.config.language, `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`, `[Earlier conversation summary · model-generated]\n${lines.join("\n")}`);
       } else if (result.summary.trim()) {
         // The core returned no per-turn results (count mismatch): replace the whole summary and reset the cache to the current coverage
         lines = result.summary.split("\n").filter((line) => line.trim().length > 0);
@@ -709,12 +709,12 @@ class Shell {
 
   /** "Continue the previous operation": carry the history so the core can pick up the context */
   private async continueTurn(): Promise<void> {
-    await this.send("继续上次未完成的操作（上一次停在工具调用阶段）。", this.panel.getMode(), []);
+    await this.send(tr(this.config.language, "继续上次未完成的操作（上一次停在工具调用阶段）。", "Continue the unfinished operation from last time (it stopped at the tool-call stage)."), this.panel.getMode(), []);
   }
 
   /** "Regenerate proposal": the previous virtual files were lost with memory, so ask the core to produce them again */
   private async regenerateProposal(): Promise<void> {
-    await this.send("请重新生成上一次的改动提案。", this.panel.getMode(), []);
+    await this.send(tr(this.config.language, "请重新生成上一次的改动提案。", "Please regenerate the previous change proposal."), this.panel.getMode(), []);
   }
 
   /** After a reload/session switch, restore the "previous retry unfinished" state and the pending retry request */
@@ -771,7 +771,7 @@ class Shell {
       workspace: workspaceRoots()[0] ?? "",
       createdAt: Date.now(),
     });
-    this.panel.setHint("已新建会话。");
+    this.panel.setHint(tr(this.config.language, "已新建会话。", "New session created."));
   }
 
   /** Switch to a historical session */
@@ -785,19 +785,19 @@ class Shell {
         const cost = formatTurnCost(tokens, 0, elapsed);
         return {
           label: meta.title,
-          description: `${new Date(meta.updatedAt).toLocaleString()} · ${meta.messageCount} 条${cost ? ` · ${cost}` : ""}`,
+          description: tr(this.config.language, `${new Date(meta.updatedAt).toLocaleString()} · ${meta.messageCount} 条${cost ? ` · ${cost}` : ""}`, `${new Date(meta.updatedAt).toLocaleString()} · ${meta.messageCount} messages${cost ? ` · ${cost}` : ""}`),
           detail: meta.id,
           id: meta.id,
         };
       }),
     );
     if (items.length === 0) {
-      void vscode.window.showInformationMessage("Bee Code: 还没有历史会话。");
+      void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 还没有历史会话。", "Bee Code: No session history yet."));
       return;
     }
     const picked = await vscode.window.showQuickPick(items, {
-      title: "Bee Code · 历史会话",
-      placeHolder: "选择要恢复的会话",
+      title: tr(this.config.language, "Bee Code · 历史会话", "Bee Code · Session History"),
+      placeHolder: tr(this.config.language, "选择要恢复的会话", "Select a session to restore"),
     });
     if (!picked || picked.id === this.sessionId) return;
 
@@ -820,7 +820,7 @@ class Shell {
     await this.refreshTurns();
     await this.refreshTrajectory();
     await this.restoreRetryState();
-    this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
+    this.panel.setHint(tr(this.config.language, `已切换到会话「${picked.label}」（${messages.length} 条消息）。`, `Switched to session "${picked.label}" (${messages.length} messages).`));
     this.panel.pushState();
   }
   // ───────────────────────── Core lifecycle ─────────────────────────
@@ -829,7 +829,7 @@ class Shell {
     if (this.core?.alive) return this.core;
     if (this.starting) return this.starting;
     // After shutdown (including the window where VS Code is still collecting subscriptions after deactivate), never start the core again
-    if (this.disposed) throw new Error("Bee Code 已停用");
+    if (this.disposed) throw new Error(tr(this.config.language, "Bee Code 已停用", "Bee Code has been deactivated."));
 
     this.starting = (async () => {
       let core: CoreApi;
@@ -838,7 +838,7 @@ class Shell {
       } catch (err) {
         if (err instanceof CoreNotFoundError) {
           // Most common failure in installed mode: the extension directory has no beecode package
-          this.panel.setHint("找不到内核：请在工作区开发 beecode，或设置 beeCode.core.coreRoot");
+          this.panel.setHint(tr(this.config.language, "找不到内核：请在工作区开发 beecode，或设置 beeCode.core.coreRoot", "Core not found: develop beecode in the workspace, or set beeCode.core.coreRoot"));
           this.log.error(err.message);
         }
         throw err;
@@ -852,7 +852,7 @@ class Shell {
         this.panel.addMessage({
           id: `sys_${Date.now()}`,
           role: "system",
-          text: `内核已退出（${reason}，code=${code ?? "?"}）。可运行「Bee Code: 重启内核进程」重试。`,
+          text: tr(this.config.language, `内核已退出（${reason}，code=${code ?? "?"}）。可运行「Bee Code: 重启内核进程」重试。`, `Core exited (${reason}, code=${code ?? "?"}). You can run "Bee Code: Restart Core Process" to retry.`),
         });
         this.updateStatus();
       });
@@ -932,7 +932,7 @@ class Shell {
       this.core.dispose();
       this.core = undefined;
     }
-    this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: "内核已重启。" });
+    this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: tr(this.config.language, "内核已重启。", "Core restarted.") });
     this.panel.setHint(this.hintForState());
     this.updateStatus();
   }
@@ -959,7 +959,7 @@ class Shell {
       ts: Date.now(),
       sessionId: this.sessionId,
       status: "cancelled",
-      reason: "用户停止",
+      reason: tr(this.config.language, "用户停止", "Stopped by user"),
     });
     await this.retries.clearPending(this.sessionId);
     this.lastTurnRequest = undefined;
@@ -973,7 +973,7 @@ class Shell {
   private async send(text: string, mode: Mode, attachments: AttachedContext[], autoFocus = true): Promise<void> {
     if (this.disposed) return;
     if (this.busy) {
-      this.panel.setHint("上一轮还没结束（可点 ■ 停止）");
+      this.panel.setHint(tr(this.config.language, "上一轮还没结束（可点 ■ 停止）", "The previous turn hasn't finished yet (click ■ to stop)"));
       return;
     }
 
@@ -987,7 +987,7 @@ class Shell {
     this.focusHighlight.clear();
 
     // When the user hasn't attached anything manually, automatically attach "the whole function under the cursor" (or N lines above/below when outside a function)
-    const clamped = clampAttachments(attachments, this.config.attachments);
+    const clamped = clampAttachments(attachments, this.config.attachments, this.config.language);
     let effectiveAttachments = clamped.items;
     for (const notice of clamped.notices) this.queueAttachmentNotice(notice);
     this.flushAttachmentNotices();
@@ -1110,12 +1110,12 @@ class Shell {
   /** Retry the previous turn: drop the failed assistant/error, keep the earlier user message, and resend the same request */
   private async retryLastTurn(): Promise<void> {
     if (this.busy || this.disposed) {
-      this.panel.setHint("当前还有任务在跑，先停止再重试。");
+      this.panel.setHint(tr(this.config.language, "当前还有任务在跑，先停止再重试。", "A task is still running; stop it before retrying."));
       return;
     }
     const request = this.lastTurnRequest;
     if (!request) {
-      this.panel.setHint("没有可重试的请求。");
+      this.panel.setHint(tr(this.config.language, "没有可重试的请求。", "Nothing to retry."));
       return;
     }
     const all = await this.sessions.open(this.sessionId);
@@ -1146,7 +1146,7 @@ class Shell {
       this.panel.getMode(),
     );
     this.panel.setRetryAvailable(false);
-    this.panel.setHint("正在重试上一轮…");
+    this.panel.setHint(tr(this.config.language, "正在重试上一轮…", "Retrying the previous turn…"));
     await this.send(request.text, request.mode, request.attachments, false);
   }
 
@@ -1160,7 +1160,7 @@ class Shell {
     }
     this.refreshProposals();
     if (failed.length > 0) {
-      void vscode.window.showWarningMessage(`Bee Code: ${failed.length} 个提案没能应用（详见输出面板）。`);
+      void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: ${failed.length} 个提案没能应用（详见输出面板）。`, `Bee Code: ${failed.length} proposals could not be applied (see the output panel for details).`));
     }
   }
 
@@ -1214,7 +1214,7 @@ class Shell {
     if (result.conflict) {
       this.proposals.markStale(id);
       void vscode.window.showWarningMessage(
-        `Bee Code: ${dto.path} 已被修改，提案未应用。请让 agent 重新生成。`,
+        tr(this.config.language, `Bee Code: ${dto.path} 已被修改，提案未应用。请让 agent 重新生成。`, `Bee Code: ${dto.path} has been modified, so the proposal was not applied. Ask the agent to regenerate it.`),
       );
     }
     return false;
@@ -1234,19 +1234,19 @@ class Shell {
   private async acceptAllProposals(): Promise<void> {
     const ids = this.proposals.pending().map((p) => p.id);
     if (ids.length === 0) {
-      this.panel.setHint("没有待处理的提案。");
+      this.panel.setHint(tr(this.config.language, "没有待处理的提案。", "No pending proposals."));
       return;
     }
     // Accepting in bulk may take a while (each proposal fetches its body + writes to disk): allow canceling midway
     this.acceptAllCancelled = false;
     const token = ++this.acceptAllToken;
-    this.panel.setHint(`正在接受 ${ids.length} 个提案…（可运行「取消批量接受」）`);
+    this.panel.setHint(tr(this.config.language, `正在接受 ${ids.length} 个提案…（可运行「取消批量接受」）`, `Accepting ${ids.length} proposals… (you can run "Cancel Bulk Accept")`));
     for (const id of ids) {
       if (this.acceptAllCancelled || token !== this.acceptAllToken) break;
       await this.acceptOne(id);
       this.refreshProposals();
     }
-    this.panel.setHint(this.acceptAllCancelled ? "已取消批量接受（已完成的不会回滚）。" : undefined);
+    this.panel.setHint(this.acceptAllCancelled ? tr(this.config.language, "已取消批量接受（已完成的不会回滚）。", "Bulk accept cancelled (already completed items are not rolled back).") : undefined);
     this.refreshProposals();
   }
 
@@ -1267,7 +1267,7 @@ class Shell {
     const core = await this.ensureCore().catch(() => undefined);
     if (!core) return;
     const opened = await this.proposals.show(id, async (proposalId) => (await core.proposalRead({ id: proposalId })).text);
-    if (!opened) void vscode.window.showWarningMessage("Bee Code: 无法打开提案预览。");
+    if (!opened) void vscode.window.showWarningMessage(tr(this.config.language, "Bee Code: 无法打开提案预览。", "Bee Code: Could not open the proposal preview."));
   }
 
   /** The mock proposal points at a file that actually exists; otherwise clicking "view" shows an empty diff */
@@ -1296,7 +1296,7 @@ class Shell {
       this.log.info("Docker available: commands run in the sandbox");
       await this.context.globalState.update("beeCode.docker", { choice: "yes", fingerprint });
       if (force || recorded?.choice !== "yes") {
-        void vscode.window.showInformationMessage("Bee Code: 已检测到 Docker，命令将在沙箱内执行。");
+        void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 已检测到 Docker，命令将在沙箱内执行。", "Bee Code: Docker detected; commands will run inside the sandbox."));
       }
       return;
     }
@@ -1308,28 +1308,28 @@ class Shell {
     }
 
     const choice = await vscode.window.showWarningMessage(
-      "Bee Code: 没有检测到 Docker。\n\n" +
-        "· 有 Docker：命令在隔离容器内执行，子代理也能执行命令。\n" +
-        "· 没有 Docker：每条命令都需要你确认；子代理不能执行命令或写文件。",
-      "我有 Docker（重新检测）",
-      "我没有 Docker",
-      "稍后再说",
+      tr(this.config.language, "Bee Code: 没有检测到 Docker。\n\n", "Bee Code: Docker was not detected.\n\n") +
+        tr(this.config.language, "· 有 Docker：命令在隔离容器内执行，子代理也能执行命令。\n", "· With Docker: commands run in an isolated container, and sub-agents can run commands too.\n") +
+        tr(this.config.language, "· 没有 Docker：每条命令都需要你确认；子代理不能执行命令或写文件。", "· Without Docker: every command needs your confirmation; sub-agents cannot run commands or write files."),
+      tr(this.config.language, "我有 Docker（重新检测）", "I have Docker (re-detect)"),
+      tr(this.config.language, "我没有 Docker", "I don't have Docker"),
+      tr(this.config.language, "稍后再说", "Not now"),
     );
 
-    if (choice === "我有 Docker（重新检测）") {
+    if (choice === tr(this.config.language, "我有 Docker（重新检测）", "I have Docker (re-detect)")) {
       const again = await detectDocker();
       this.dockerAvailable = again;
       if (again) {
         await this.context.globalState.update("beeCode.docker", { choice: "yes", fingerprint });
-        void vscode.window.showInformationMessage("Bee Code: 已检测到 Docker，命令将在沙箱内执行。");
+        void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 已检测到 Docker，命令将在沙箱内执行。", "Bee Code: Docker detected; commands will run inside the sandbox."));
         return;
       }
-      void vscode.window.showWarningMessage("Bee Code: 仍然没有检测到 Docker，按无沙箱策略运行。");
+      void vscode.window.showWarningMessage(tr(this.config.language, "Bee Code: 仍然没有检测到 Docker，按无沙箱策略运行。", "Bee Code: Docker is still not detected; running with the no-sandbox policy."));
     }
 
     if (choice !== undefined) {
       await this.context.globalState.update("beeCode.docker", {
-        choice: choice === "我没有 Docker" ? "no" : undefined,
+        choice: choice === tr(this.config.language, "我没有 Docker", "I don't have Docker") ? "no" : undefined,
         fingerprint,
       });
     }
@@ -1359,7 +1359,7 @@ class Shell {
   /** Path outside the workspace: confirm before allowing; once approved, remember the directory in memory (lost on restart) */
   private async ensurePathAccess(rawPath: string, ctx: InboundRequestContext, role: AgentRole): Promise<void> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) throw deniedError("未打开工作区");
+    if (!root) throw deniedError(tr(this.config.language, "未打开工作区", "No workspace open"));
     const absolute = nodePath.isAbsolute(rawPath) ? nodePath.resolve(rawPath) : nodePath.resolve(root, rawPath);
     if (isInside(root, absolute)) return;
 
@@ -1368,17 +1368,17 @@ class Shell {
 
     const answer = await this.confirm.ask(
       {
-        question: "允许访问工作区外的路径？",
+        question: tr(this.config.language, "允许访问工作区外的路径？", "Allow access to paths outside the workspace?"),
         detail: `${absolute}\n\n${decision.reason}`,
         options: [
-          { id: "yes", label: "允许" },
-          { id: "no", label: "拒绝" },
+          { id: "yes", label: tr(this.config.language, "允许", "Allow") },
+          { id: "no", label: tr(this.config.language, "拒绝", "Deny") },
         ],
         rememberKey: `path:${nodePath.dirname(absolute)}`,
       },
       ctx,
     );
-    if (answer.choice !== "yes") throw deniedError("用户拒绝访问工作区外路径");
+    if (answer.choice !== "yes") throw deniedError(tr(this.config.language, "用户拒绝访问工作区外路径", "User denied access to a path outside the workspace"));
     addApprovedRoot(nodePath.dirname(absolute));
   }
 
@@ -1425,7 +1425,7 @@ class Shell {
   ): Promise<void> {
     const role: AgentRole = opts.role ?? "main";
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) throw deniedError("未打开工作区");
+    if (!root) throw deniedError(tr(this.config.language, "未打开工作区", "No workspace open"));
     const absolute = nodePath.isAbsolute(rawPath) ? nodePath.resolve(rawPath) : nodePath.resolve(root, rawPath);
     const inside = isInside(root, absolute);
 
@@ -1448,17 +1448,17 @@ class Shell {
 
     const answer = await this.confirm.ask(
       {
-        question: `允许修改 ${rawPath}？`,
-        detail: `${policy.reason}\n${evaluation.reason}\n\n路径：${rawPath}`,
+        question: tr(this.config.language, `允许修改 ${rawPath}？`, `Allow modifying ${rawPath}?`),
+        detail: tr(this.config.language, `${policy.reason}\n${evaluation.reason}\n\n路径：${rawPath}`, `${policy.reason}\n${evaluation.reason}\n\nPath: ${rawPath}`),
         options: [
-          { id: "yes", label: "允许" },
-          { id: "no", label: "拒绝" },
+          { id: "yes", label: tr(this.config.language, "允许", "Allow") },
+          { id: "no", label: tr(this.config.language, "拒绝", "Deny") },
         ],
         rememberKey: `write:${rawPath}`,
       },
       ctx,
     );
-    if (answer.choice !== "yes") throw deniedError("用户拒绝写入");
+    if (answer.choice !== "yes") throw deniedError(tr(this.config.language, "用户拒绝写入", "User denied the write"));
   }
 
   /**
@@ -1470,7 +1470,7 @@ class Shell {
   private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
     const role: AgentRole = params.role === "subagent" ? "subagent" : "main";
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!root) throw deniedError("未打开工作区");
+    if (!root) throw deniedError(tr(this.config.language, "未打开工作区", "No workspace open"));
 
     const ranks = {
       "sandbox-readonly": 0,
@@ -1493,12 +1493,12 @@ class Shell {
       noDocker && requested !== "sandbox-readonly" && requested !== "host";
     if (hostReadonlyFallback && !isHostReadOnlyCommand(params.command)) {
       throw deniedError(
-        "没有 Docker：受限只读模式只允许严格白名单内的只读命令（git status/diff/log、ls、rg、cat 等）。" +
-          "这条命令不在白名单内；如确需执行，请用 sandbox=host 并说明理由。",
+        tr(this.config.language, "没有 Docker：受限只读模式只允许严格白名单内的只读命令（git status/diff/log、ls、rg、cat 等）。", "No Docker: restricted read-only mode only allows read-only commands from a strict allowlist (git status/diff/log, ls, rg, cat, etc.).") +
+          tr(this.config.language, "这条命令不在白名单内；如确需执行，请用 sandbox=host 并说明理由。", "This command is not on the allowlist; if you really need to run it, use sandbox=host and explain why."),
       );
     }
     if (requested !== "sandbox-readonly" && !(params.justification ?? "").trim()) {
-      throw deniedError(`sandbox=${requested} 必须提供 justification，说明为什么需要额外权限`);
+      throw deniedError(tr(this.config.language, `sandbox=${requested} 必须提供 justification，说明为什么需要额外权限`, `sandbox=${requested} requires a justification explaining why extra permissions are needed`));
     }
     const effectiveParams: RunParams = {
       ...params,
@@ -1517,21 +1517,21 @@ class Shell {
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
 
     let gateHandled = false;
-    const roleLabel = role === "subagent" ? "子代理" : "主 agent";
+    const roleLabel = role === "subagent" ? tr(this.config.language, "子代理", "Sub-agent") : tr(this.config.language, "主 agent", "Main agent");
     const approved = this.sandboxApprovals.get(this.sessionId) ?? -1;
     if (!noDocker && requested !== "host" && ranks[requested] > approved) {
       const labels: Record<SandboxLevel, { question: string; detail: string }> = {
         "sandbox-readonly": {
-          question: "允许 agent 在 Docker 只读沙箱内执行命令吗？",
-          detail: "沙箱：根文件系统只读、工作区只读、无网络、capability 清空、内存/PID 限制。适合查询、构建检查等不需要写文件的命令。",
+          question: tr(this.config.language, "允许 agent 在 Docker 只读沙箱内执行命令吗？", "Allow the agent to run commands in a read-only Docker sandbox?"),
+          detail: tr(this.config.language, "沙箱：根文件系统只读、工作区只读、无网络、capability 清空、内存/PID 限制。适合查询、构建检查等不需要写文件的命令。", "Sandbox: read-only root filesystem, read-only workspace, no network, all capabilities dropped, memory/PID limits. Suitable for queries, build checks, and other commands that don't need to write files."),
         },
         sandbox: {
-          question: "允许 agent 在 Docker 沙箱内写入工作区吗？",
-          detail: "额外权限：工作区可写。根文件系统仍只读、无网络；命令可以修改或创建项目文件。",
+          question: tr(this.config.language, "允许 agent 在 Docker 沙箱内写入工作区吗？", "Allow the agent to write to the workspace inside the Docker sandbox?"),
+          detail: tr(this.config.language, "额外权限：工作区可写。根文件系统仍只读、无网络；命令可以修改或创建项目文件。", "Extra permission: workspace writable. The root filesystem stays read-only and there is no network; commands can modify or create project files."),
         },
         "sandbox-network": {
-          question: "允许 agent 在 Docker 沙箱内访问网络吗？",
-          detail: "额外权限：网络访问（Docker bridge）。工作区可写、根只读；可下载依赖、访问外部服务，也可能泄露请求内容。",
+          question: tr(this.config.language, "允许 agent 在 Docker 沙箱内访问网络吗？", "Allow the agent to access the network inside the Docker sandbox?"),
+          detail: tr(this.config.language, "额外权限：网络访问（Docker bridge）。工作区可写、根只读；可下载依赖、访问外部服务，也可能泄露请求内容。", "Extra permission: network access (Docker bridge). Workspace writable, root read-only; dependencies can be downloaded and external services reached, but request contents may also leak."),
         },
         host: { question: "", detail: "" },
       };
@@ -1540,15 +1540,15 @@ class Shell {
         {
           question: spec.question,
           detail:
-            `${roleLabel} 请求权限：${requested}\n\n` +
-            `命令：${params.command}\n` +
-            `目录：${cwdAbs}\n` +
-            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
+            tr(this.config.language, `${roleLabel} 请求权限：${requested}\n\n`, `${roleLabel} requests permission: ${requested}\n\n`) +
+            tr(this.config.language, `命令：${params.command}\n`, `Command: ${params.command}\n`) +
+            tr(this.config.language, `目录：${cwdAbs}\n`, `Directory: ${cwdAbs}\n`) +
+            tr(this.config.language, `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n`, `Reason: ${(params.justification ?? "").trim() || "（未提供）"}\n\n`) +
             spec.detail,
           options: [
-            { id: "once", label: "仅本次允许" },
-            { id: "session", label: "本会话都允许" },
-            { id: "cancel", label: "取消" },
+            { id: "once", label: tr(this.config.language, "仅本次允许", "Allow once") },
+            { id: "session", label: tr(this.config.language, "本会话都允许", "Allow for this session") },
+            { id: "cancel", label: tr(this.config.language, "取消", "Cancel") },
           ],
         },
         ctx,
@@ -1556,7 +1556,7 @@ class Shell {
       if (answer.choice === "session") {
         this.sandboxApprovals.set(this.sessionId, ranks[requested]);
       } else if (answer.choice !== "once") {
-        throw deniedError("用户取消权限申请");
+        throw deniedError(tr(this.config.language, "用户取消权限申请", "User declined the permission request"));
       }
       gateHandled = true;
     } else if (hostReadonlyFallback) {
@@ -1566,23 +1566,28 @@ class Shell {
       if (!fallbackApproved) {
         const answer = await this.confirm.ask(
           {
-            question: "没有 Docker：允许以“受限只读”方式在本机执行命令吗？",
+            question: tr(this.config.language, "没有 Docker：允许以“受限只读”方式在本机执行命令吗？", "No Docker: allow running this command locally in \"restricted read-only\" mode?"),
             detail:
-              `${roleLabel} 请求执行只读命令：
+              tr(this.config.language, `${roleLabel} 请求执行只读命令：
 
-` +
-              `命令：${params.command}
-` +
-              `目录：${cwdAbs}
+`, `${roleLabel} requests to run a read-only command:
 
-` +
-              "这不是 Docker 沙箱：命令以当前用户权限在本机运行，没有文件系统或网络隔离。\n" +
-              "只放行严格白名单中的只读命令（git status/diff/log、ls、rg、cat 等，禁 shell 元字符与可执行子选项）。\n" +
-              "写操作不会走这条路径，会单独要求 host 审批并创建 checkpoint。",
+`) +
+              tr(this.config.language, `命令：${params.command}
+`, `Command: ${params.command}
+`) +
+              tr(this.config.language, `目录：${cwdAbs}
+
+`, `Directory: ${cwdAbs}
+
+`) +
+              tr(this.config.language, "这不是 Docker 沙箱：命令以当前用户权限在本机运行，没有文件系统或网络隔离。\n", "This is not a Docker sandbox: the command runs locally with your current user permissions, with no filesystem or network isolation.\n") +
+              tr(this.config.language, "只放行严格白名单中的只读命令（git status/diff/log、ls、rg、cat 等，禁 shell 元字符与可执行子选项）。\n", "Only read-only commands from a strict allowlist are permitted (git status/diff/log, ls, rg, cat, etc.); shell metacharacters and executable sub-options are blocked.\n") +
+              tr(this.config.language, "写操作不会走这条路径，会单独要求 host 审批并创建 checkpoint。", "Write operations do not use this path; they require separate host approval and create a checkpoint."),
             options: [
-              { id: "once", label: "仅本次允许" },
-              { id: "session", label: "本会话都允许" },
-              { id: "cancel", label: "取消" },
+              { id: "once", label: tr(this.config.language, "仅本次允许", "Allow once") },
+              { id: "session", label: tr(this.config.language, "本会话都允许", "Allow for this session") },
+              { id: "cancel", label: tr(this.config.language, "取消", "Cancel") },
             ],
           },
           ctx,
@@ -1590,7 +1595,7 @@ class Shell {
         if (answer.choice === "session") {
           this.hostReadonlyApprovals.add(this.sessionId);
         } else if (answer.choice !== "once") {
-          throw deniedError("用户取消受限只读执行");
+          throw deniedError(tr(this.config.language, "用户取消受限只读执行", "User cancelled the restricted read-only execution"));
         }
       }
       gateHandled = true;
@@ -1599,24 +1604,30 @@ class Shell {
       if (ranks[requested] > approvedFallback) {
         const answer = await this.confirm.ask(
           {
-            question: "没有 Docker：允许这条命令以 host 权限执行吗？",
+            question: tr(this.config.language, "没有 Docker：允许这条命令以 host 权限执行吗？", "No Docker: allow this command to run with host permissions?"),
             detail:
-              `${roleLabel} 请求在 host 上执行写操作：
+              tr(this.config.language, `${roleLabel} 请求在 host 上执行写操作：
 
-` +
-              `命令：${params.command}
-` +
-              `目录：${cwdAbs}
-` +
-              `理由：${(params.justification ?? "").trim() || "（未提供）"}
+`, `${roleLabel} requests to run a write operation on the host:
 
-` +
-              "没有 Docker，无法提供文件系统或网络隔离。命令将以当前用户权限在真实系统运行，工作区可写、网络可用，可能读取凭据或影响其他项目。\n" +
-              "执行前会创建命令级 checkpoint；checkpoint 只覆盖工作区内的改动，命令仍可能写入工作区外。",
+`) +
+              tr(this.config.language, `命令：${params.command}
+`, `Command: ${params.command}
+`) +
+              tr(this.config.language, `目录：${cwdAbs}
+`, `Directory: ${cwdAbs}
+`) +
+              tr(this.config.language, `理由：${(params.justification ?? "").trim() || "（未提供）"}
+
+`, `Reason: ${(params.justification ?? "").trim() || "（未提供）"}
+
+`) +
+              tr(this.config.language, "没有 Docker，无法提供文件系统或网络隔离。命令将以当前用户权限在真实系统运行，工作区可写、网络可用，可能读取凭据或影响其他项目。\n", "No Docker is available, so no filesystem or network isolation can be provided. The command will run on the real system with your current user permissions: the workspace is writable and the network is available, so it may read credentials or affect other projects.\n") +
+              tr(this.config.language, "执行前会创建命令级 checkpoint；checkpoint 只覆盖工作区内的改动，命令仍可能写入工作区外。", "A command-level checkpoint is created before execution; the checkpoint only covers changes inside the workspace, and the command may still write outside it."),
             options: [
-              { id: "once", label: "仅本次允许" },
-              { id: "session", label: "本会话都允许" },
-              { id: "cancel", label: "取消" },
+              { id: "once", label: tr(this.config.language, "仅本次允许", "Allow once") },
+              { id: "session", label: tr(this.config.language, "本会话都允许", "Allow for this session") },
+              { id: "cancel", label: tr(this.config.language, "取消", "Cancel") },
             ],
           },
           ctx,
@@ -1624,27 +1635,27 @@ class Shell {
         if (answer.choice === "session") {
           this.hostFallbackApprovals.set(this.sessionId, ranks[requested]);
         } else if (answer.choice !== "once") {
-          throw deniedError("用户取消 host 写回退");
+          throw deniedError(tr(this.config.language, "用户取消 host 写回退", "User cancelled the host write fallback"));
         }
       }
       gateHandled = true;
     } else if (requested === "host" && ranks.host > approved) {
       const answer = await this.confirm.ask(
         {
-          question: "⚠ 危险：允许 agent 跳出沙箱，在真实系统 Shell 中执行吗？",
+          question: tr(this.config.language, "⚠ 危险：允许 agent 跳出沙箱，在真实系统 Shell 中执行吗？", "⚠ Danger: allow the agent to break out of the sandbox and run in the real system shell?"),
           detail:
-            `${roleLabel} 请求在真实环境执行：\n\n` +
-            `命令：${params.command}\n` +
-            `目录：${cwdAbs}\n` +
-            `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n` +
+            tr(this.config.language, `${roleLabel} 请求在真实环境执行：\n\n`, `${roleLabel} requests to execute in the real environment:\n\n`) +
+            tr(this.config.language, `命令：${params.command}\n`, `Command: ${params.command}\n`) +
+            tr(this.config.language, `目录：${cwdAbs}\n`, `Directory: ${cwdAbs}\n`) +
+            tr(this.config.language, `理由：${(params.justification ?? "").trim() || "（未提供）"}\n\n`, `Reason: ${(params.justification ?? "").trim() || "（未提供）"}\n\n`) +
             (this.dockerAvailable
-              ? "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n"
-              : "危险：当前没有 Docker，真实系统本来就没有沙箱；命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n") +
-            "只在你完全信任这条命令时继续。",
+              ? tr(this.config.language, "危险：这会绕过 Docker 沙箱，命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n", "Danger: this bypasses the Docker sandbox. The command can modify real files, install system software, access the network, read credentials, or affect other projects.\n")
+              : tr(this.config.language, "危险：当前没有 Docker，真实系统本来就没有沙箱；命令可以修改真实文件、安装系统软件、访问网络、读取凭据或影响其他项目。\n", "Danger: Docker is not available, and the real system has no sandbox to begin with; the command can modify real files, install system software, access the network, read credentials, or affect other projects.\n")) +
+            tr(this.config.language, "只在你完全信任这条命令时继续。", "Proceed only if you fully trust this command."),
           options: [
-            { id: "once", label: "仅本次执行（危险）" },
-            { id: "session", label: "本会话都允许（危险）" },
-            { id: "cancel", label: "取消" },
+            { id: "once", label: tr(this.config.language, "仅本次执行（危险）", "Run this once (dangerous)") },
+            { id: "session", label: tr(this.config.language, "本会话都允许（危险）", "Allow for this session (dangerous)") },
+            { id: "cancel", label: tr(this.config.language, "取消", "Cancel") },
           ],
         },
         ctx,
@@ -1652,7 +1663,7 @@ class Shell {
       if (answer.choice === "session") {
         this.sandboxApprovals.set(this.sessionId, ranks.host);
       } else if (answer.choice !== "once") {
-        throw deniedError("用户取消跳出沙箱执行");
+        throw deniedError(tr(this.config.language, "用户取消跳出沙箱执行", "User cancelled the sandbox escape execution"));
       }
       gateHandled = true;
     }
@@ -1666,11 +1677,11 @@ class Shell {
     if (needAsk) {
       const answer = await this.confirm.ask(
         {
-          question: "执行这条命令？",
+          question: tr(this.config.language, "执行这条命令？", "Run this command?"),
           detail:
             `${policy.reason}\n${evaluation.reason}\n\n` +
             `${params.command}\n\n` +
-            `执行环境：${
+            tr(this.config.language, `执行环境：${
               requested === "host"
                 ? hostReadonlyFallback
                   ? "host 受限只读（非沙箱）"
@@ -1684,17 +1695,31 @@ class Shell {
                     : this.dockerAvailable
                       ? "Docker 沙箱（只读，无网络）"
                       : "无沙箱（直接执行）"
-            }`,
+            }`, `Execution environment: ${
+              requested === "host"
+                ? hostReadonlyFallback
+                  ? "host 受限只读（非沙箱）"
+                  : hostWriteFallback
+                    ? "host（无沙箱，工作区可写）"
+                    : "真实系统 Shell（危险）"
+                : requested === "sandbox-network"
+                  ? "Docker 沙箱 + 网络"
+                  : requested === "sandbox"
+                    ? "Docker 沙箱（工作区可写，无网络）"
+                    : this.dockerAvailable
+                      ? "Docker 沙箱（只读，无网络）"
+                      : "无沙箱（直接执行）"
+            }`),
           options: [
-            { id: "yes", label: "执行" },
-            { id: "no", label: "取消" },
+            { id: "yes", label: tr(this.config.language, "执行", "Run") },
+            { id: "no", label: tr(this.config.language, "取消", "Cancel") },
           ],
           // Prompt every time when there's no sandbox (no "remember"); with docker and non-fullAccess, remembering is allowed
           rememberKey: this.dockerAvailable && !this.config.permissions.fullAccess ? `run:${params.command}` : undefined,
         },
         ctx,
       );
-      if (answer.choice !== "yes") throw deniedError("用户取消执行");
+      if (answer.choice !== "yes") throw deniedError(tr(this.config.language, "用户取消执行", "User cancelled execution"));
     }
 
     // Command-level checkpoint: snapshot before writes, then show the change list and one-click undo when done
@@ -1754,7 +1779,7 @@ class Shell {
         killed: fresh.killed,
         jobId: record.job.id,
         status: "exited",
-        ...(record.backgrounded ? { backgrounded: true, notice: "后台任务已结束。" } : {}),
+        ...(record.backgrounded ? { backgrounded: true, notice: tr(this.config.language, "后台任务已结束。", "The background task has ended.") } : {}),
         hasNewOutput: fresh.stdout.length > 0 || fresh.stderr.length > 0,
         elapsedMs: fresh.elapsedMs,
         ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
@@ -1828,8 +1853,8 @@ class Shell {
 
   private async commandWait(params: CommandWaitParams, ctx: InboundRequestContext): Promise<RunResult> {
     const record = this.commandJobs.get(params.jobId);
-    if (!record) throw deniedError("未知或已结束的命令 job；请重新执行命令");
-    if (record.sessionId !== this.sessionId) throw deniedError("这个命令 job 不属于当前会话");
+    if (!record) throw deniedError(tr(this.config.language, "未知或已结束的命令 job；请重新执行命令", "Unknown or already finished command job; please run the command again"));
+    if (record.sessionId !== this.sessionId) throw deniedError(tr(this.config.language, "这个命令 job 不属于当前会话", "This command job does not belong to the current session"));
     const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 120_000, 300_000));
     const snapshot = await record.job.wait(yieldMs);
     return await this.commandJobResult(record, snapshot);
@@ -1855,7 +1880,7 @@ class Shell {
       if (record.sessionId !== this.sessionId) continue;
       const snap = record.job.peek();
       if (snap.finished) continue;
-      const age = snap.outputAgeMs === undefined ? "无" : `${Math.round(snap.outputAgeMs / 1000)}s`;
+      const age = snap.outputAgeMs === undefined ? tr(this.config.language, "无", "None") : `${Math.round(snap.outputAgeMs / 1000)}s`;
       lines.push(
         `- ${record.job.id} [${record.sandbox}] running ${Math.round(snap.elapsedMs / 1000)}s, last output ${age}: ${record.command.slice(0, 120)}`,
       );
@@ -1888,8 +1913,8 @@ class Shell {
 
   private async commandTerminate(params: CommandTerminateParams): Promise<RunResult> {
     const record = this.commandJobs.get(params.jobId);
-    if (!record) throw deniedError("未知或已结束的命令 job");
-    if (record.sessionId !== this.sessionId) throw deniedError("这个命令 job 不属于当前会话");
+    if (!record) throw deniedError(tr(this.config.language, "未知或已结束的命令 job", "Unknown or already finished command job"));
+    if (record.sessionId !== this.sessionId) throw deniedError(tr(this.config.language, "这个命令 job 不属于当前会话", "This command job does not belong to the current session"));
     record.job.kill();
     const snapshot = await record.job.wait(5_000);
     return await this.commandJobResult(record, snapshot);
@@ -1898,23 +1923,23 @@ class Shell {
   private async restoreCommandCheckpoint(id: string): Promise<void> {
     const record = this.commandCheckpoints.get(id);
     if (!record) {
-      void vscode.window.showInformationMessage("Bee Code: 这条命令的检查点已不存在。");
+      void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 这条命令的检查点已不存在。", "Bee Code: The checkpoint for this command no longer exists."));
       return;
     }
     const answer = await vscode.window.showWarningMessage(
-      "撤销这次命令修改吗？",
+      tr(this.config.language, "撤销这次命令修改吗？", "Undo the changes made by this command?"),
       {
         modal: true,
         detail:
-          `命令：${record.command}\n\n` +
-          `将恢复以下 ${record.files.length} 个文件到命令执行前：\n` +
+          tr(this.config.language, `命令：${record.command}\n\n`, `Command: ${record.command}\n\n`) +
+          tr(this.config.language, `将恢复以下 ${record.files.length} 个文件到命令执行前：\n`, `The following ${record.files.length} files will be restored to their state before the command ran:\n`) +
           record.files.slice(0, 20).join("\n") +
-          (record.files.length > 20 ? `\n…还有 ${record.files.length - 20} 个` : "") +
-          "\n\n只恢复这些文件；命令之外的其他修改不会被动。",
+          (record.files.length > 20 ? tr(this.config.language, `\n…还有 ${record.files.length - 20} 个`, `\n…and ${record.files.length - 20} more`) : "") +
+          tr(this.config.language, "\n\n只恢复这些文件；命令之外的其他修改不会被动。", "\n\nOnly these files will be restored; other changes outside the command will not be affected."),
       },
-      "撤销本次修改",
+      tr(this.config.language, "撤销本次修改", "Undo these changes"),
     );
-    if (answer !== "撤销本次修改") return;
+    if (answer !== tr(this.config.language, "撤销本次修改", "Undo these changes")) return;
     try {
       const restored = await this.checkpoint.restorePaths(id, record.files);
       this.commandCheckpoints.delete(id);
@@ -1922,7 +1947,7 @@ class Shell {
       this.log.info(`Command restore complete: ${restored.length} files`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      void vscode.window.showErrorMessage(`Bee Code: 撤销失败：${message}`);
+      void vscode.window.showErrorMessage(tr(this.config.language, `Bee Code: 撤销失败：${message}`, `Bee Code: Undo failed: ${message}`));
       this.log.error(`Command restore failed: ${message}`);
     }
   }
@@ -1950,7 +1975,7 @@ class Shell {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn(`Failed to open ${path}: ${message}`);
-      void vscode.window.showWarningMessage(`Bee Code: 无法打开 ${path}（${message}）`);
+      void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: 无法打开 ${path}（${message}）`, `Bee Code: Cannot open ${path} (${message})`));
     }
   }
   private async pickFiles(): Promise<void> {
@@ -1961,8 +1986,8 @@ class Shell {
 
     const picked = await vscode.window.showQuickPick(items, {
       canPickMany: true,
-      title: "Bee Code · 选择要阅读的文件",
-      placeHolder: "输入以筛选；回车确认（可多选）",
+      title: tr(this.config.language, "Bee Code · 选择要阅读的文件", "Bee Code · Choose files to read"),
+      placeHolder: tr(this.config.language, "输入以筛选；回车确认（可多选）", "Type to filter; press Enter to confirm (multi-select)"),
       matchOnDescription: true,
     });
     if (!picked || picked.length === 0) return;
@@ -1975,7 +2000,7 @@ class Shell {
       });
     }
     this.panel.reveal();
-    this.panel.setHint(`已附加 ${picked.length} 个文件`);
+    this.panel.setHint(tr(this.config.language, `已附加 ${picked.length} 个文件`, `Attached ${picked.length} files`));
   }
 
   /**
@@ -2039,18 +2064,18 @@ class Shell {
 
   /** Test connection: GET {base}/models, translating HTTP status into plain language (shared by main / subagent) */
   private async testModel(which: "main" | "subagent" = "main"): Promise<void> {
-    const label = which === "subagent" ? "子代理" : "主代理";
+    const label = which === "subagent" ? tr(this.config.language, "子代理", "Sub-agent") : tr(this.config.language, "主代理", "Main agent");
     const subagent = this.effectiveSubagent();
     const baseUrl = which === "subagent" ? subagent.baseUrl : this.config.model.baseUrl;
     const modelName = which === "subagent" ? subagent.model : this.config.model.model;
     const url = this.modelsUrl(baseUrl);
     if (!url) {
-      void vscode.window.showWarningMessage(`Bee Code: ${label}还没有配置 base_url。`);
+      void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: ${label}还没有配置 base_url。`, `Bee Code: ${label} has no base_url configured.`));
       return;
     }
     const keyInfo = which === "subagent" ? await this.resolveSubagentKey() : await this.resolveApiKey();
     if (!keyInfo.key) {
-      void vscode.window.showWarningMessage(`Bee Code: ${label}还没有 API Key。`);
+      void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: ${label}还没有 API Key。`, `Bee Code: ${label} has no API Key yet.`));
       return;
     }
     const key = keyInfo.key;
@@ -2066,22 +2091,22 @@ class Shell {
       if (!response.ok) {
         const body = (await response.text()).slice(0, 200);
         this.log.warn(`${label} self-check failed: HTTP ${response.status} ${url} (key source ${source})`);
-        void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`);
+        void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: ${label}连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`, `Bee Code: ${label} connection failed: HTTP ${response.status} (${elapsed}ms): ${body}`));
         return;
       }
       const data = (await response.json()) as { data?: Array<{ id?: string }> };
       const count = Array.isArray(data.data) ? data.data.length : 0;
       const hasModel = Array.isArray(data.data) && data.data.some((m) => m.id === modelName);
       const sourceText =
-        source === "env" ? "环境变量" : source === "main" ? "沿用主代理" : "凭据库";
+        source === "env" ? tr(this.config.language, "环境变量", "Environment variable") : source === "main" ? tr(this.config.language, "沿用主代理", "Use main agent") : tr(this.config.language, "凭据库", "Credentials");
       this.log.info(`${label} self-check passed: ${url} (${count} models, key source ${source})`);
       void vscode.window.showInformationMessage(
-        `Bee Code: ${label}连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${modelName}` : ""}；key 来源：${sourceText}）`,
+        tr(this.config.language, `Bee Code: ${label}连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${modelName}` : ""}；key 来源：${sourceText}）`, `Bee Code: ${label} connected (${elapsed}ms, ${count} models${hasModel ? `，包含 ${modelName}` : ""}; key source: ${sourceText})`),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn(`${label} self-check error: ${message}`);
-      void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败：${message}`);
+      void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: ${label}连接失败：${message}`, `Bee Code: ${label} connection failed: ${message}`));
     }
   }
 
@@ -2091,18 +2116,18 @@ class Shell {
     const current = this.config.subagent;
 
     const baseUrl = await vscode.window.showInputBox({
-      title: "Bee Code · 子代理 1/3 端点",
+      title: tr(this.config.language, "Bee Code · 子代理 1/3 端点", "Bee Code · Sub-agent 1/3 Endpoint"),
       prompt: main.baseUrl
-        ? `留空 = 沿用主代理（${main.baseUrl}）`
-        : "OpenAI 兼容 base_url；留空 = 沿用主代理",
+        ? tr(this.config.language, `留空 = 沿用主代理（${main.baseUrl}）`, `Leave empty = use the main agent (${main.baseUrl})`)
+        : tr(this.config.language, "OpenAI 兼容 base_url；留空 = 沿用主代理", "OpenAI-compatible base_url; leave empty = use the main agent"),
       value: current.baseUrl,
       ignoreFocusOut: true,
     });
     if (baseUrl === undefined) return;
 
     const model = await vscode.window.showInputBox({
-      title: "Bee Code · 子代理 2/3 模型",
-      prompt: main.model ? `留空 = 沿用主代理（${main.model}）；建议用便宜/快的模型` : "留空 = 沿用主代理",
+      title: tr(this.config.language, "Bee Code · 子代理 2/3 模型", "Bee Code · Sub-agent 2/3 Model"),
+      prompt: main.model ? tr(this.config.language, `留空 = 沿用主代理（${main.model}）；建议用便宜/快的模型`, `Leave empty = use the main agent (${main.model}); a cheaper/faster model is recommended`) : tr(this.config.language, "留空 = 沿用主代理", "Leave empty = use the main agent"),
       value: current.model,
       ignoreFocusOut: true,
     });
@@ -2111,20 +2136,20 @@ class Shell {
     const existing = await this.resolveSubagentKey();
     const keyHint =
       existing.source === "secret"
-        ? "已存在于凭据库：直接回车保持不变"
+        ? tr(this.config.language, "已存在于凭据库：直接回车保持不变", "Already in the credentials store: press Enter to keep it")
         : existing.source === "env"
-          ? `当前使用环境变量 ${SUBAGENT_API_KEY_ENV}：直接回车保持不变`
+          ? tr(this.config.language, `当前使用环境变量 ${SUBAGENT_API_KEY_ENV}：直接回车保持不变`, `Currently using the environment variable ${SUBAGENT_API_KEY_ENV}: press Enter to keep it`)
           : existing.source === "main"
-            ? "留空 = 沿用主代理密钥"
-            : "留空则回退到主代理密钥";
+            ? tr(this.config.language, "留空 = 沿用主代理密钥", "Leave empty = use the main agent's key")
+            : tr(this.config.language, "留空则回退到主代理密钥", "Leave empty to fall back to the main agent's key");
 
     const apiKey = await vscode.window.showInputBox({
-      title: "Bee Code · 子代理 3/3 API Key",
+      title: tr(this.config.language, "Bee Code · 子代理 3/3 API Key", "Bee Code · Sub-agent 3/3 API Key"),
       prompt: keyHint,
       password: true,
       ignoreFocusOut: true,
-      placeHolder: existing.source === "none" ? "留空 = 沿用主代理密钥" : "（回车保持不变）",
-      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? "看起来不像有效密钥" : undefined),
+      placeHolder: existing.source === "none" ? tr(this.config.language, "留空 = 沿用主代理密钥", "Leave empty = use the main agent's key") : tr(this.config.language, "（回车保持不变）", "(press Enter to keep it)"),
+      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? tr(this.config.language, "看起来不像有效密钥", "This does not look like a valid key") : undefined),
     });
     if (apiKey === undefined) return;
 
@@ -2140,7 +2165,7 @@ class Shell {
     this.log.info(
       `Subagent configured: ${this.effectiveSubagent().model} @ ${this.effectiveSubagent().baseUrl}`,
     );
-    void vscode.window.showInformationMessage("Bee Code: 子代理配置完成。");
+    void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 子代理配置完成。", "Bee Code: Sub-agent configuration complete."));
 
     // Configuration listeners don't fire when only the key changed, so trigger a hot reload here
     const sub = this.effectiveSubagent();
@@ -2167,20 +2192,20 @@ class Shell {
     const current = this.config.summary;
 
     const baseUrl = await vscode.window.showInputBox({
-      title: "Bee Code · 摘要模型 1/4 端点",
+      title: tr(this.config.language, "Bee Code · 摘要模型 1/4 端点", "Bee Code · Summary model 1/4 Endpoint"),
       prompt: main.baseUrl
-        ? `留空 = 沿用主模型（${main.baseUrl}）`
-        : "OpenAI 兼容 base_url；留空 = 沿用主模型",
+        ? tr(this.config.language, `留空 = 沿用主模型（${main.baseUrl}）`, `Leave empty = use the main model (${main.baseUrl})`)
+        : tr(this.config.language, "OpenAI 兼容 base_url；留空 = 沿用主模型", "OpenAI-compatible base_url; leave empty = use the main model"),
       value: current.baseUrl,
       ignoreFocusOut: true,
     });
     if (baseUrl === undefined) return;
 
     const model = await vscode.window.showInputBox({
-      title: "Bee Code · 摘要模型 2/4 模型",
+      title: tr(this.config.language, "Bee Code · 摘要模型 2/4 模型", "Bee Code · Summary model 2/4 Model"),
       prompt: main.model
-        ? `留空 = 沿用主模型（${main.model}）；建议用便宜/快的模型`
-        : "留空 = 沿用主模型",
+        ? tr(this.config.language, `留空 = 沿用主模型（${main.model}）；建议用便宜/快的模型`, `Leave empty = use the main model (${main.model}); a cheaper/faster model is recommended`)
+        : tr(this.config.language, "留空 = 沿用主模型", "Leave empty = use the main model"),
       value: current.model,
       ignoreFocusOut: true,
     });
@@ -2189,19 +2214,19 @@ class Shell {
     const existing = await this.resolveSummaryKey();
     const keyHint =
       existing.source === "secret"
-        ? "已存在于凭据库：直接回车保持不变"
+        ? tr(this.config.language, "已存在于凭据库：直接回车保持不变", "Already in the credentials store: press Enter to keep it")
         : existing.source === "env"
-          ? `当前使用环境变量 ${SUMMARY_API_KEY_ENV}：直接回车保持不变`
+          ? tr(this.config.language, `当前使用环境变量 ${SUMMARY_API_KEY_ENV}：直接回车保持不变`, `Currently using the environment variable ${SUMMARY_API_KEY_ENV}: press Enter to keep it`)
           : existing.source === "main"
-            ? "留空 = 沿用主模型密钥"
-            : "留空则回退到主模型密钥";
+            ? tr(this.config.language, "留空 = 沿用主模型密钥", "Leave empty = use the main model's key")
+            : tr(this.config.language, "留空则回退到主模型密钥", "Leave empty to fall back to the main model's key");
     const apiKey = await vscode.window.showInputBox({
-      title: "Bee Code · 摘要模型 3/4 API Key",
+      title: tr(this.config.language, "Bee Code · 摘要模型 3/4 API Key", "Bee Code · Summary model 3/4 API Key"),
       prompt: keyHint,
       password: true,
       ignoreFocusOut: true,
-      placeHolder: existing.source === "none" ? "留空 = 沿用主模型密钥" : "（回车保持不变）",
-      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? "看起来不像有效密钥" : undefined),
+      placeHolder: existing.source === "none" ? tr(this.config.language, "留空 = 沿用主模型密钥", "Leave empty = use the main model's key") : tr(this.config.language, "（回车保持不变）", "(press Enter to keep it)"),
+      validateInput: (v) => (v.trim().length > 0 && v.trim().length < 8 ? tr(this.config.language, "看起来不像有效密钥", "This does not look like a valid key") : undefined),
     });
     if (apiKey === undefined) return;
 
@@ -2211,11 +2236,11 @@ class Shell {
     const probe = await this.probeModels(effectiveBase, effectiveModel, testKey);
     if (!probe.ok) {
       const choice = await vscode.window.showWarningMessage(
-        `摘要模型连接测试失败：${probe.message}\n仍然保存配置吗？`,
+        tr(this.config.language, `摘要模型连接测试失败：${probe.message}\n仍然保存配置吗？`, `Summary model connection test failed: ${probe.message}\nSave the configuration anyway?`),
         { modal: true },
-        "仍然保存",
+        tr(this.config.language, "仍然保存", "Save anyway"),
       );
-      if (choice !== "仍然保存") return;
+      if (choice !== tr(this.config.language, "仍然保存", "Save anyway")) return;
     }
 
     const cfg = vscode.workspace.getConfiguration("beeCode");
@@ -2230,7 +2255,7 @@ class Shell {
       `Summary model configured: ${this.config.summary.model || "(inherit main)"} @ ${this.config.summary.baseUrl || "(inherit main)"}`,
     );
     void vscode.window.showInformationMessage(
-      `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`,
+      tr(this.config.language, `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`, `Bee Code: Summary model configuration complete${probe.ok ? `（${probe.message}）` : ""}.`),
     );
 
     // Configuration listeners don't fire when only the key changed, so trigger a hot reload here
@@ -2265,8 +2290,8 @@ class Shell {
     key: string | undefined,
   ): Promise<{ ok: boolean; message: string }> {
     const url = this.modelsUrl(baseUrl);
-    if (!url) return { ok: false, message: "没有配置 base_url" };
-    if (!key) return { ok: false, message: "没有可用的 API Key" };
+    if (!url) return { ok: false, message: tr(this.config.language, "没有配置 base_url", "No base_url configured") };
+    if (!key) return { ok: false, message: tr(this.config.language, "没有可用的 API Key", "No API Key available") };
     const started = Date.now();
     try {
       const response = await fetch(url, {
@@ -2284,8 +2309,8 @@ class Shell {
       return {
         ok: hasModel,
         message: hasModel
-          ? `连接正常（${elapsed}ms，${ids.length} 个模型）`
-          : `连接正常，但模型列表里没有 ${model}`,
+          ? tr(this.config.language, `连接正常（${elapsed}ms，${ids.length} 个模型）`, `Connected (${elapsed}ms, ${ids.length} models)`)
+          : tr(this.config.language, `连接正常，但模型列表里没有 ${model}`, `Connected, but ${model} is not in the model list`),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2297,54 +2322,54 @@ class Shell {
   private async clearSubagentKey(): Promise<void> {
     const existing = await this.context.secrets.get(this.config.subagent.apiKeyId);
     if (!existing) {
-      void vscode.window.showInformationMessage("Bee Code: 凭据库里没有子代理密钥（可能在环境变量里，或沿用了主代理）。");
+      void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 凭据库里没有子代理密钥（可能在环境变量里，或沿用了主代理）。", "Bee Code: There is no sub-agent key in the credentials store (it may be in an environment variable, or the main agent's key is being used)."));
       return;
     }
     const confirm = await vscode.window.showWarningMessage(
-      "确定清除子代理的 API Key？清除后将回退到环境变量或主代理密钥。",
+      tr(this.config.language, "确定清除子代理的 API Key？清除后将回退到环境变量或主代理密钥。", "Clear the sub-agent API Key? After clearing, it will fall back to the environment variable or the main agent's key."),
       { modal: true },
-      "清除",
+      tr(this.config.language, "清除", "Clear"),
     );
-    if (confirm !== "清除") return;
+    if (confirm !== tr(this.config.language, "清除", "Clear")) return;
     await this.context.secrets.delete(this.config.subagent.apiKeyId);
     this.log.info("Subagent API key cleared");
-    void vscode.window.showInformationMessage("Bee Code: 已清除子代理 API Key。");
+    void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 已清除子代理 API Key。", "Bee Code: Sub-agent API Key cleared."));
   }
 
   /** Clear the key in the credential store (environment variables aren't ours to manage) */
   private async clearModelKey(): Promise<void> {
     const existing = await this.context.secrets.get(this.config.apiKeyId);
     if (!existing) {
-      void vscode.window.showInformationMessage("Bee Code: 凭据库里没有密钥（可能在环境变量里）。");
+      void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 凭据库里没有密钥（可能在环境变量里）。", "Bee Code: There is no key in the credentials store (it may be in an environment variable)."));
       return;
     }
     const confirm = await vscode.window.showWarningMessage(
-      "确定清除凭据库里保存的 API Key？清掉后需要重新配置（或改用环境变量）。",
+      tr(this.config.language, "确定清除凭据库里保存的 API Key？清掉后需要重新配置（或改用环境变量）。", "Clear the API Key saved in the credentials store? After clearing it you will need to configure it again (or switch to an environment variable)."),
       { modal: true },
-      "清除",
+      tr(this.config.language, "清除", "Clear"),
     );
-    if (confirm !== "清除") return;
+    if (confirm !== tr(this.config.language, "清除", "Clear")) return;
     await this.context.secrets.delete(this.config.apiKeyId);
     this.log.info("API key cleared from the credential store");
-    void vscode.window.showInformationMessage("Bee Code: 已清除 API Key。");
+    void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 已清除 API Key。", "Bee Code: API Key cleared."));
   }
 
   private async configureModel(): Promise<void> {
     const baseUrl = await vscode.window.showInputBox({
-      title: "Bee Code · 1/3 端点",
-      prompt: "OpenAI 兼容 base_url（不含 /chat/completions）",
+      title: tr(this.config.language, "Bee Code · 1/3 端点", "Bee Code · 1/3 Endpoint"),
+      prompt: tr(this.config.language, "OpenAI 兼容 base_url（不含 /chat/completions）", "OpenAI-compatible base_url (without /chat/completions)"),
       value: this.config.model.baseUrl || "https://api.deepseek.com/v1",
       ignoreFocusOut: true,
-      validateInput: (v) => (v.trim().length === 0 ? "不能为空" : undefined),
+      validateInput: (v) => (v.trim().length === 0 ? tr(this.config.language, "不能为空", "Cannot be empty") : undefined),
     });
     if (baseUrl === undefined) return;
 
     const model = await vscode.window.showInputBox({
-      title: "Bee Code · 2/3 模型",
-      prompt: "模型名，例如 deepseek-chat",
+      title: tr(this.config.language, "Bee Code · 2/3 模型", "Bee Code · 2/3 Model"),
+      prompt: tr(this.config.language, "模型名，例如 deepseek-chat", "Model name, e.g. deepseek-chat"),
       value: this.config.model.model || "",
       ignoreFocusOut: true,
-      validateInput: (v) => (v.trim().length === 0 ? "不能为空" : undefined),
+      validateInput: (v) => (v.trim().length === 0 ? tr(this.config.language, "不能为空", "Cannot be empty") : undefined),
     });
     if (model === undefined) return;
 
@@ -2352,21 +2377,21 @@ class Shell {
     const existing = await this.resolveApiKey();
     const keyHint =
       existing.source === "secret"
-        ? "已存在于凭据库：直接回车保持不变"
+        ? tr(this.config.language, "已存在于凭据库：直接回车保持不变", "Already in the credentials store: press Enter to keep it")
         : existing.source === "env"
-          ? `当前使用环境变量 ${API_KEY_ENV}：直接回车保持不变`
-          : "仅存入 VS Code SecretStorage（OS 凭据库），不会写入 settings.json / 日志 / git";
+          ? tr(this.config.language, `当前使用环境变量 ${API_KEY_ENV}：直接回车保持不变`, `Currently using the environment variable ${API_KEY_ENV}: press Enter to keep it`)
+          : tr(this.config.language, "仅存入 VS Code SecretStorage（OS 凭据库），不会写入 settings.json / 日志 / git", "Stored only in VS Code SecretStorage (the OS credentials store); never written to settings.json, logs, or git");
 
     const apiKey = await vscode.window.showInputBox({
       title: "Bee Code · 3/3 API Key",
       prompt: keyHint,
       password: true,
       ignoreFocusOut: true,
-      placeHolder: existing.source === "none" ? "粘贴你的 API Key" : "（回车保持不变）",
+      placeHolder: existing.source === "none" ? tr(this.config.language, "粘贴你的 API Key", "Paste your API Key") : tr(this.config.language, "（回车保持不变）", "(press Enter to keep it)"),
       validateInput: (v) => {
         const trimmed = v.trim();
-        if (trimmed.length === 0) return existing.source === "none" ? "不能为空" : undefined;
-        return trimmed.length < 8 ? "看起来不像有效密钥" : undefined;
+        if (trimmed.length === 0) return existing.source === "none" ? tr(this.config.language, "不能为空", "Cannot be empty") : undefined;
+        return trimmed.length < 8 ? tr(this.config.language, "看起来不像有效密钥", "This does not look like a valid key") : undefined;
       },
     });
     if (apiKey === undefined) return;
@@ -2383,7 +2408,7 @@ class Shell {
     this.config = read.config;
     for (const problem of read.problems) this.log.warn(`Configuration problem: ${problem}`);
     this.log.info(`Model configured: ${this.config.model.model} @ ${this.config.model.baseUrl} (key stored)`);
-    void vscode.window.showInformationMessage("Bee Code: 模型配置完成。");
+    void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 模型配置完成。", "Bee Code: Model configuration complete."));
 
     // Configuration-change listeners trigger modelReload (no process restart), so don't call it again here
     const resolved = await this.resolveApiKey();
@@ -2407,7 +2432,7 @@ class Shell {
   private async restoreCheckpoint(): Promise<void> {
     const records = await this.checkpoint.list();
     if (records.length === 0) {
-      void vscode.window.showInformationMessage("Bee Code: 还没有检查点（写入前会自动创建）。");
+      void vscode.window.showInformationMessage(tr(this.config.language, "Bee Code: 还没有检查点（写入前会自动创建）。", "Bee Code: No checkpoints yet (one is created automatically before writing)."));
       return;
     }
     const snapshots = new Map((await this.chatIndex.list()).map((meta) => [meta.id, meta]));
@@ -2417,7 +2442,7 @@ class Shell {
       return {
         label: record.id.slice(0, 8),
         description: new Date(record.createdAt).toLocaleString(),
-        detail: `${record.label}${snap ? ` · 含聊天快照（第 ${snap.line} 行）` : " · 无聊天快照"}`,
+        detail: `${record.label}${snap ? ` · with chat snapshot (line ${snap.line})` : " · no chat snapshot"}`,
         id: record.id,
         hasChat: Boolean(snap),
         line: snap?.line ?? 0,
@@ -2425,40 +2450,40 @@ class Shell {
     });
 
     const picked = await vscode.window.showQuickPick(items, {
-      title: "Bee Code · 恢复到检查点",
-      placeHolder: "选择要回滚到的快照",
+      title: tr(this.config.language, "Bee Code · 恢复到检查点", "Bee Code · Restore to Checkpoint"),
+      placeHolder: tr(this.config.language, "选择要回滚到的快照", "Choose the snapshot to roll back to"),
     });
     if (!picked) return;
 
     const modePick = await vscode.window.showQuickPick(
       [
         {
-          label: "仅回滚代码",
-          description: "保留当前聊天记录；模型会收到一条「代码已回滚」的通知",
+          label: tr(this.config.language, "仅回滚代码", "Roll back code only"),
+          description: tr(this.config.language, "保留当前聊天记录；模型会收到一条「代码已回滚」的通知", "Keep the current chat history; the model will receive a notice that the code was rolled back"),
           value: "code" as const,
         },
         {
-          label: "代码 + 聊天记录一起回滚",
+          label: tr(this.config.language, "代码 + 聊天记录一起回滚", "Roll back code + chat history together"),
           description: picked.hasChat
-            ? `对话回到快照时刻（第 ${picked.line} 行之前的记录）`
-            : "该检查点没有聊天快照，只能回滚代码",
+            ? tr(this.config.language, `对话回到快照时刻（第 ${picked.line} 行之前的记录）`, `Conversation returns to the snapshot moment (records from before line ${picked.line})`)
+            : tr(this.config.language, "该检查点没有聊天快照，只能回滚代码", "This checkpoint has no chat snapshot, so only the code can be rolled back"),
           value: "chat" as const,
           disabled: !picked.hasChat,
         },
       ],
-      { title: "回滚范围", placeHolder: "代码和聊天记录要不要一起回退？" },
+      { title: tr(this.config.language, "回滚范围", "Rollback scope"), placeHolder: tr(this.config.language, "代码和聊天记录要不要一起回退？", "Roll back code and chat history together?") },
     );
     if (!modePick) return;
     const restoreChat = modePick.value === "chat";
 
     const confirm = await vscode.window.showWarningMessage(
       restoreChat
-        ? "将覆盖当前工作区文件，并把聊天记录截断到该快照时刻。目标之后的所有快照会作废。继续？"
-        : "将覆盖当前工作区文件（包括你自己的未提交修改）。目标之后的所有快照会作废。继续？",
+        ? tr(this.config.language, "将覆盖当前工作区文件，并把聊天记录截断到该快照时刻。目标之后的所有快照会作废。继续？", "This will overwrite files in the current workspace and truncate the chat history to that snapshot moment. All snapshots after the target will be discarded. Continue?")
+        : tr(this.config.language, "将覆盖当前工作区文件（包括你自己的未提交修改）。目标之后的所有快照会作废。继续？", "This will overwrite files in the current workspace (including your own uncommitted changes). All snapshots after the target will be discarded. Continue?"),
       { modal: true },
-      "回滚",
+      tr(this.config.language, "回滚", "Roll back"),
     );
-    if (confirm !== "回滚") return;
+    if (confirm !== tr(this.config.language, "回滚", "Roll back")) return;
 
     const result = await this.checkpoint.restore({ id: picked.id });
     const { voided } = await this.checkpoint.rewind(picked.id);
@@ -2474,7 +2499,7 @@ class Shell {
     if (restoreChat) {
       const snapshot = await this.chatIndex.load(picked.id);
       if (!snapshot || snapshot.sessionId !== this.sessionId) {
-        void vscode.window.showWarningMessage("Bee Code: 聊天快照不可用（可能属于别的会话），本次只回滚了代码。");
+        void vscode.window.showWarningMessage(tr(this.config.language, "Bee Code: 聊天快照不可用（可能属于别的会话），本次只回滚了代码。", "Bee Code: Chat snapshot unavailable (it may belong to another session); only the code was rolled back this time."));
         await this.noteRollback(picked.id, picked.label, false);
         return;
       }
@@ -2513,18 +2538,18 @@ class Shell {
       this.turnIntent = undefined;
       void this.sessions.updateStatus(this.sessionId, "idle");
       const intentNote = lastTurn
-        ? `意图已回退到「${lastTurn.intent}」（${lastTurn.mode}${lastTurn.scale ? ` · ${lastTurn.scale === "large" ? "大任务" : "小任务"}` : ""}）。`
-        : "意图已清空（没有保留的轮次）。";
+        ? tr(this.config.language, `意图已回退到「${lastTurn.intent}」（${lastTurn.mode}${lastTurn.scale ? ` · ${lastTurn.scale === "large" ? "大任务" : "小任务"}` : ""}）。`, `Intent rolled back to "${lastTurn.intent}" (${lastTurn.mode}${lastTurn.scale ? ` · ${lastTurn.scale === "large" ? "大任务" : "小任务"}` : ""}).`)
+        : tr(this.config.language, "意图已清空（没有保留的轮次）。", "Intent cleared (no turns were kept).");
       await this.noteRollback(picked.id, picked.label, true, intentNote);
       void vscode.window.showInformationMessage(
-        `Bee Code: 已回滚代码与聊天记录（截断到第 ${snapshot.line} 行，恢复 ${result.restored.length} 个文件）。`,
+        tr(this.config.language, `Bee Code: 已回滚代码与聊天记录（截断到第 ${snapshot.line} 行，恢复 ${result.restored.length} 个文件）。`, `Bee Code: Rolled back code and chat history (truncated to line ${snapshot.line}, restored ${result.restored.length} files).`),
       );
       return;
     }
 
     await this.noteRollback(picked.id, picked.label, false);
     void vscode.window.showInformationMessage(
-      `Bee Code: 已回滚 ${result.restored.length} 个文件（聊天记录保留）。`,
+      tr(this.config.language, `Bee Code: 已回滚 ${result.restored.length} 个文件（聊天记录保留）。`, `Bee Code: Rolled back ${result.restored.length} files (chat history kept).`),
     );
   }
   /** After a rollback, write a system message and record it as a turn "intent" so later summaries cover this rollback */
@@ -2535,15 +2560,15 @@ class Shell {
     intentNote?: string,
   ): Promise<void> {
     const base = withChat
-      ? `【回滚通知】已把代码与聊天记录一起回滚到检查点 ${checkpointId.slice(0, 8)}（${label}）。此前的对话记录已截断，请以当前文件内容为准。`
-      : `【回滚通知】代码已回滚到检查点 ${checkpointId.slice(0, 8)}（${label}），聊天记录保留。` +
-        "此前提到的文件改动可能已不在磁盘上；请以当前文件内容为准，需要时重新读取确认。";
+      ? tr(this.config.language, `【回滚通知】已把代码与聊天记录一起回滚到检查点 ${checkpointId.slice(0, 8)}（${label}）。此前的对话记录已截断，请以当前文件内容为准。`, `[Rollback notice] Code and chat history were rolled back together to checkpoint ${checkpointId.slice(0, 8)} (${label}). Earlier conversation records have been truncated; rely on the current file contents.`)
+      : tr(this.config.language, `【回滚通知】代码已回滚到检查点 ${checkpointId.slice(0, 8)}（${label}），聊天记录保留。`, `[Rollback notice] Code was rolled back to checkpoint ${checkpointId.slice(0, 8)} (${label}); chat history was kept.`) +
+        tr(this.config.language, "此前提到的文件改动可能已不在磁盘上；请以当前文件内容为准，需要时重新读取确认。", "File changes mentioned earlier may no longer be on disk; rely on the current file contents and re-read them if needed.");
     const text = intentNote ? `${base} ${intentNote}` : base;
     this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text });
     this.remember("system", text);
     const all = await this.sessions.open(this.sessionId);
     await this.turns.append(this.sessionId, {
-      intent: `把代码回滚到检查点 ${checkpointId.slice(0, 8)}${withChat ? "（含聊天记录）" : ""}`,
+      intent: tr(this.config.language, `把代码回滚到检查点 ${checkpointId.slice(0, 8)}${withChat ? "（含聊天记录）" : ""}`, `Roll code back to checkpoint ${checkpointId.slice(0, 8)}${withChat ? "（含聊天记录）" : ""}`),
       mode: this.panel.getMode(),
       userText: "",
       assistant: text,
@@ -2567,7 +2592,7 @@ class Shell {
     const picked = await vscode.window.showQuickPick(
       [
         { label: "English", description: current === "en" ? "Current" : "", value: "en" as const },
-        { label: "中文", description: current === "zh" ? "当前" : "", value: "zh" as const },
+        { label: tr(this.config.language, "中文", "Chinese"), description: current === "zh" ? tr(this.config.language, "当前", "Current") : "", value: "zh" as const },
       ],
       { title: "Bee Code: switch UI language", placeHolder: "Panel, logs, hints and notifications" },
     );
@@ -2588,23 +2613,23 @@ class Shell {
     const name = nodePath.basename(uri.fsPath);
 
     const choice = await vscode.window.showInformationMessage(
-      `Bee Code: 诊断包已生成（已脱敏）— ${name}`,
-      "打开所在文件夹",
-      "另存为…",
+      tr(this.config.language, `Bee Code: 诊断包已生成（已脱敏）— ${name}`, `Bee Code: Diagnostics bundle generated (redacted) — ${name}`),
+      tr(this.config.language, "打开所在文件夹", "Open Containing Folder"),
+      tr(this.config.language, "另存为…", "Save As…"),
     );
-    if (choice === "打开所在文件夹") {
+    if (choice === tr(this.config.language, "打开所在文件夹", "Open Containing Folder")) {
       await vscode.commands.executeCommand("revealFileInOS", uri);
       return;
     }
-    if (choice === "另存为…") {
+    if (choice === tr(this.config.language, "另存为…", "Save As…")) {
       const target = await vscode.window.showSaveDialog({
-        title: "另存诊断包",
+        title: tr(this.config.language, "另存诊断包", "Save Diagnostics Bundle"),
         defaultUri: vscode.Uri.file(nodePath.join(os.homedir(), name)),
         filters: { Markdown: ["md"] },
       });
       if (!target) return;
       await vscode.workspace.fs.copy(uri, target, { overwrite: true });
-      void vscode.window.showInformationMessage(`已保存到 ${target.fsPath}`);
+      void vscode.window.showInformationMessage(tr(this.config.language, `已保存到 ${target.fsPath}`, `Saved to ${target.fsPath}`));
     }
   }
 
@@ -2661,7 +2686,7 @@ class Shell {
           void this.sessions.updateStatus(this.sessionId, "thinking");
         }
         const p = params as UiToolParams;
-        this.panel.setHint(`${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`);
+        this.panel.setHint(tr(this.config.language, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}: ${p.name}`));
         return;
       }
       case "ui.read": {
@@ -2671,8 +2696,8 @@ class Shell {
         const drawn = this.config.focus.highlight ? this.focusHighlight.addRead(p) : false;
         this.panel.setHint(
           drawn && p.startLine && p.endLine
-            ? `读取 ${name}:${p.startLine}-${p.endLine}`
-            : `读取 ${name}`,
+            ? tr(this.config.language, `读取 ${name}:${p.startLine}-${p.endLine}`, `Read ${name}:${p.startLine}-${p.endLine}`)
+            : tr(this.config.language, `读取 ${name}`, `Read ${name}`),
         );
         return;
       }
@@ -2700,10 +2725,10 @@ class Shell {
         this.panel.setMode(p.mode);
         const label = p.mode === "builder" ? "Builder" : p.mode === "debugger" ? "Debugger" : "Chat";
         const flags = [
-          p.scale === "large" ? "大任务" : "",
-          p.needsProposal ? "需产出提案" : "",
-          p.degraded ? "降级判定" : "",
-          p.reused ? "沿用上轮意图" : "",
+          p.scale === "large" ? tr(this.config.language, "大任务", "Large task") : "",
+          p.needsProposal ? tr(this.config.language, "需产出提案", "Proposal needed") : "",
+          p.degraded ? tr(this.config.language, "降级判定", "Downgraded") : "",
+          p.reused ? tr(this.config.language, "沿用上轮意图", "Reused previous intent") : "",
         ].filter(Boolean);
         this.panel.setHint(`${label}${flags.length ? `（${flags.join("，")}）` : ""} · ${p.reason ?? ""}`);
         this.sessions.updateLastIntent(this.sessionId, {
@@ -2717,7 +2742,7 @@ class Shell {
           this.panel.addTrajectoryItem({
             id: this.turnUserMessageId,
             mode: p.mode,
-            intent: p.intent || p.reason || "（未记录意图）",
+            intent: p.intent || p.reason || tr(this.config.language, "（未记录意图）", "(no intent recorded)"),
           });
         }
         return;
@@ -2746,12 +2771,12 @@ class Shell {
         this.panel.subagentEvent(p);
         if (p.status === "start") {
           this.turn = "tool";
-          this.panel.setHint(`子代理：${p.task ?? ""}`);
+          this.panel.setHint(tr(this.config.language, `子代理：${p.task ?? ""}`, `Sub-agent: ${p.task ?? ""}`));
         } else if (p.status === "tool" && p.tool) {
-          this.panel.setHint(`子代理 · ${p.tool.name}${p.tool.summary ? ` ${p.tool.summary}` : ""}`);
+          this.panel.setHint(tr(this.config.language, `子代理 · ${p.tool.name}${p.tool.summary ? ` ${p.tool.summary}` : ""}`, `Sub-agent · ${p.tool.name}${p.tool.summary ? ` ${p.tool.summary}` : ""}`));
         } else if (p.status === "end") {
           this.panel.setHint(
-            p.error ? `子代理失败：${p.error}` : `子代理完成（${p.steps ?? 0} 步 / ${p.toolCalls ?? 0} 次工具）`,
+            p.error ? tr(this.config.language, `子代理失败：${p.error}`, `Sub-agent failed: ${p.error}`) : tr(this.config.language, `子代理完成（${p.steps ?? 0} 步 / ${p.toolCalls ?? 0} 次工具）`, `Sub-agent finished (${p.steps ?? 0} steps / ${p.toolCalls ?? 0} tool calls)`),
           );
         }
         return;
@@ -2772,7 +2797,7 @@ class Shell {
         const nearTokens = tokens > this.config.maxTurnTokens * 0.8;
         const fmtTokens = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
         this.panel.setCost(
-          `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens ? " · ⚠ 接近 token 预算" : ""}`,
+          `${fmtTokens} tok · ${seconds.toFixed(1)}s${nearTokens ? " · ⚠ near token budget" : ""}`,
         );
         this.updateStatus();
         return;
@@ -2803,7 +2828,7 @@ class Shell {
       case "log": {
         const p = params as LogParams;
         const level = p.level === "error" ? "error" : p.level === "warn" ? "warn" : "info";
-        this.log[level](`[内核] ${p.msg ?? ""}`);
+        this.log[level](tr(this.config.language, `[内核] ${p.msg ?? ""}`, `[core] ${p.msg ?? ""}`));
         return;
       }
       default:
@@ -2877,7 +2902,7 @@ class Shell {
       return;
     }
     for (const problem of problems) this.log.error(`Command reconciliation: ${problem}`);
-    void vscode.window.showWarningMessage(`Bee Code: 命令声明与注册不一致（${problems.length} 处），详见输出面板。`);
+    void vscode.window.showWarningMessage(tr(this.config.language, `Bee Code: 命令声明与注册不一致（${problems.length} 处），详见输出面板。`, `Bee Code: Command declarations do not match their registration (${problems.length} issues); see the output panel.`));
   }
 
   /**
@@ -2904,7 +2929,7 @@ class Shell {
     }
     for (const problem of problems) this.log.error(`Protocol contract mismatch: ${problem}`);
     void vscode.window.showWarningMessage(
-      `Bee Code: 协议契约与实际注册不一致（${problems.length} 处），详见输出面板。`,
+      tr(this.config.language, `Bee Code: 协议契约与实际注册不一致（${problems.length} 处），详见输出面板。`, `Bee Code: Protocol contracts do not match the actual registrations (${problems.length} issues); see the output panel.`),
     );
   }
 
@@ -2920,20 +2945,20 @@ class Shell {
     const pendingCount = this.proposals.count();
     const parts = [`$(bee) Bee Code`];
     if (this.busy) parts.push("$(sync~spin)");
-    if (pendingCount > 0) parts.push(`待审 ${pendingCount}`);
+    if (pendingCount > 0) parts.push(tr(this.config.language, `待审 ${pendingCount}`, `${pendingCount} pending`));
     if (this.usage) parts.push(this.usage);
     this.status.text = parts.join(" · ");
-    this.status.tooltip = `${describeConfig(this.config)}\n点击打开面板`;
+    this.status.tooltip = tr(this.config.language, `${describeConfig(this.config)}\n点击打开面板`, `${describeConfig(this.config)}\nClick to open the panel`);
   }
 
   private hintForState(): string {
-    if (isWorkspaceEmpty()) return "请先打开一个工作区（文件夹），否则无法读取代码。";
+    if (isWorkspaceEmpty()) return tr(this.config.language, "请先打开一个工作区（文件夹），否则无法读取代码。", "Open a workspace folder first; otherwise the code cannot be read.");
     const missing: string[] = [];
     if (!this.config.model.baseUrl) missing.push("base_url");
     if (!this.config.model.model) missing.push("model");
-    if (missing.length > 0) return `未配置 ${missing.join(" / ")}：运行「Bee Code: 配置模型」`;
-    const keySource = process.env[API_KEY_ENV] ? " · 密钥来自环境变量" : "";
-    return `内核模式：${this.config.coreMode}${keySource}`;
+    if (missing.length > 0) return tr(this.config.language, `未配置 ${missing.join(" / ")}：运行「Bee Code: 配置模型」`, `Not configured: ${missing.join(" / ")}. Run "Bee Code: Configure model".`);
+    const keySource = process.env[API_KEY_ENV] ? tr(this.config.language, " · 密钥来自环境变量", " · key from environment variable") : "";
+    return tr(this.config.language, `内核模式：${this.config.coreMode}${keySource}`, `Core mode: ${this.config.coreMode}${keySource}`);
   }
 
   /**
@@ -2943,12 +2968,12 @@ class Shell {
    * all surface as indirect errors like "path out of bounds" or "workspace not found", and the user can't guess the cause.
    */
   private async promptOpenWorkspace(): Promise<void> {
-    const message = "Bee Code: 请先打开一个工作区（文件夹），扩展需要它来读取代码与保存检查点。";
+    const message = tr(this.config.language, "Bee Code: 请先打开一个工作区（文件夹），扩展需要它来读取代码与保存检查点。", "Bee Code: Open a workspace folder first; the extension needs one to read code and save checkpoints.");
     this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: message });
-    this.panel.setHint("未打开工作区");
+    this.panel.setHint(tr(this.config.language, "未打开工作区", "No workspace open"));
 
-    const choice = await vscode.window.showWarningMessage(message, "打开文件夹", "稍后");
-    if (choice === "打开文件夹") {
+    const choice = await vscode.window.showWarningMessage(message, tr(this.config.language, "打开文件夹", "Open Folder"), tr(this.config.language, "稍后", "Later"));
+    if (choice === tr(this.config.language, "打开文件夹", "Open Folder")) {
       await vscode.commands.executeCommand("vscode.openFolder");
     }
   }
@@ -2986,10 +3011,11 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
 function clampAttachments(
   items: AttachedContext[],
   limits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
+  locale: Locale,
 ): { items: AttachedContext[]; notices: string[] } {
   const notices: string[] = [];
   if (items.length > limits.maxCount) {
-    notices.push(`最多附加 ${limits.maxCount} 段：本次只保留了前 ${limits.maxCount} 段，其余已忽略。`);
+    notices.push(tr(locale, `最多附加 ${limits.maxCount} 段：本次只保留了前 ${limits.maxCount} 段，其余已忽略。`, `At most ${limits.maxCount} attachments: only the first ${limits.maxCount} were kept this time; the rest were ignored.`));
   }
   const out: AttachedContext[] = [];
   let total = 0;
@@ -2998,7 +3024,7 @@ function clampAttachments(
   for (const item of items.slice(0, limits.maxCount)) {
     let text = item.text ?? "";
     if (text.length > limits.maxCharsPerItem) {
-      text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+      text = tr(locale, `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`, `${text.slice(0, limits.maxCharsPerItem)}\n…(attachment truncated)`);
       truncatedItem = true;
     }
     const remaining = limits.maxTotalChars - total;
@@ -3007,14 +3033,14 @@ function clampAttachments(
       break;
     }
     if (text.length > remaining) {
-      text = `${text.slice(0, remaining)}\n…（附件已截断）`;
+      text = tr(locale, `${text.slice(0, remaining)}\n…（附件已截断）`, `${text.slice(0, remaining)}\n…(attachment truncated)`);
       truncatedTotal = true;
     }
     total += text.length;
     out.push({ ...item, ...(text.length > 0 ? { text } : {}) });
   }
-  if (truncatedItem) notices.push(`单个附件超过 ${limits.maxCharsPerItem} 字符，已截断。`);
-  if (truncatedTotal) notices.push(`附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`);
+  if (truncatedItem) notices.push(tr(locale, `单个附件超过 ${limits.maxCharsPerItem} 字符，已截断。`, `A single attachment exceeds ${limits.maxCharsPerItem} characters and was truncated.`));
+  if (truncatedTotal) notices.push(tr(locale, `附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`, `Attachments exceed ${limits.maxTotalChars} characters in total and were truncated to the limit.`));
   return { items: out, notices };
 }
 
