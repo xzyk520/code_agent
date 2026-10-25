@@ -237,6 +237,7 @@ class Shell {
       onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
       onRetryTurn: () => void this.retryLastTurn(),
       onSessions: () => void this.showSessionSwitcher(),
+      onModelSettings: () => void this.showModelSettings(),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments, this.config.language, this.config.fontSize);
 
@@ -798,6 +799,47 @@ class Shell {
   }
 
   /** Switch to a historical session */
+  /** Panel header: model configuration and connection test shortcuts. */
+  private async showModelSettings(): Promise<void> {
+    const picked = await vscode.window.showQuickPick(
+      [
+        {
+          label: tr(this.config.language, "$(gear) 配置主模型…", "$(gear) Configure main model…"),
+          description: tr(this.config.language, "base URL、模型、API Key", "base URL, model, API key"),
+          command: "beeCode.model.configure",
+        },
+        {
+          label: tr(this.config.language, "$(check) 测试模型连接", "$(check) Test model connection"),
+          command: "beeCode.model.test",
+        },
+        {
+          label: tr(this.config.language, "$(list) 配置摘要模型…", "$(list) Configure summary model…"),
+          command: "beeCode.summary.configure",
+        },
+        {
+          label: tr(this.config.language, "$(list) 配置子代理模型…", "$(list) Configure subagent model…"),
+          command: "beeCode.subagent.configure",
+        },
+        {
+          label: tr(this.config.language, "$(settings) 打开模型设置", "$(settings) Open model settings"),
+          description: "beeCode.model",
+          command: "workbench.action.openSettings",
+          args: ["beeCode.model"],
+        },
+        {
+          label: tr(this.config.language, "$(trash) 清除 API Key", "$(trash) Clear API key"),
+          command: "beeCode.model.clearKey",
+        },
+      ],
+      {
+        title: tr(this.config.language, "Bee Code · 模型", "Bee Code · Model"),
+        placeHolder: tr(this.config.language, "选择要配置的模型项", "Choose a model setting"),
+      },
+    );
+    if (!picked) return;
+    await vscode.commands.executeCommand(picked.command, ...(picked.args ?? []));
+  }
+
   /** Panel header: one button for creating or switching sessions. */
   private async showSessionSwitcher(): Promise<void> {
     const picked = await vscode.window.showQuickPick(

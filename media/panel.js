@@ -40,6 +40,7 @@
     retry: must("retry", HTMLButtonElement),
     jumpLatest: must("jump-latest", HTMLButtonElement),
     sessions: must("sessions", HTMLButtonElement),
+    modelSettings: must("model-settings", HTMLButtonElement),
     retryBanner: must("retry-banner", HTMLElement),
   };
 
@@ -83,6 +84,8 @@
     el.stop.title = tr("停止", "Stop");
     el.sessions.textContent = tr("会话", "Sessions");
     el.sessions.title = tr("切换会话", "Switch session");
+    el.modelSettings.textContent = tr("模型", "Model");
+    el.modelSettings.title = tr("配置模型", "Configure model");
     el.reads.setAttribute("aria-label", tr("agent 最近读取的文件", "Files recently read by the agent"));
     el.messages.setAttribute("aria-label", tr("对话记录", "Conversation"));
     el.trajectory.setAttribute("aria-label", tr("会话轨迹", "Session trace"));
@@ -1238,6 +1241,7 @@
 
   el.send.addEventListener("click", send);
   el.sessions.addEventListener("click", () => post({ type: "sessions" }));
+  el.modelSettings.addEventListener("click", () => post({ type: "modelSettings" }));
   el.stop.addEventListener("click", () => post({ type: "stop" }));
   el.acceptAll.addEventListener("click", () => post({ type: "acceptAll" }));
   el.rejectAll.addEventListener("click", () => post({ type: "rejectAll" }));
