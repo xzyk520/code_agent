@@ -96,6 +96,42 @@ dist-vsix/bee-code-1.0.0-linux-x64.vsix
 
 扩展到 `beeCode.core.pythonPath = "auto"` 时会优先使用内置运行时；找不到才回退到系统 `python`。构建机需要网络；普通用户安装 VSIX 后不需要 Python 或 pip。
 
+### 在 Windows 本地交叉构建 macOS / Linux 包
+
+不想从 GitHub 下载已构建 VSIX 时，可以在 Windows 上直接生成三平台包。
+
+先准备目标平台的 python-build-standalone 压缩包（可以从镜像下载），然后：
+
+```powershell
+# Linux x64
+$env:BEE_RUNTIME_TARGET="linux-x64"
+$env:BEE_PYTHON_ARCHIVE="C:\path\cpython-3.11.17-x86_64-unknown-linux-gnu-install_only.tar.gz"
+node scripts/bundle-python.mjs
+node scripts/package-platform.mjs linux-x64
+
+# macOS ARM64
+$env:BEE_RUNTIME_TARGET="darwin-arm64"
+$env:BEE_PYTHON_ARCHIVE="C:\path\cpython-3.11.17-aarch64-apple-darwin-install_only.tar.gz"
+node scripts/bundle-python.mjs
+node scripts/package-platform.mjs darwin-arm64
+```
+
+也可以不预下载，让脚本走代理下载：
+
+```powershell
+$env:BEE_GITHUB_PROXY="https://gh-proxy.com"
+```
+
+脚本会：
+
+- 解压目标 Python；
+- 用 Windows 上的 Python 下载目标平台的 wheels；
+- 把 wheel 解包到目标 `site-packages`；
+- 删除 terminfo，避免 VSIX 大小写路径冲突；
+- 生成对应平台的 VSIX。
+
+交叉构建出的包应在真实 macOS/Linux 上再安装验证一次。
+
 ## 快速开始
 
 ```bash

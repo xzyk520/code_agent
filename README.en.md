@@ -96,6 +96,38 @@ Each VSIX contains only its platform runtime. The `release-vsix.yml` GitHub Acti
 
 With `beeCode.core.pythonPath = "auto"` the extension prefers the bundled runtime, then falls back to system Python. Building the runtime requires network access; end users do not need Python or pip.
 
+### Cross-build macOS / Linux VSIX on Windows
+
+If you do not want to download release assets from GitHub, you can build all
+three packages locally:
+
+```powershell
+# Linux x64
+$env:BEE_RUNTIME_TARGET="linux-x64"
+$env:BEE_PYTHON_ARCHIVE="C:\path\cpython-3.11.17-x86_64-unknown-linux-gnu-install_only.tar.gz"
+node scripts/bundle-python.mjs
+node scripts/package-platform.mjs linux-x64
+
+# macOS ARM64
+$env:BEE_RUNTIME_TARGET="darwin-arm64"
+$env:BEE_PYTHON_ARCHIVE="C:\path\cpython-3.11.17-aarch64-apple-darwin-install_only.tar.gz"
+node scripts/bundle-python.mjs
+node scripts/package-platform.mjs darwin-arm64
+```
+
+You can also let the script download through a proxy:
+
+```powershell
+$env:BEE_GITHUB_PROXY="https://gh-proxy.com"
+```
+
+The script extracts the target Python, downloads target-platform wheels with
+the host Python, unpacks them into `site-packages`, removes terminfo
+case collisions, and builds the target VSIX.
+
+Always install-test the cross-built package on the real target OS before
+publishing.
+
 ## Quick start
 
 ```bash

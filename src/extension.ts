@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { promisify } from "node:util";
@@ -1032,6 +1033,13 @@ class Shell {
 
     this.log.info(`Core located: ${describeLaunch(spec)} (PYTHONPATH=${spec.env["PYTHONPATH"] ?? ""})`);
     const interpreter = resolvePython(this.config.pythonPath, this.context.extensionUri.fsPath);
+    if (process.platform !== "win32") {
+      try {
+        nodeFs.chmodSync(interpreter.path, 0o755);
+      } catch {
+        /* best-effort: a system interpreter may be readable but not chmod-able */
+      }
+    }
     this.log.info(`Core interpreter: ${interpreter.path} (${interpreter.source})`);
     const core = new PythonCore({
       pythonPath: interpreter.path,
@@ -2999,6 +3007,13 @@ class Shell {
   }
 
   private async probePython(file: string, args: string[]): Promise<{ version: string; httpx: boolean } | undefined> {
+    if (process.platform !== "win32") {
+      try {
+        nodeFs.chmodSync(file, 0o755);
+      } catch {
+        /* ignore */
+      }
+    }
     const script =
       'import sys,json\n' +
       'try:\n import httpx; ok=True\nexcept Exception:\n ok=False\n' +

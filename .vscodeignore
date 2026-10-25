@@ -30,3 +30,6 @@ esbuild.mjs
 **/*.pyo
 .pytest_cache/**
 .ruff_cache/**
+
+# Temporary cross-platform runtime staging
+.runtime-hold-*/**

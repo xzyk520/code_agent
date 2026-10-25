@@ -5,9 +5,8 @@
  * Usage: node scripts/package-platform.mjs win32-x64
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 
 const root = resolve(new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
 const target = process.argv[2] || `${process.platform}-${process.arch}`;
@@ -22,8 +21,8 @@ if (!existsSync(targetRuntime)) {
 
 // Keep only the target runtime in the tree while packaging; restore afterwards.
 const moved = [];
-const hold = join(tmpdir(), `bee-runtime-hold-${Date.now()}`);
-mkdirSync(hold, { recursive: true });
+// Rename must stay on the same volume (runtime/ may be on another drive than TEMP).
+const hold = mkdtempSync(join(root, ".runtime-hold-"));
 try {
   for (const entry of readdirSync(runtimeRoot)) {
     if (entry === target) continue;
@@ -45,4 +44,5 @@ try {
   for (const entry of moved) {
     renameSync(join(hold, entry), join(runtimeRoot, entry));
   }
+  rmSync(hold, { recursive: true, force: true });
 }
