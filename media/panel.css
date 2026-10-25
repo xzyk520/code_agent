@@ -963,3 +963,39 @@ textarea,
 .activity.hidden {
   display: none;
 }
+
+
+/* In-panel command approval (replaces the native QuickPick) */
+.approval {
+  margin: 6px 8px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  padding: 8px;
+}
+
+.approval.hidden { display: none; }
+
+.approval-head {
+  font-size: var(--bee-font-size, 14px);
+  margin-bottom: 6px;
+}
+
+.approval-detail {
+  margin: 0 0 8px;
+  padding: 8px;
+  max-height: 36vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: max(11px, calc(var(--bee-font-size, 14px) - 1px));
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  border-radius: 3px;
+}
+
+.approval-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

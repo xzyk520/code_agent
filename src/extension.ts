@@ -210,7 +210,7 @@ class Shell {
 
     // Write channel and proposal staging: this.edit is only actually called to write to disk when a proposal is "accepted"
     this.edit = createEditAdapter(this.log);
-    this.confirm = createConfirmAdapter(context, this.log);
+    this.confirm = createConfirmAdapter(context, this.log, (params) => this.panel?.requestApproval(params) ?? Promise.resolve(null));
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
     this.focusHighlight = new FocusHighlighter(this.log);
     this.chatIndex = new CheckpointChatIndex(nodePath.join(context.globalStorageUri.fsPath, "checkpoints"), this.log);
@@ -1327,6 +1327,12 @@ class Shell {
     );
 
     if (result.applied) {
+      // The user approved this write: don't leave a dirty editor/save prompt behind.
+      try {
+        await vscode.workspace.saveAll(false);
+      } catch {
+        /* saving is best-effort */
+      }
       this.log.info(`Proposal applied ${id}`);
       this.panel.planStepDone(dto.path);
       const plan = this.panel.getPlan();

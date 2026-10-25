@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
+import type { ConfirmAskParams, DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
 import { tr, type Locale } from "../i18n";
 
 /** A message to display in the panel (shell-side view model, independent of the protocol) */
@@ -117,6 +117,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   /** View-scoped listeners: release the old ones before rebuilding the view */
   private viewDisposables: vscode.Disposable[] = [];
+  private approvalSeq = 0;
+  private pendingApproval?: { id: string; params: ConfirmAskParams; resolve: (choice: string | null) => void };
   private state: PanelState = {
     locale: "en",
     fontSize: 14,
@@ -162,6 +164,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [mediaRoot],
     };
     view.webview.html = buildHtml(view.webview, mediaRoot, this.state.locale, this.state.fontSize);
+    if (this.pendingApproval) {
+      this.postApproval(this.pendingApproval.id, this.pendingApproval.params);
+    }
     this.viewDisposables.push(view.webview.onDidReceiveMessage((raw) => this.onMessage(raw)));
     this.viewDisposables.push(
       view.onDidChangeVisibility(() => {
@@ -219,6 +224,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Live progress line shown while a turn is classifying / thinking / running a tool */
   setActivity(text: string): void {
     this.post({ type: "activity", text });
+  }
+
+  /** Ask the user inside the panel (no native QuickPick). Returns the chosen option id or null. */
+  requestApproval(params: ConfirmAskParams): Promise<string | null> {
+    if (this.pendingApproval) {
+      // The shell serializes approvals; a second request here means a logic bug, not a UX event.
+      return Promise.resolve(null);
+    }
+    const id = `approval-${++this.approvalSeq}`;
+    this.reveal();
+    return new Promise<string | null>((resolve) => {
+      this.pendingApproval = { id, params, resolve };
+      this.postApproval(id, params);
+    });
+  }
+
+  private postApproval(id: string, params: ConfirmAskParams): void {
+    this.post({
+      type: "approval",
+      id,
+      question: params.question,
+      detail: params.detail ?? "",
+      options: params.options.map((option) => ({ id: option.id, label: option.label, description: option.description ?? "" })),
+    });
+  }
+
+  private resolveApproval(id: string, choice: string | null): void {
+    const pending = this.pendingApproval;
+    if (!pending || pending.id !== id) return;
+    this.pendingApproval = undefined;
+    this.post({ type: "approvalDone" });
+    pending.resolve(choice);
   }
 
   addMessage(message: ChatMessageView): void {
@@ -415,6 +452,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ids?: unknown;
       mode?: unknown;
       id?: unknown;
+      choice?: unknown;
       path?: unknown;
       startLine?: unknown;
       endLine?: unknown;
@@ -462,6 +500,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "retry":
         this.handlers.onRetryTurn();
         return;
+      case "approvalDecision": {
+        const id = typeof msg.id === "string" ? msg.id : "";
+        const choice = typeof msg.choice === "string" ? msg.choice : null;
+        if (id) this.resolveApproval(id, choice);
+        return;
+      }
       case "sessions":
         this.handlers.onSessions();
         return;
@@ -542,6 +586,14 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
     </aside>
   </div>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <section id="approval" class="approval hidden">
+    <div class="approval-head">
+      <strong id="approval-question"></strong>
+    </div>
+    <pre id="approval-detail" class="approval-detail"></pre>
+    <div id="approval-options" class="approval-options"></div>
+  </section>
+
   <section id="proposals" class="proposals hidden">
     <div class="proposals-head">
       <span id="proposals-title">${tr(locale, "Proposals", "Proposals")}</span>

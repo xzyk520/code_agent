@@ -46,7 +46,11 @@ export function createSecretAdapter(context: vscode.ExtensionContext, logger: Lo
   };
 }
 
-export function createConfirmAdapter(context: vscode.ExtensionContext, logger: Logger) {
+export function createConfirmAdapter(
+  context: vscode.ExtensionContext,
+  logger: Logger,
+  panelApproval?: (params: ConfirmAskParams) => Promise<string | null>,
+) {
   const detailText = new Map<string, string>();
   let detailSeq = 0;
   const detailRegistration = vscode.workspace.registerTextDocumentContentProvider(DETAIL_SCHEME, {
@@ -86,6 +90,15 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
           logger.debug(`confirm.ask using remembered choice: ${params.rememberKey} → ${remembered}`);
           return { choice: remembered };
         }
+      }
+
+      // Command confirmations use the in-panel approval card: the full command stays visible,
+      // and the native QuickPick cannot cover or truncate it.
+      const isCommandApproval = /(^|\n)\s*(Command|命令)[:：]/.test(params.detail ?? "");
+      if (panelApproval && isCommandApproval) {
+        const choice = await panelApproval(params);
+        logger.debug(`confirm.ask panel choice: ${choice ?? "cancelled"}`);
+        return { choice: choice ?? null };
       }
 
       const items = buildItems(params);
@@ -150,13 +163,6 @@ function buildItems(params: ConfirmAskParams): Array<vscode.QuickPickItem & { id
 
   if (!params.options.some((opt) => NEGATIVE_IDS.has(opt.id.toLowerCase()))) {
     items.push({ id: "cancel", label: "Cancel", description: "Make no changes" });
-  }
-  if (params.detail && params.detail.length > 160) {
-    items.push({
-      id: PREVIEW_ITEM_ID,
-      label: "View full details...",
-      description: "Open the complete request in an editor (recommended for long commands)",
-    });
   }
   if (params.rememberKey) {
     items.push({ id: REMEMBER_ITEM_ID, label: "Remember this choice...", description: "Don't ask again for the same action" });

@@ -40,6 +40,10 @@
     retry: must("retry", HTMLButtonElement),
     jumpLatest: must("jump-latest", HTMLButtonElement),
     activity: must("activity", HTMLElement),
+    approval: must("approval", HTMLElement),
+    approvalQuestion: must("approval-question", HTMLElement),
+    approvalDetail: must("approval-detail", HTMLElement),
+    approvalOptions: must("approval-options", HTMLElement),
     sessions: must("sessions", HTMLButtonElement),
     modelSettings: must("model-settings", HTMLButtonElement),
     language: must("language", HTMLButtonElement),
@@ -57,6 +61,9 @@
   let state = { mode: "chat", busy: false };
   /** Follow new output only while the user is near the bottom. */
   let stickToBottom = true;
+  let approvalActive = false;
+  /** @type {Proposal[]} */
+  let lastProposals = [];
 
   function updateJumpButton() {
     el.jumpLatest.classList.toggle("hidden", stickToBottom);
@@ -80,6 +87,43 @@
   function setActivity(text) {
     el.activity.textContent = text;
     el.activity.classList.toggle("hidden", !text);
+  }
+
+  /** In-panel command approval: full detail, no native QuickPick. @param {any} msg */
+  function renderApproval(msg) {
+    approvalActive = true;
+    el.approvalQuestion.textContent = String(msg.question || "");
+    el.approvalDetail.textContent = String(msg.detail || "");
+    el.approvalOptions.textContent = "";
+    for (const option of msg.options || []) {
+      const button = document.createElement("button");
+      button.textContent = String(option.label || option.id || "OK");
+      if (option.description) button.title = String(option.description);
+      button.addEventListener("click", () => {
+        el.approval.classList.add("hidden");
+        approvalActive = false;
+        renderProposals(lastProposals);
+        post({ type: "approvalDecision", id: msg.id, choice: option.id });
+      });
+      el.approvalOptions.appendChild(button);
+    }
+    const cancel = document.createElement("button");
+    cancel.textContent = tr("取消", "Cancel");
+    cancel.addEventListener("click", () => {
+      el.approval.classList.add("hidden");
+      approvalActive = false;
+      renderProposals(lastProposals);
+      post({ type: "approvalDecision", id: msg.id, choice: null });
+    });
+    el.approvalOptions.appendChild(cancel);
+    el.approval.classList.remove("hidden");
+    scrollToLatest(true);
+  }
+
+  function endApproval() {
+    approvalActive = false;
+    el.approval.classList.add("hidden");
+    renderProposals(lastProposals);
   }
   /** @type {"zh" | "en"} */
   let locale = "zh";
@@ -1179,6 +1223,9 @@
    * @param {Proposal[]} items
    */
   function renderProposals(items) {
+    lastProposals = items;
+    el.acceptAll.disabled = approvalActive;
+    el.rejectAll.disabled = approvalActive;
     el.proposals.classList.toggle("hidden", items.length === 0);
     el.proposalsTitle.textContent = tr("待审提案（" + items.length + " 个文件）", "Proposals (" + items.length + " file(s))");
     el.proposalsList.textContent = "";
@@ -1227,12 +1274,14 @@
         const accept = document.createElement("button");
         accept.className = "primary";
         accept.textContent = tr("接受", "Accept");
+        accept.disabled = approvalActive;
         accept.addEventListener("click", () => post({ type: "accept", ids: [item.id] }));
         actions.appendChild(accept);
       }
 
       const reject = document.createElement("button");
       reject.textContent = stale ? tr("丢弃", "Discard") : tr("拒绝", "Reject");
+      reject.disabled = approvalActive;
       reject.addEventListener("click", () => post({ type: "reject", ids: [item.id] }));
       actions.appendChild(reject);
       li.appendChild(actions);
@@ -1336,6 +1385,14 @@
       }
       case "activity": {
         setActivity(typeof msg.text === "string" ? msg.text : "");
+        break;
+      }
+      case "approval": {
+        renderApproval(msg);
+        break;
+      }
+      case "approvalDone": {
+        endApproval();
         break;
       }
       case "locale": {
