@@ -488,10 +488,11 @@ class Shell {
     text: string,
     reasoning?: string | Array<{ round: number; text: string }>,
     diagrams?: DiagramDto[],
+    id?: string,
   ): void {
     if (!text.trim() && (!diagrams || diagrams.length === 0)) return;
     this.sessions.append(this.sessionId, {
-      id: `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: id ?? `${role[0]}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       role,
       text,
       ts: Date.now(),
@@ -569,9 +570,18 @@ class Shell {
   /** Load each turn's trace from the turn records (the collapsed card under the user message) */
   private async refreshTurns(): Promise<void> {
     const turns = await this.turns.list(this.sessionId);
+    const messages = await this.sessions.open(this.sessionId).catch(() => []);
+    const userIds = new Set(messages.filter((m) => m.role === "user").map((m) => m.id));
+    const resolveUserId = (turn: (typeof turns)[number]): string | undefined => {
+      if (turn.userMessageId && userIds.has(turn.userMessageId)) return turn.userMessageId;
+      // Legacy records predate stable userMessageId, or the message id was regenerated: recover by text.
+      const prefix = turn.userText.trim().slice(0, 80);
+      if (!prefix) return turn.userMessageId;
+      return messages.find((m) => m.role === "user" && m.text.startsWith(prefix))?.id ?? turn.userMessageId;
+    };
     this.panel.setTurns(
       turns.map((turn) => ({
-        userMessageId: turn.userMessageId,
+        userMessageId: resolveUserId(turn),
         status: turn.status ?? "ok",
         error: turn.error,
         inputTokens: turn.inputTokens,
@@ -1127,7 +1137,7 @@ class Shell {
     this.turnScale = "small";
     this.turnUsage = undefined;
     this.reasoningSegments.clear();
-    this.remember("user", userText);
+    this.remember("user", userText, undefined, undefined, userMessageId);
     await this.retries
       .savePending({
         sessionId: this.sessionId,
@@ -1204,6 +1214,7 @@ class Shell {
         this.log.warn(`Failed to write turn record: ${err instanceof Error ? err.message : String(err)}`);
       });
       await this.refreshTurns();
+      await this.refreshTrajectory();
       if (!turnFailed) await this.retries.clearPending(this.sessionId);
       this.setBusy(false);
       this.turn = this.proposals.count() > 0 ? "awaiting-decision" : "idle";
