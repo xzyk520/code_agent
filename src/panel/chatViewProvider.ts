@@ -511,6 +511,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
   <div id="retry-banner" class="retry-banner hidden" role="status"></div>
   <div class="conversation">
     <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="${tr(locale, "Conversation", "Conversation")}"></section>
+    <button id="jump-latest" class="jump-latest hidden" type="button">${tr(locale, "跳到最新", "Jump to latest")}</button>
     <aside id="trajectory" class="trajectory" aria-label="${tr(locale, "Session trace", "Session trace")}">
       <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="${tr(locale, "Search trace…", "Search trace…")}" aria-label="${tr(locale, "Search trace", "Search trace")}" />
       <div id="trajectory-list" class="trajectory-list"></div>

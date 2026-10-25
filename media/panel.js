@@ -38,6 +38,7 @@
     reads: must("reads", HTMLElement),
     rejectAll: must("rejectAll", HTMLButtonElement),
     retry: must("retry", HTMLButtonElement),
+    jumpLatest: must("jump-latest", HTMLButtonElement),
     retryBanner: must("retry-banner", HTMLElement),
   };
 
@@ -50,6 +51,27 @@
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
+  /** Follow new output only while the user is near the bottom. */
+  let stickToBottom = true;
+
+  function updateJumpButton() {
+    el.jumpLatest.classList.toggle("hidden", stickToBottom);
+  }
+
+  /** @param {boolean} [force] */
+  function scrollToLatest(force = false) {
+    if (force) stickToBottom = true;
+    if (!stickToBottom) return;
+    el.messages.scrollTop = el.messages.scrollHeight;
+    updateJumpButton();
+  }
+
+  el.messages.addEventListener("scroll", () => {
+    const distance = el.messages.scrollHeight - el.messages.scrollTop - el.messages.clientHeight;
+    stickToBottom = distance < 48;
+    updateJumpButton();
+  });
+  el.jumpLatest.addEventListener("click", () => scrollToLatest(true));
   /** @type {"zh" | "en"} */
   let locale = "zh";
   /** @param {string} zh @param {string} en */
@@ -159,7 +181,7 @@
       streamRenderQueued = false;
       if (!streamingNode) return;
       streamingNode.innerHTML = renderMarkdown(streamingRaw);
-      el.messages.scrollTop = el.messages.scrollHeight;
+      scrollToLatest();
     });
   }
 
@@ -229,7 +251,7 @@
     details.append(summary, list);
     card.append(head, command, details);
     el.messages.appendChild(card);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
   }
 
   /** @param {string} id @param {number} files */
@@ -264,7 +286,7 @@
     }
     if (id) node.dataset.messageId = id;
     el.messages.appendChild(node);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
     return node;
   }
 
@@ -587,7 +609,7 @@
     details.append(summary, body);
     wrap.append(details);
     el.messages.appendChild(wrap);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
 
     const entry = { details, chip, tools, result, stats, findings, pending: /** @type {Map<string, HTMLElement>} */ (new Map()) };
     subagents.set(id, entry);
@@ -654,7 +676,7 @@
           entry.tools.appendChild(toolLine(name, toolStatus, summary));
         }
       }
-      el.messages.scrollTop = el.messages.scrollHeight;
+      scrollToLatest();
       return;
     }
 
@@ -680,7 +702,7 @@
         entry.result.hidden = false;
       }
       announce(error ? "Subagent failed: " + error : "Subagent finished in " + steps + " steps");
-      el.messages.scrollTop = el.messages.scrollHeight;
+      scrollToLatest();
     }
   }
   /** Mode is chosen entirely by intent analysis: this only updates the badge and input hint */
@@ -835,7 +857,7 @@
     }
     card.append(summary, body);
     el.messages.appendChild(card);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
   }
 
   /** ── Mermaid: lazy-loaded only when a diagram appears (opening a history session / a new diagram this turn) ── */
@@ -896,7 +918,7 @@
     body.textContent = tr("正在加载渲染器…", "Loading renderer…");
     card.append(head, body);
     el.messages.appendChild(card);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
 
     const seq = ++diagramSeq;
     const source = diagram.source;
@@ -954,7 +976,7 @@
     }
     entry.body.textContent += text;
     setMessagesBusy(true);
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
   }
 
   function collapseLiveReasoning() {
@@ -1115,7 +1137,7 @@
       li.append(icon, body);
       list.appendChild(li);
     }
-    el.messages.scrollTop = el.messages.scrollHeight;
+    scrollToLatest();
   }
 
   function renderBusy() {
@@ -1208,6 +1230,7 @@
     if (!text || state.busy) return;
     post({ type: "send", text: text, mode: state.mode });
     el.input.value = "";
+    scrollToLatest(true);
   }
 
   el.send.addEventListener("click", send);
@@ -1290,6 +1313,7 @@
         renderAttachments(next.attachments || []);
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
+        scrollToLatest(true);
         break;
       }
       case "locale": {
