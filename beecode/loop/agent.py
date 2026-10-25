@@ -1124,7 +1124,7 @@ class AgentLoop:
             return {"role": "user", "content": "You produced no output. Continue the task; if information is missing, ask explicitly."}
 
         # Plan incomplete: if all but the last step still have pending/doing, do not let the model finish yet
-        if not self._plan_nudged and not answer.rstrip().endswith(("？", "?")):
+        if not self._plan_nudged and not answer.rstrip().endswith(("\uff1f", "?")):
             blockers = self._unfinished_plan_steps()
             if blockers:
                 self._plan_nudged = True
