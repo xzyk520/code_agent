@@ -72,6 +72,14 @@ export class ProposalAdapter implements vscode.Disposable {
     this.textCacheBytes = 0;
   }
 
+  /** A write-capable command may have changed any file: pending proposals are no longer safe to apply. */
+  markPendingStale(reason: string): void {
+    for (const [id, dto] of this.byId) {
+      if (dto.status !== "pending") continue;
+      this.byId.set(id, { ...dto, status: "stale", summary: dto.summary ?? reason });
+    }
+  }
+
   /** The file was modified after the proposal was generated → mark it stale; the UI then prompts to "regenerate" */
   markStale(id: string): void {
     const dto = this.byId.get(id);
@@ -152,6 +160,7 @@ export class ProposalAdapter implements vscode.Disposable {
 
     if (!result.applied) return result;
 
+    await this.diff.closeProposal(dto.path);
     this.byId.delete(id);
     this.forgetText(id);
     await decide(id, "accept").catch((err: unknown) => {
@@ -165,7 +174,9 @@ export class ProposalAdapter implements vscode.Disposable {
     id: string,
     decide: (id: string, decision: "accept" | "reject") => Promise<void>,
   ): Promise<void> {
-    if (!this.byId.has(id)) return;
+    const dto = this.byId.get(id);
+    if (!dto) return;
+    await this.diff.closeProposal(dto.path);
     this.byId.delete(id);
     this.forgetText(id);
     await decide(id, "reject").catch((err: unknown) => {

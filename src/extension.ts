@@ -22,6 +22,7 @@ import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
 import { CommandTerminal } from "./commandTerminal";
+import { ApprovalQueue } from "./approvalQueue";
 import { LibraryViewProvider, type LibraryState } from "./panel/libraryViewProvider";
 import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
@@ -183,6 +184,7 @@ class Shell {
   private readonly sessions: SessionStore;
   private libraryView?: LibraryViewProvider;
   private readonly commandTerminal = new CommandTerminal();
+  private readonly approvals = new ApprovalQueue();
   /** Where the previous turn stopped (persisted to disk so a reload can tell whether it can continue) */
   private turn: TurnStatus = "idle";
   private turnDetail: string | undefined;
@@ -781,6 +783,7 @@ class Shell {
 
   /** New session: new id, clear the panel, reopen the context */
   private async newSession(): Promise<void> {
+    await this.diff.closeAll();
     this.killSessionCommandJobs();
     await this.sessions.flush();
     this.sessionId = newSessionId();
@@ -893,6 +896,7 @@ class Shell {
       placeHolder: tr(this.config.language, "选择要恢复的会话", "Select a session to restore"),
     });
     if (!picked || picked.id === this.sessionId) return;
+    await this.diff.closeAll();
 
     this.killSessionCommandJobs();
     await this.sessions.flush();
@@ -1265,7 +1269,11 @@ class Shell {
     }
   }
 
-  private async acceptOne(id: string): Promise<boolean> {
+  private acceptOne(id: string): Promise<boolean> {
+    return this.approvals.run(() => this.acceptOneUnlocked(id));
+  }
+
+  private async acceptOneUnlocked(id: string): Promise<boolean> {
     let core: CoreApi;
     try {
       core = await this.ensureCore();
@@ -1275,7 +1283,10 @@ class Shell {
     }
 
     const dto = this.proposals.get(id);
-    if (!dto) return false;
+    if (!dto || dto.status !== "pending") {
+      this.panel.setHint(tr(this.config.language, "提案已失效，请重新生成。", "This proposal is stale; regenerate it."));
+      return false;
+    }
 
     // ① Permission gate (the user already clicked "accept", but still deny when a deny rule applies / the workspace isn't trusted)
     try {
@@ -1321,8 +1332,12 @@ class Shell {
     return false;
   }
 
-  private async rejectProposals(ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
+  private rejectProposals(ids: string[]): Promise<void> {
+    if (ids.length === 0) return Promise.resolve();
+    return this.approvals.run(() => this.rejectProposalsUnlocked(ids));
+  }
+
+  private async rejectProposalsUnlocked(ids: string[]): Promise<void> {
     const core = await this.ensureCore().catch(() => undefined);
     for (const id of ids) {
       await this.proposals.reject(id, async (proposalId, decision) => {
@@ -1827,9 +1842,16 @@ class Shell {
       if (answer.choice !== "yes") throw deniedError(tr(this.config.language, "用户取消执行", "User cancelled execution"));
     }
 
-    // Command-level checkpoint: snapshot before writes, then show the change list and one-click undo when done
+    // A write-capable command invalidates every pending proposal: accepting one afterwards could
+    // overwrite a file based on a pre-command snapshot (the classic "run old file" race).
     const writesPossible =
       requested === "host" || hostWriteFallback || (!noDocker && requested !== "sandbox-readonly");
+    if (writesPossible) {
+      this.proposals.markPendingStale(
+        tr(this.config.language, "命令可能修改了文件，请重新生成提案", "A command may have changed files; regenerate this proposal"),
+      );
+      this.refreshProposals();
+    }
     const checkpointId = writesPossible
       ? await this.checkpoint
           .create({ label: `command: ${params.command.slice(0, 80)}` })
@@ -3286,7 +3308,7 @@ class Shell {
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));
     this.server.register("secrets.get", (params) => secrets.get(params));
-    this.server.register("confirm.ask", (params, ctx) => this.confirm.ask(params, ctx));
+    this.server.register("confirm.ask", (params, ctx) => this.approvals.run(() => this.confirm.ask(params, ctx)));
 
     // Use info rather than debug: the log channel's default level is info, so debug output gets filtered out
     this.log.info(`Registered RPC methods: ${this.server.listed().join(", ")}`);

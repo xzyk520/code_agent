@@ -26,6 +26,7 @@ const REMEMBERED_STATE_KEY = "beeCode.confirm.remembered";
 /** Id of the appended "remember" pseudo-option */
 const REMEMBER_ITEM_ID = "__remember__";
 const PREVIEW_ITEM_ID = "__preview__";
+const DETAIL_SCHEME = "beecode-confirm-detail";
 
 /** Ids with negative meaning: if one is already there, no default "Cancel" is added */
 const NEGATIVE_IDS = new Set(["no", "cancel", "reject", "abort", "deny", "skip"]);
@@ -46,6 +47,36 @@ export function createSecretAdapter(context: vscode.ExtensionContext, logger: Lo
 }
 
 export function createConfirmAdapter(context: vscode.ExtensionContext, logger: Logger) {
+  const detailText = new Map<string, string>();
+  let detailSeq = 0;
+  const detailRegistration = vscode.workspace.registerTextDocumentContentProvider(DETAIL_SCHEME, {
+    provideTextDocumentContent: (uri) => detailText.get(uri.query) ?? "",
+  });
+  context.subscriptions.push(detailRegistration);
+
+  async function showFullDetails(params: ConfirmAskParams): Promise<void> {
+    const id = `detail-${++detailSeq}`;
+    detailText.set(id, `${params.question}\n\n${params.detail ?? ""}`);
+    const uri = vscode.Uri.from({ scheme: DETAIL_SCHEME, path: "/confirmation.md", query: id });
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+  }
+
+  async function closeFullDetails(): Promise<void> {
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input;
+        if (!(input instanceof vscode.TabInputText) || input.uri.scheme !== DETAIL_SCHEME) continue;
+        try {
+          await vscode.window.tabGroups.close(tab);
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+    detailText.clear();
+  }
+
   return {
     async ask(params: ConfirmAskParams, ctx: InboundRequestContext): Promise<ConfirmAskResult> {
       // 1) If it was "remembered" before, return directly without bothering the user
@@ -60,16 +91,13 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
       const items = buildItems(params);
       let picked = await pick(items, params, ctx);
       while (picked?.id === PREVIEW_ITEM_ID) {
-        const doc = await vscode.workspace.openTextDocument({
-          content: `${params.question}\n\n${params.detail ?? ""}`,
-          language: "markdown",
-        });
-        await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+        await showFullDetails(params);
         picked = await pick(items, params, ctx);
       }
 
       // 2) Cancelled / interrupted by the core: always treat it as "the user did not agree"
       if (!picked) {
+        await closeFullDetails();
         logger.debug(`confirm.ask cancelled: ${params.question}`);
         return { choice: null };
       }
@@ -86,12 +114,14 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
           params,
           ctx,
         );
-        if (!chosen) return { choice: null };
+        if (!chosen) { await closeFullDetails(); return { choice: null }; }
+        await closeFullDetails();
         writeRemembered(context, params.rememberKey, chosen.id);
         logger.debug(`confirm.ask remember: ${params.rememberKey} → ${chosen.id}`);
         return { choice: chosen.id };
       }
 
+      await closeFullDetails();
       logger.debug(`confirm.ask choice: ${picked.id}`);
       return { choice: picked.id };
     },

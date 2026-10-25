@@ -156,6 +156,41 @@ export class DiffAdapter implements vscode.Disposable {
     }
   }
 
+  /** Close the proposal diff for a file (called after accept/reject). */
+  async closeProposal(path: string): Promise<void> {
+    let target: vscode.Uri;
+    try {
+      target = resolveTarget(path);
+    } catch {
+      return;
+    }
+    const id = this.latestIdByPath.get(`proposed:${target.fsPath}`);
+    await this.closeTabs(id ? new Set([id]) : undefined);
+    if (id) this.forget(id);
+  }
+
+  /** Close every diff tab created by this adapter (used when switching sessions). */
+  async closeAll(): Promise<void> {
+    await this.closeTabs(undefined);
+  }
+
+  private async closeTabs(ids: Set<string> | undefined): Promise<void> {
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input;
+        if (!(input instanceof vscode.TabInputTextDiff)) continue;
+        const candidate = input.modified.scheme === SCHEME ? input.modified : input.original.scheme === SCHEME ? input.original : undefined;
+        if (!candidate) continue;
+        if (ids && !ids.has(candidate.query)) continue;
+        try {
+          await vscode.window.tabGroups.close(tab);
+        } catch {
+          /* tab may already be closed */
+        }
+      }
+    }
+  }
+
   /** Idempotent: repeated calls do not unregister the provider a second time */
   dispose(): void {
     if (this.disposed) return;
