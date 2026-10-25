@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Publisher ID 改为 `xzyk`（Marketplace 扩展 ID：`xzyk.bee-code`）
 - 默认界面语言改为 English；`beeCode.ui.language` 可切换中文
 - 内置 Python 由 `beeCode.core.pythonPath = "auto"` 自动选择
 - 提案 diff 自动打开并可在接受/拒绝后自动关闭

@@ -96,7 +96,7 @@ https://marketplace.visualstudio.com/manage
 创建 Publisher。`package.json` 中的：
 
 ```json
-"publisher": "xzyk520"
+"publisher": "xzyk"
 ```
 
 必须与 Publisher ID 一致；否则发布失败。
@@ -122,7 +122,7 @@ Marketplace → Manage
 ## 7. 登录 vsce
 
 ```bash
-npx @vscode/vsce login xzyk520
+npx @vscode/vsce login xzyk
 ```
 
 或使用环境变量：

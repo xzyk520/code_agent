@@ -3,7 +3,7 @@
   "displayName": "Bee Code",
   "description": "BYO-model coding agent for VS Code: three modes, per-file proposal approval, bundled Python, Skills and MCP.",
   "version": "1.0.0",
-  "publisher": "xzyk520",
+  "publisher": "xzyk",
   "license": "MIT",
   "icon": "media/icon-128.png",
   "repository": {
