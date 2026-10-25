@@ -128,7 +128,7 @@ export function readConfig(): ConfigReadResult {
     language: normalizeLocale(reader.str("ui.language", "en")),
     fontSize: reader.num("ui.fontSize", 14, 10, 24),
     coreMode: reader.oneOf("core.mode", "python", ["python", "mock"] as const),
-    pythonPath: reader.str("core.pythonPath", "python"),
+    pythonPath: reader.str("core.pythonPath", "auto"),
     coreRoot: resolvePlaceholders(reader.str("core.coreRoot", ""), firstRoot),
     coreArgs: reader.strArray("core.args", []),
     cwd: resolvePlaceholders(reader.str("core.cwd", "${workspaceFolder}"), firstRoot),

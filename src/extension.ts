@@ -16,7 +16,7 @@ import { registerCommands, undeclaredCommands } from "./commands/register";
 import { API_KEY_ENV, SUBAGENT_API_KEY_ENV, SUMMARY_API_KEY_ENV, defaultInstruction, describeConfig, isWorkspaceEmpty, newSessionId, readConfig, workspaceRoots, type ShellConfig } from "./config";
 import { loadContract, verifyRegistration } from "./contract";
 import type { CoreApi, InboundRequestContext } from "./coreApi";
-import { CoreNotFoundError, describeLaunch, locateCore } from "./coreLocator";
+import { CoreNotFoundError, describeLaunch, locateCore, resolvePython } from "./coreLocator";
 import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
@@ -942,8 +942,10 @@ class Shell {
     });
 
     this.log.info(`Core located: ${describeLaunch(spec)} (PYTHONPATH=${spec.env["PYTHONPATH"] ?? ""})`);
+    const interpreter = resolvePython(this.config.pythonPath, this.context.extensionUri.fsPath);
+    this.log.info(`Core interpreter: ${interpreter.path} (${interpreter.source})`);
     const core = new PythonCore({
-      pythonPath: this.config.pythonPath,
+      pythonPath: interpreter.path,
       args: spec.args,
       cwd: spec.cwd,
       env: spec.env,
@@ -2785,7 +2787,9 @@ class Shell {
 
   /** Probe candidate interpreters, install missing dependencies, and save the selected path. */
   private async setupPython(): Promise<void> {
+    const bundled = resolvePython("auto", this.context.extensionUri.fsPath);
     const candidates: Array<{ file: string; args: string[] }> = [
+      { file: bundled.path, args: [] },
       { file: this.config.pythonPath, args: [] },
       { file: "python3", args: [] },
       { file: "python", args: [] },

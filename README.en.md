@@ -60,6 +60,25 @@ Example `mcp.json`:
 }
 ```
 
+## Bundled Python
+
+A packaged build can ship a Windows Python runtime so users do not install Python:
+
+```powershell
+npm run bundle:python
+```
+
+This creates:
+
+```text
+runtime/win32-x64/python.exe
+runtime/win32-x64/Lib/site-packages/...
+```
+
+With `beeCode.core.pythonPath = "auto"` the extension prefers this runtime, then falls back to system Python. `runtime/` is gitignored but included in the VSIX.
+
+Building the runtime requires network access; end users do not need Python or pip.
+
 ## Quick start
 
 ```bash

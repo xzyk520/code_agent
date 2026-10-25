@@ -51,7 +51,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package --no-dependencies",
-    "publish": "vsce publish --no-dependencies"
+    "publish": "vsce publish --no-dependencies",
+    "bundle:python": "powershell -ExecutionPolicy Bypass -File scripts/bundle-python.ps1"
   },
   "contributes": {
     "commands": [
@@ -293,8 +294,8 @@
         },
         "beeCode.core.pythonPath": {
           "type": "string",
-          "default": "python",
-          "markdownDescription": "Python interpreter path. Leave `python` to use PATH; for Conda use an absolute path."
+          "default": "auto",
+          "markdownDescription": "Python interpreter. `auto` prefers the bundled runtime under `runtime/<platform>-<arch>/`, then falls back to PATH. Use an absolute path to force a specific interpreter."
         },
         "beeCode.core.coreRoot": {
           "type": "string",

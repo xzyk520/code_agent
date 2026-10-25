@@ -109,3 +109,36 @@ function buildSpec(
 export function describeLaunch(spec: CoreLaunchSpec): string {
   return `${path.basename(spec.coreRoot)} [${spec.source}] ${spec.args.join(" ")}`;
 }
+
+
+export interface PythonResolution {
+  path: string;
+  source: "configured" | "bundled" | "path";
+}
+
+/**
+ * Resolve the interpreter. A bundled runtime under `runtime/<platform>-<arch>/` wins when the
+ * setting is auto (or the legacy `python`/`python3` default), so packaged builds need no system Python.
+ */
+export function resolvePython(configured: string, extensionPath: string): PythonResolution {
+  const value = (configured || "").trim();
+  const bundled = bundledPython(extensionPath);
+  const isAuto = value.length === 0 || value === "auto" || value === "python" || value === "python3";
+  if (isAuto && bundled) return { path: bundled, source: "bundled" };
+  if (!isAuto) return { path: value, source: "configured" };
+  return { path: process.platform === "win32" ? "python" : "python3", source: "path" };
+}
+
+function bundledPython(extensionPath: string): string | undefined {
+  const platform = `${process.platform}-${process.arch}`;
+  const candidates = [
+    path.join(extensionPath, "runtime", platform, "python.exe"),
+    path.join(extensionPath, "runtime", platform, "bin", "python3"),
+    path.join(extensionPath, "runtime", platform, "python3"),
+    path.join(extensionPath, "runtime", "python", "bin", "python3"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}

@@ -60,6 +60,25 @@ Skill 会在系统提示词中显示索引，模型按需调用 `read_skill` 读
 }
 ```
 
+## 内置 Python
+
+发布版可以内置 Windows Python 运行时，用户无需安装 Python：
+
+```powershell
+npm run bundle:python
+```
+
+生成：
+
+```text
+runtime/win32-x64/python.exe
+runtime/win32-x64/Lib/site-packages/...
+```
+
+扩展到 `beeCode.core.pythonPath = "auto"` 时会优先使用它；找不到才回退到系统 `python`。`runtime/` 已加入 `.gitignore`，但会被打进 VSIX。
+
+内置运行时要求构建机有网络；普通用户安装 VSIX 后不需要 Python 或 pip。
+
 ## 快速开始
 
 ```bash
