@@ -52,7 +52,11 @@
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies",
-    "bundle:python": "powershell -ExecutionPolicy Bypass -File scripts/bundle-python.ps1"
+    "bundle:python": "node scripts/bundle-python.mjs",
+    "package:win": "node scripts/package-platform.mjs win32-x64",
+    "package:mac": "node scripts/package-platform.mjs darwin-arm64",
+    "package:linux": "node scripts/package-platform.mjs linux-x64",
+    "package:platform": "node scripts/package-platform.mjs"
   },
   "contributes": {
     "commands": [

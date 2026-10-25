@@ -5,6 +5,7 @@ dist/
 out/
 webview/dist/
 *.vsix
+dist-vsix/
 *.tsbuildinfo
 
 # 测试与覆盖率

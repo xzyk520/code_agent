@@ -1,0 +1,57 @@
+name: Build platform VSIX
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: win32-x64
+          - name: macOS arm64
+            os: macos-14
+            target: darwin-arm64
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build bundled Python
+        run: node scripts/bundle-python.mjs
+        env:
+          BEE_RUNTIME_TARGET: ${{ matrix.target }}
+
+      - name: Typecheck and build extension
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Package VSIX
+        run: node scripts/package-platform.mjs ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bee-code-${{ matrix.target }}
+          path: dist-vsix/*.vsix
+          if-no-files-found: error

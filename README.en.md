@@ -68,16 +68,33 @@ A packaged build can ship a Windows Python runtime so users do not install Pytho
 npm run bundle:python
 ```
 
-This creates:
+Windows uses the official embeddable distribution; macOS/Linux use python-build-standalone:
 
 ```text
 runtime/win32-x64/python.exe
-runtime/win32-x64/Lib/site-packages/...
+runtime/darwin-arm64/bin/python3
+runtime/linux-x64/bin/python3
 ```
 
-With `beeCode.core.pythonPath = "auto"` the extension prefers this runtime, then falls back to system Python. `runtime/` is gitignored but included in the VSIX.
+Package per platform:
 
-Building the runtime requires network access; end users do not need Python or pip.
+```bash
+npm run package:win
+npm run package:mac
+npm run package:linux
+```
+
+Outputs:
+
+```text
+dist-vsix/bee-code-0.1.0-win32-x64.vsix
+dist-vsix/bee-code-0.1.0-darwin-arm64.vsix
+dist-vsix/bee-code-0.1.0-linux-x64.vsix
+```
+
+Each VSIX contains only its platform runtime. The `release-vsix.yml` GitHub Actions workflow builds all three on their native runners. `runtime/` and `dist-vsix/` are gitignored but included in the VSIX.
+
+With `beeCode.core.pythonPath = "auto"` the extension prefers the bundled runtime, then falls back to system Python. Building the runtime requires network access; end users do not need Python or pip.
 
 ## Quick start
 

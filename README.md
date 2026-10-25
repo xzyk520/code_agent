@@ -68,16 +68,33 @@ Skill 会在系统提示词中显示索引，模型按需调用 `read_skill` 读
 npm run bundle:python
 ```
 
-生成：
+Windows 使用官方 embeddable；macOS/Linux 使用 python-build-standalone：
 
 ```text
 runtime/win32-x64/python.exe
-runtime/win32-x64/Lib/site-packages/...
+runtime/darwin-arm64/bin/python3
+runtime/linux-x64/bin/python3
 ```
 
-扩展到 `beeCode.core.pythonPath = "auto"` 时会优先使用它；找不到才回退到系统 `python`。`runtime/` 已加入 `.gitignore`，但会被打进 VSIX。
+按平台打包：
 
-内置运行时要求构建机有网络；普通用户安装 VSIX 后不需要 Python 或 pip。
+```bash
+npm run package:win
+npm run package:mac
+npm run package:linux
+```
+
+输出：
+
+```text
+dist-vsix/bee-code-0.1.0-win32-x64.vsix
+dist-vsix/bee-code-0.1.0-darwin-arm64.vsix
+dist-vsix/bee-code-0.1.0-linux-x64.vsix
+```
+
+每个 VSIX 只包含对应平台的 runtime。GitHub Actions 的 `release-vsix.yml` 会自动在三个平台分别构建。`runtime/` 和 `dist-vsix/` 不提交 Git，但会被打进 VSIX。
+
+扩展到 `beeCode.core.pythonPath = "auto"` 时会优先使用内置运行时；找不到才回退到系统 `python`。构建机需要网络；普通用户安装 VSIX 后不需要 Python 或 pip。
 
 ## 快速开始
 
