@@ -1,3 +1,5 @@
+[English](reference.en.md) | 中文
+
 # Bee Code 参考资料
 
 > 调研时查阅的官方文档、协议规范与工业实践来源。

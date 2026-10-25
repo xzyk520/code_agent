@@ -1,3 +1,5 @@
+[English](development.en.md) | 中文
+
 # Bee Code 开发与发布
 
 > 目录结构、路线图、构建流程、Git 工作流与许可证说明。

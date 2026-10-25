@@ -1,3 +1,5 @@
+[English](README.en.md) | 中文
+
 <p align="center"><img src="media/icon-128.png" width="88" height="88" alt="Bee Code 图标"></p>
 
 # Bee Code
@@ -19,6 +21,10 @@
 | 想改一段代码要先复制粘贴到聊天框 | 选中即问：`Ctrl+Alt+K/B/D` 直接进 Chat / Builder / Debugger |
 
 **没有后端、没有中转、没有遥测**：API Key 只存 VS Code `SecretStorage`（OS 凭据库），请求直达你自己填的 `base_url`。
+
+## 语言
+
+用设置 `beeCode.ui.language` 切换面板、提示、通知和日志的语言：默认 `zh`，可选 `en`。给模型看的提示词和工具描述始终是英文；模型回复跟随用户提问的语言。
 
 ## 架构一览
 

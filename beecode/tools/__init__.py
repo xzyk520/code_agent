@@ -96,98 +96,98 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
     specs = [
         ToolSpec(
             "read_file",
-            "读取工作区内的文件（可指定行范围）。返回 text / totalLines / 行号范围。",
+            "Read a workspace file, optionally a line range. Returns text / totalLines / line range.",
             _obj(
                 {
-                    "path": _str("工作区相对路径，例如 src/index.ts"),
-                    "start_line": _int("起始行（1-based，可选）"),
-                    "end_line": _int("结束行（1-based，可选）"),
+                    "path": _str("Workspace-relative path, e.g. src/index.ts"),
+                    "start_line": _int("First line (1-based, optional)"),
+                    "end_line": _int("Last line (1-based, optional)"),
                 },
                 ["path"],
             ),
         ),
         ToolSpec(
             "list_files",
-            "列出工作区文件（已过滤 .gitignore / node_modules）。",
-            _obj({"glob": _str('可选 glob，例如 "src/**/*.ts"'), "max_results": _int("最多返回多少个（默认 500）")}),
+            "List workspace files (honors .gitignore and excludes node_modules).",
+            _obj({"glob": _str('Optional glob, e.g. "src/**/*.ts"'), "max_results": _int("Maximum results (default 500)")}),
         ),
         ToolSpec(
             "search_code",
-            "按关键词或正则搜索代码。filesOnly=true 时只返回文件与命中次数（省 token）。",
+            "Search code by keyword or regex. filesOnly=true returns only files and match counts to save tokens.",
             _obj(
                 {
-                    "query": _str("搜索内容"),
-                    "regex": _bool("是否按正则解释"),
-                    "glob": _str("限定文件范围"),
-                    "files_only": _bool("只返回文件列表（召回阶段用）"),
-                    "max_results": _int("最多多少条（默认 50）"),
+                    "query": _str("Search query"),
+                    "regex": _bool("Interpret query as a regular expression"),
+                    "glob": _str("Restrict to matching files"),
+                    "files_only": _bool("Return only the file list (recall phase)"),
+                    "max_results": _int("Maximum hits (default 50)"),
                 },
                 ["query"],
             ),
         ),
         ToolSpec(
             "file_outline",
-            "列出某个文件里的函数/类及其行号范围（不读内容）。",
-            _obj({"path": _str("文件路径")}, ["path"]),
+            "List functions/classes and their line ranges in a file without reading its contents.",
+            _obj({"path": _str("File path")}, ["path"]),
         ),
         ToolSpec(
             "find_symbol",
-            "在全工作区按名字查找符号定义。返回 path/name/kind/行范围。",
-            _obj({"query": _str("符号名（支持部分匹配）"), "max_results": _int("最多多少条（默认 30）")}, ["query"]),
+            "Find symbol definitions by name across the workspace. Returns path/name/kind/line range.",
+            _obj({"query": _str("Symbol name (partial match supported)"), "max_results": _int("Maximum results (default 30)")}, ["query"]),
         ),
         ToolSpec(
             "find_references",
-            "查找某个符号被引用的位置。",
+            "Find references to a symbol.",
             _obj(
-                {"path": _str("文件路径"), "symbol": _str("符号名（如 parseConfig 或 ConfigParser.parse）")},
+                {"path": _str("File path"), "symbol": _str("Symbol name (e.g. parseConfig or ConfigParser.parse)")},
                 ["path", "symbol"],
             ),
         ),
         ToolSpec(
             "get_diagnostics",
-            "读取 LSP 诊断（编译错误/告警）。诊断为空不代表代码没问题。",
-            _obj({"path": _str("可选：只看这个文件")}),
+            "Read LSP diagnostics (compile errors and warnings). Empty diagnostics do not prove the code is correct.",
+            _obj({"path": _str("Optional: only this file")}),
         ),
         ToolSpec(
             "propose_edit",
-            "提交一份文件修改提案（用户逐文件审批后才落盘）。content 是**修改后的完整文件内容**。",
+            "Submit a file-change proposal (the user approves each file before it is written). `content` is the complete new file.",
             _obj(
                 {
-                    "path": _str("工作区相对路径"),
-                    "content": _str("修改后的完整文件内容"),
-                    "summary": _str("一句话说明改了什么"),
+                    "path": _str("Workspace-relative path"),
+                    "content": _str("Complete new file content"),
+                    "summary": _str("One-line summary of the change"),
                 },
                 ["path", "content"],
             ),
         ),
         ToolSpec(
             "edit_file",
-            "局部修改已有文件：只提供 old_string/new_string，不重写整个文件。"
-            "必须先 read_file 读文件；old_string 必须唯一匹配，除非 replace_all=true。"
-            "修改会先变成提案，用户接受后才落盘。新建文件或全量重写用 propose_edit。",
+            "Edit an existing file with old_string/new_string instead of rewriting it. "
+            "Read the file first with read_file; old_string must match uniquely unless replace_all=true. "
+            "The edit becomes a proposal and is written only after user approval. Use propose_edit for new files or full rewrites.",
             _obj(
                 {
-                    "path": _str("工作区相对路径"),
-                    "old_string": _str("要替换的原文（带足够上下文，默认要求唯一）"),
-                    "new_string": _str("替换后的文本；可以为空表示删除"),
-                    "replace_all": _bool("是否替换所有匹配（默认 false）"),
-                    "summary": _str("一句话说明改了什么（可选）"),
+                    "path": _str("Workspace-relative path"),
+                    "old_string": _str("Exact text to replace (include enough context for a unique match)"),
+                    "new_string": _str("Replacement text; may be empty to delete"),
+                    "replace_all": _bool("Replace every match (default false)"),
+                    "summary": _str("Optional one-line summary"),
                 },
                 ["path", "old_string", "new_string"],
             ),
         ),
         ToolSpec(
             "update_plan",
-            "更新任务计划（大任务先列 3-6 步，之后逐项更新状态）。面板会显示成清单。"
-"收尾前务必再把最后一步（总结）标为 done。",
+            "Update the task plan. For a large task, start with 3-6 steps and update each status. "
+            "The panel renders it as a checklist; mark the final summary step done before the final answer.",
             _obj(
                 {
                     "steps": {
                         "type": "array",
-                        "description": "完整步骤列表（每次传全量，用来覆盖状态）",
+                        "description": "Complete step list; send the full list each time",
                         "items": _obj(
                             {
-                                "text": _str("步骤描述"),
+                                "text": _str("Step description"),
                                 "status": {"type": "string", "enum": ["pending", "doing", "done"]},
                             },
                             ["text"],
@@ -199,78 +199,78 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "diagram",
-            "把复杂代码结构画成图（Mermaid）。只在文字难以说清时使用。\n"
-            "kind: flowchart（控制流/架构）| sequence（调用时序）| class（类型关系）| state（状态机）| er（数据模型）。\n"
-            "source 传完整 Mermaid 源码，不要带 ```mermaid 围栏；节点 ≤ 20 个，标签 ≤ 40 字符；"
-            "不要写颜色/主题/click/外链。\n"
-            "图会渲染在回答里，图后必须给 3–5 行文字结论，不要只丢一张图。\n"
-            "如果语法没把握或渲染失败，改用 ASCII/Unicode 图，并在正文说明。",
+            "Render a complex code structure as a Mermaid diagram. Use only when prose is insufficient.\n"
+            "kind: flowchart | sequence | class | state | er.\n"
+            "Pass complete Mermaid source without a ```mermaid fence; at most 20 nodes and 40 characters per label; "
+            "do not use colors, themes, click handlers, or external links.\n"
+            "The diagram is rendered in the answer; follow it with 3-5 lines of text, not just the diagram.\n"
+            "If the syntax is uncertain or rendering fails, use an ASCII/Unicode diagram and explain it in prose.",
             _obj(
                 {
                     "kind": {"type": "string", "enum": ["flowchart", "sequence", "class", "state", "er"]},
-                    "source": _str("完整 Mermaid 源码（不含围栏）"),
-                    "title": _str("可选：图标题"),
+                    "source": _str("Complete Mermaid source (no fence)"),
+                    "title": _str("Optional diagram title"),
                 },
                 ["kind", "source"],
             ),
         ),
         ToolSpec(
             "spawn_subagent",
-            "派一个只读子代理去探索代码（独立上下文，只回传结论）。适合大范围搜索/阅读，"
-            "避免污染主对话。子代理不能改文件、不能派孙代理。",
+            "Spawn a read-only subagent to explore code in an independent context and return only its conclusion. "
+            "Useful for broad search/reading without polluting the main conversation. Subagents cannot edit files or spawn further subagents.",
             _obj(
                 {
-                    "task": _str("给子代理的任务，写清楚要找什么、要回答什么"),
-                    "max_steps": _int("子代理最多几步（默认 8，上限 12）"),
+                    "task": _str("Task for the subagent: what to find and what to answer"),
+                    "max_steps": _int("Maximum steps for the subagent (default 8, max 12)"),
                 },
                 ["task"],
             ),
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（必须用户批准）。命令不再有硬性执行时限：先等待 yield_ms（默认 120s）；"
-            "如果还没结束会返回 status=running、jobId、已运行时间和 progress。"
-            "此时用 command_wait 继续等待并获取新输出；由你根据进度决定继续等还是 command_terminate 换方案。"
-            "不要重新执行同一条命令。按最小权限逐级申请：默认 sandbox-readonly；需要写工作区才用 sandbox；"
-            "需要下载依赖/访问网络才用 sandbox-network；只有必须真实系统才用 host。每升一级都要 justification。",
+            "Run a command in the workspace (user approval required). There is no hard execution limit: the first call waits yield_ms (default 120s). "
+            "If the command is still running, the result has status=running, jobId, elapsed time, and progress; it has moved to the background. "
+            "Use command_wait to poll with your chosen interval, or command_terminate to stop it and change approach. Do not re-run the same command. "
+            "Request the least privilege: sandbox-readonly by default; sandbox to write the workspace; sandbox-network for downloads/network; host only when the real system is unavoidable. "
+            "Every elevation needs justification.",
             _obj(
                 {
-                    "command": _str("要执行的命令"),
-                    "cwd": _str("工作区相对目录（可选）"),
-                    "yield_ms": _int("前台最多等多少毫秒；默认 120000，上限 300000。超过后转入后台，不是杀进程超时"),
+                    "command": _str("Command to run"),
+                    "cwd": _str("Workspace-relative directory (optional)"),
+                    "yield_ms": _int("Foreground wait in milliseconds (default 120000, max 300000); exceeding it moves the job to the background, it does not kill it"),
                     "sandbox": {
                         "type": "string",
                         "enum": ["sandbox-readonly", "sandbox", "sandbox-network", "host"],
-                        "description": "权限从低到高：sandbox-readonly（默认，Docker 只读）< sandbox（Docker 工作区可写）< sandbox-network（Docker + 网络）< host（真实系统）。每一级升级都需用户审批和 justification，按需逐级申请。",
+                        "description": "Least-to-most privilege: sandbox-readonly (default, Docker read-only) < sandbox (workspace writable) < sandbox-network (network) < host (real system). Each elevation needs approval and justification.",
                     },
-                    "justification": _str("申请 sandbox 及以上权限时的理由（会展示给用户审批）"),
+                    "justification": _str("Why the extra permission is needed; shown to the user for approval"),
                 },
                 ["command"],
             ),
         ),
         ToolSpec(
             "command_wait",
-            "按你选择的间隔等待后台任务。返回自上次读取以来的全部新输出；没有新输出时返回 noNewOutput。"
-            "如果 status=exited 就是最终结果；如果仍是 running，由你判断继续等待还是 command_terminate。",
+            "Poll a background command with your chosen interval. Returns all new output since the previous read, or noNewOutput=true. "
+            "If status=exited it is the final result; otherwise decide whether to keep waiting or command_terminate.",
             _obj(
                 {
-                    "job_id": _str("run_command 返回的 jobId"),
-                    "yield_ms": _int("本次轮询间隔（毫秒，默认 120000，上限 300000）；由你决定"),
+                    "job_id": _str("jobId returned by run_command"),
+                    "yield_ms": _int("Polling interval in milliseconds (default 120000, max 300000); you choose it"),
                 },
                 ["job_id"],
             ),
         ),
         ToolSpec(
             "command_list",
-            "列出当前会话的后台任务：job_id、命令、运行中/已结束、已运行时间、最近输出时间。"
-            "当你忘记了 job_id 或想确认还有哪些任务在跑时使用。",
+            "List background jobs for this session: job_id, command, running/exited, elapsed time, and time since last output. "
+            "Use it when you lost a job_id or want to confirm what is still running.",
             _obj({}),
         ),
         ToolSpec(
             "command_terminate",
-            "终止一个仍在运行的 run_command 任务，返回已收集的输出和最终状态。"
-            "用于进度停滞、方案错误或不再需要结果时。",
-            _obj({"job_id": _str("run_command 返回的 jobId")}, ["job_id"]),
+            "Stop a running run_command job and return the output collected so far plus the final status. "
+            "Use it when progress stalls, the approach is wrong, or the result is no longer needed.",
+            _obj({"job_id": _str("jobId returned by run_command")}, ["job_id"]),
         ),
     ]
 

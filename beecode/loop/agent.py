@@ -77,10 +77,10 @@ PARALLEL_READONLY = frozenset({
 })
 
 _SUBAGENT_PREFIX = (
-    "你是一个只读探索子代理，运行在沙箱化的工具环境中。"
-    "只能用只读工具（读文件/搜索/符号/诊断）；不能修改文件，也不能再派生子代理。"
-    "回答要求：先给结论，再给证据（`path:line` 引用）；不要复述大段代码；"
-    "找不到就明确说找不到，不要编造。"
+    "You are a read-only exploration subagent in a sandboxed tool environment. "
+    "Use only read-only tools (read/search/symbols/diagnostics); you cannot edit files or spawn subagents. "
+    "Answer with a conclusion first, then evidence (`path:line` references). Do not paste large code blocks; "
+    "if you cannot find something, say so explicitly instead of inventing it."
 )
 
 
@@ -284,14 +284,14 @@ class AgentLoop:
             start = focus.get("startLine")
             end = focus.get("endLine")
             symbol = focus.get("symbol")
-            note = f"用户当前光标在 {path}:{line}"
+            note = f"The user cursor is at {path}:{line}"
             if start and end:
                 note += f"（已附上第 {start}-{end} 行"
                 note += f"，函数 {symbol}）" if symbol else "）"
             messages.append(
                 {
                     "role": "system",
-                    "content": note + "。优先基于附件回答；信息不足时再用 search_code / read_file 扩大范围。",
+                    "content": note + " Prioritize the attached context; use search_code / read_file only if more information is needed.",
                 }
             )
 
@@ -339,8 +339,8 @@ class AgentLoop:
                 messages.append(
                     {
                         "role": "system",
-                        "content": "上一轮留下的计划（未全部完成）：\n" + "\n".join(lines)
-                        + "\n请接着做未完成的步骤；如果计划已不适用，用 update_plan 重写。",
+                        "content": "Plan left by the previous turn (not fully completed):\n" + "\n".join(lines)
+                        + "\nContinue the unfinished steps; if the plan no longer applies, rewrite it with update_plan.",
                     }
                 )
 
@@ -350,11 +350,11 @@ class AgentLoop:
                 {
                     "role": "system",
                     "content": (
-                        f"用户延续上一轮任务：{intent.intent or text[:120]}。\n"
-                        f"- 任务规模：{intent.scale}\n"
-                        f"- 模式：{intent.mode}\n"
-                        f"- 是否需要产出提案：{'是' if intent.needs_proposal else '否'}\n"
-                        "请在此基础上继续，不要重新开始。"
+                        f"The user is continuing the previous task: {intent.intent or text[:120]}.\n"
+                        f"- Scale: {intent.scale}\n"
+                        f"- Mode: {intent.mode}\n"
+                        f"- Needs a proposal: {'yes' if intent.needs_proposal else 'no'}\n"
+                        "Continue from here; do not restart."
                     ),
                 }
             )
@@ -368,17 +368,17 @@ class AgentLoop:
             and effective_mode != "chat"
         ):
             template = [
-                {"text": "阅读相关文件，确认改动范围", "status": "doing"},
-                {"text": "实现改动（propose_edit）", "status": "pending"},
-                {"text": "运行测试 / 构建验证", "status": "pending"},
-                {"text": "总结改动与未完成项", "status": "pending"},
+                {"text": "Read relevant files and confirm the change scope", "status": "doing"},
+                {"text": "Implement the change (propose_edit)", "status": "pending"},
+                {"text": "Run tests / build verification", "status": "pending"},
+                {"text": "Summarize changes and remaining work", "status": "pending"},
             ]
             self._emit_plan(session, template)
             messages.append(
                 {
                     "role": "system",
-                    "content": "已预置一份计划骨架（读 → 改 → 测 → 总结）。如不适用，用 update_plan 重写；"
-                    "每完成一步请更新状态，收尾前把最后一步（总结）也标为 done。",
+                    "content": "A plan skeleton was seeded (read → edit → test → summary). If it does not fit, rewrite it with update_plan; "
+                    "update each step as you complete it, and mark the final summary step done before finishing.",
                 }
             )
 
@@ -398,9 +398,9 @@ class AgentLoop:
                 {
                     "role": "system",
                     "content": (
-                        "这是一项较大的任务。开始动手前先调用 update_plan 列出 3-6 个步骤，"
-                        "之后每完成一步更新状态；步骤要具体到文件或动作。"
-                        "收尾前把最后一步（总结）标为 done。"
+                        "This is a larger task. Before starting, call update_plan with 3-6 concrete steps, "
+                        "update status after each step, and make each step name a file or action. "
+                        "Mark the final summary step done before finishing."
                     ),
                 }
             )
@@ -417,7 +417,7 @@ class AgentLoop:
             except StreamInterrupted as exc:
                 if interruptions >= 1:
                     raise ModelError(
-                        "模型连接在输出中途连续中断，已保留部分内容；请检查网络后重试。"
+                        "The model connection was interrupted twice mid-output; partial content was kept. Check the network and retry."
                     ) from exc
                 interruptions += 1
                 self._log(f"模型输出中断，保留部分内容：{exc}")
@@ -440,9 +440,9 @@ class AgentLoop:
                     {
                         "role": "system",
                         "content": (
-                            "上一次模型输出在传输中断前只完成了一部分；已保留内容。"
-                            "不要重复任何已经执行过的工具调用；基于已有内容继续回答。"
-                            "如果无法安全继续，请明确说明需要用户重试。"
+                            "The previous model output was only partially delivered before the connection dropped; the partial content was kept. "
+                            "Do not repeat any tool calls that already ran; continue from the available content. "
+                            "If you cannot safely continue, say that the user should retry."
                         ),
                     }
                 )
@@ -486,7 +486,7 @@ class AgentLoop:
                             _tool_message(
                                 extra,
                                 {
-                                    "error": f"本批工具调用超过 {max_batch} 个，已跳过这条；请拆成更小的批次。",
+                                    "error": f"This batch had more than {max_batch} tool calls; this one was skipped. Split the work into smaller batches.",
                                     "kind": "batch_limit",
                                 },
                             )
@@ -516,7 +516,7 @@ class AgentLoop:
                         result = (
                             raw
                             if isinstance(raw, dict)
-                            else {"error": f"工具并发执行失败：{type(raw).__name__}: {raw}", "kind": "error"}
+                            else {"error": f"Tool concurrency failed: {type(raw).__name__}: {raw}", "kind": "error"}
                         )
                         self._record_tool_result(session, call, result, stats, recent_results, messages)
                     continue
@@ -526,17 +526,17 @@ class AgentLoop:
                     repeat[key] += 1
 
                     if repeat[key] > self._config.repeat_limit:
-                        self._emit_tool(session, call, "error", "重复调用，已阻断")
+                        self._emit_tool(session, call, "error", "Duplicate call blocked")
                         raise ModelError(
-                            f"检测到重复调用：{call.name} 连续 {repeat[key]} 次相同参数，已终止这一轮。"
-                            "请调整策略（换个工具或缩小范围）后重试。"
+                            f"Duplicate call detected: {call.name} used identical arguments {repeat[key]} times; the turn was stopped. "
+                            "Change approach (use another tool or narrow the scope) and retry."
                         )
                     if repeat[key] == self._config.repeat_limit:
                         warning = (
-                            f"你已经用相同参数调用了 {call.name} {repeat[key]} 次，结果不会变。"
-                            "请换一种方式（扩大/缩小范围、换工具），或直接总结当前信息。"
+                            f"You called {call.name} with identical arguments {repeat[key]} times; the result will not change. "
+                            "Use a different approach (wider/narrower scope, another tool) or summarize what you have."
                         )
-                        self._emit_tool(session, call, "error", "重复调用，已跳过")
+                        self._emit_tool(session, call, "error", "Duplicate call skipped")
                         ctx.log(warning)
                         messages.append(_tool_message(call, {"error": warning, "kind": "repeat"}))
                         continue
@@ -554,7 +554,7 @@ class AgentLoop:
                     client,
                     session,
                     stats,
-                    f"本轮预算用尽（{budget_hit}）。请不要再调用工具，总结已完成的部分、未完成的部分与建议的下一步。",
+                    f"The turn budget is exhausted ({budget_hit}). Do not call more tools; summarize what is done, what remains, and the recommended next step.",
                 )
 
             # 提前收工检测：用户要求改代码，但整轮没有产出任何提案
@@ -562,17 +562,17 @@ class AgentLoop:
                 nudges += 1
                 self._emit("ui.tool", {
                     "sessionId": session.id, "name": "guard", "status": "error",
-                    "summary": "本轮没有提交任何文件修改，要求模型继续",
+                    "summary": "No file change was submitted; asking the model to continue",
                 })
                 messages.append({
                     "role": "user",
-                    "content": "你还没有提交任何文件修改。如果任务需要改代码，请用 edit_file 做局部修改，或用 propose_edit 提交完整文件；"
-                               "如果不需要改，请明确说明原因。",
+                    "content": "You have not submitted any file change. If code must change, use edit_file for a targeted edit or propose_edit for a complete file; "
+                               "if no change is needed, explain why.",
                 })
                 streamed = await stream_model(round_index=stats.steps)
                 if streamed is None:
                     final_text = ""
-                    raise ModelError("模型在收尾阶段输出中断；请检查网络后重试。")
+                    raise ModelError("The model stream was interrupted while finishing; check the network and retry.")
                 answer, calls, _usage, reasoning = streamed
                 if calls:
                     assistant_msg = _assistant_tool_message(answer, calls)
@@ -586,7 +586,7 @@ class AgentLoop:
                         messages.append(_tool_message(call, result))
                     streamed = await stream_model(round_index=stats.steps)
                     if streamed is None:
-                        raise ModelError("模型在收尾阶段输出中断；请检查网络后重试。")
+                        raise ModelError("The model stream was interrupted while finishing; check the network and retry.")
                     answer, _calls, _usage, _reasoning = streamed
                 final_text = answer
         finally:
@@ -713,7 +713,7 @@ class AgentLoop:
                     [
                         {
                             "role": "system",
-                            "content": "把下面的 agent 执行过程压缩成不超过 200 字的中文要点：保留结论、涉及的文件、失败原因。只输出要点。",
+                            "content": "Summarize the agent execution below in at most 200 words. Keep conclusions, files touched, and failure causes. Output only the summary.",
                         },
                         {"role": "user", "content": text},
                     ],
@@ -732,8 +732,8 @@ class AgentLoop:
         if not summary.strip():
             return
         job_lines = _running_job_lines(chunk)
-        job_note = ("\n【仍在运行的后台任务】\n" + "\n".join(job_lines)) if job_lines else ""
-        note = {"role": "system", "content": f"【轮内压缩摘要】{summary.strip()[:600]}{job_note}"}
+        job_note = ("\n[Running background jobs]\n" + "\n".join(job_lines)) if job_lines else ""
+        note = {"role": "system", "content": f"[In-turn summary] {summary.strip()[:600]}{job_note}"}
         messages[1:last_user] = [note]
         self._compact_log(session, f"模型摘要替代了 {len(chunk)} 条早期消息")
 
@@ -837,7 +837,7 @@ class AgentLoop:
         context_compactions = 0
 
         def timeout_error(reason: str) -> ModelError:
-            return ModelError(f"主agent模型{reason}超时，已强制停止本轮。", code="TIMEOUT")
+            return ModelError(f"Main agent model timeout ({reason}); the turn was stopped.", code="TIMEOUT")
 
         while True:
             parts: list[str] = []
@@ -855,7 +855,7 @@ class AgentLoop:
                     now = asyncio.get_running_loop().time()
                     model_left = self._turn_time_budget - (now - started)
                     if model_left <= 0:
-                        raise timeout_error("响应")
+                        raise timeout_error("response")
                     idle_budget = self._config.first_token_seconds if first else self._config.idle_seconds
                     model_bound = model_left <= idle_budget
                     wait = min(idle_budget, model_left)
@@ -866,19 +866,19 @@ class AgentLoop:
                     except asyncio.TimeoutError as exc:
                         now = asyncio.get_running_loop().time()
                         if model_bound or now - started >= self._turn_time_budget:
-                            raise timeout_error("响应") from exc
+                            raise timeout_error("response") from exc
                         # 已经产生部分输出：不重放，交给上层保留/续写
                         if parts or reasoning_parts or calls:
                             raise StreamInterrupted(
-                                "模型流在输出中途超时",
+                                "Model stream timed out mid-output",
                                 "".join(parts),
                                 "".join(reasoning_parts),
                                 calls,
                             ) from exc
                         if attempt + 1 < MODEL_RETRY_MAX_ATTEMPTS:
-                            retry_reason = "首 token 超时"
+                            retry_reason = "First-token timeout"
                             break
-                        raise timeout_error("首 token") from exc
+                        raise timeout_error("first token") from exc
 
                     first = False
                     if delta.usage:
@@ -911,7 +911,7 @@ class AgentLoop:
                         raise
                     except Exception as compact_exc:  # noqa: BLE001 - 压缩失败仍原样重试一次
                         self._log(f"强制压缩失败：{compact_exc}")
-                    retry_reason = "上下文溢出，已强制压缩"
+                    retry_reason = "Context overflow; forced compaction"
                     retry_after = None
                 else:
                     if code not in RETRYABLE_MODEL_CODES:
@@ -942,7 +942,7 @@ class AgentLoop:
             delay *= 1.0 + random.uniform(-0.1, 0.1)
             remaining = self._turn_time_budget - (asyncio.get_running_loop().time() - started)
             if delay >= remaining:
-                raise timeout_error("响应")
+                raise timeout_error("response")
             retry_msg = (
                 f"模型请求失败（{retry_reason}），{delay:.1f}s 后重试 "
                 f"({attempt + 1}/{MODEL_RETRY_MAX_ATTEMPTS})"
@@ -1003,8 +1003,8 @@ class AgentLoop:
 
         digest = _digest(result)
         if digest in recent_results and len(recent_results) == recent_results.maxlen:
-            warning = "连续多次工具结果完全相同，继续调用没有意义。请换策略或总结。"
-            self._emit_tool(session, call, "error", "结果无变化")
+            warning = "Several tool results were identical; calling again cannot help. Change approach or summarize."
+            self._emit_tool(session, call, "error", "Result unchanged")
             result = {"error": warning, "kind": "no_progress"}
         recent_results.append(digest)
         messages.append(_tool_message(call, result))
@@ -1018,7 +1018,7 @@ class AgentLoop:
     ) -> dict[str, Any]:
         tool = self._tools.get(call.name)
         if tool is None:
-            message = f"未知工具：{call.name}（可用：{', '.join(self._tools)}）"
+            message = f"Unknown tool: {call.name} (available: {', '.join(self._tools)})"
             self._emit_tool(session, call, "error", message)
             return {"error": message, "kind": "unknown_tool"}
 
@@ -1027,8 +1027,8 @@ class AgentLoop:
             if not isinstance(args, dict):
                 raise ValueError("参数必须是 JSON 对象")
         except (json.JSONDecodeError, ValueError) as exc:
-            message = f"参数解析失败：{exc}。请检查 JSON 是否合法。"
-            self._emit_tool(session, call, "error", "参数不合法")
+            message = f"Failed to parse arguments: {exc}. Check that the JSON is valid."
+            self._emit_tool(session, call, "error", "Invalid arguments")
             return {"error": message, "kind": "bad_arguments"}
 
         self._emit_tool(
@@ -1076,10 +1076,10 @@ class AgentLoop:
             if stats is not None:
                 stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
             message = (
-                f"工具 {call.name} 超时（{timeout_s:g}s）。"
-                "请缩小范围或换一种方式，不要用相同参数重试。"
+                f"Tool {call.name} timed out ({timeout_s:g}s). "
+                "Narrow the scope or use another approach; do not retry with identical arguments."
             )
-            self._emit_tool(session, call, "error", "超时")
+            self._emit_tool(session, call, "error", "Timed out")
             ctx.log(message)
             return {"error": message, "kind": "timeout"}
         except asyncio.CancelledError:
@@ -1087,7 +1087,7 @@ class AgentLoop:
         except Exception as exc:  # noqa: BLE001 - 工具错误必须回灌给模型
             if stats is not None:
                 stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
-            message = f"工具 {call.name} 失败：{type(exc).__name__}: {exc}"
+            message = f"Tool {call.name} failed: {type(exc).__name__}: {exc}"
             self._emit_tool(session, call, "error", _short(str(exc)))
             ctx.log(message)
             return {"error": message, "kind": "error"}
@@ -1119,7 +1119,7 @@ class AgentLoop:
                 "sessionId": session.id, "name": "guard", "status": "error",
                 "summary": "模型返回空响应，要求重试",
             })
-            return {"role": "user", "content": "你刚才没有输出任何内容。请继续完成任务；如果缺少信息，请明确问我。"}
+            return {"role": "user", "content": "You produced no output. Continue the task; if information is missing, ask explicitly."}
 
         # 计划未完成：非最后一步还有 pending/doing，就不要让它直接收尾
         if not self._plan_nudged and not answer.rstrip().endswith(("？", "?")):
@@ -1134,11 +1134,11 @@ class AgentLoop:
                 return {
                     "role": "user",
                     "content": (
-                        f"计划里还有未完成的步骤：\n{listing}\n"
-                        "如果你已经完成了这些步骤，请调用 update_plan 把对应步骤标为 done"
-                        "（不要只用文字说“完成”）；如果还没完成，请继续调用工具执行；"
-                        "如果计划已不适用，用 update_plan 重写。"
-                        "最后一步（总结）可以留到最后，但总结完毕后要调用 update_plan 把它标为 done。"
+                        f"Plan steps remain incomplete:\n{listing}\n"
+                        "If these steps are already done, call update_plan and mark them done "
+                        "(do not merely say \"done\" in prose); otherwise keep using tools. "
+                        "If the plan no longer applies, rewrite it with update_plan."
+                        "The final summary step may stay until the end, but mark it done afterwards with update_plan."
                     ),
                 }
 
@@ -1181,7 +1181,7 @@ class AgentLoop:
             client,
             session,
             stats,
-            "已达到本轮步数上限。请不要再调用工具，基于已有信息给出结论、未完成部分与下一步建议。",
+            "The step limit was reached. Do not call more tools; conclude from the available information and state what remains and what to do next.",
         )
 
     async def _finish_with_notice(
@@ -1260,8 +1260,8 @@ class AgentLoop:
         used = stats.input_tokens + stats.output_tokens
         if used > self._config.max_turn_tokens * 0.8:
             return (
-                f"本轮已使用约 {used} token（预算 {self._config.max_turn_tokens} 的 80% 以上）。"
-                "请优先完成当前关键改动并收尾，跳过非必要探索。"
+                f"About {used} tokens used (over 80% of the {self._config.max_turn_tokens} budget). "
+                "Finish the key change and wrap up; skip unnecessary exploration."
             )
         return None
 
@@ -1289,7 +1289,7 @@ class AgentLoop:
 
     def _emit_diagram(self, session: Session, payload: dict[str, Any]) -> None:
         if len(self._diagrams) >= 3:
-            raise RuntimeError("本轮最多画 3 张图；请合并或删减")
+            raise RuntimeError("At most 3 diagrams per turn; merge or remove some")
         self._diagrams.append(payload)
         self._notify("ui.diagram", {"sessionId": session.id, "diagram": payload})
 
@@ -1460,7 +1460,7 @@ def _default_client(session: Session) -> OpenAIClient:
 
 
 async def _no_propose(_path: str, _content: str, _summary: str, **_kwargs: object) -> str:
-    raise RuntimeError("当前内核没有配置提案通道")
+    raise RuntimeError("No proposal channel is configured in this kernel")
 
 
 def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
@@ -1552,8 +1552,8 @@ def _running_job_lines(messages: list[dict[str, Any]]) -> list[str]:
             continue
         seen.add(str(job_id))
         lines.append(
-            f"- {job_id} [{data.get('sandbox') or '?'}] 已运行 {int(data.get('elapsedMs') or 0)/1000:.0f}s"
-            f"；{data.get('progress') or '仍在运行'}；用 command_wait 轮询或 command_terminate 终止"
+            f"- {job_id} [{data.get('sandbox') or '?'}] running {int(data.get('elapsedMs') or 0)/1000:.0f}s"
+            f"; {data.get('progress') or 'still running'}; poll with command_wait or stop with command_terminate"
         )
     return lines
 

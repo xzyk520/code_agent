@@ -26,6 +26,7 @@ import { CheckpointChatIndex } from "./checkpointChatIndex";
 import { TurnStore } from "./turnStore";
 import { SummaryStore } from "./summaryStore";
 import { RetryStore, type PendingTurn, type RetryEvent } from "./retryStore";
+import { tr } from "./i18n";
 import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
 import { createRunAdapter, detectDocker, type CommandJob, type CommandJobSnapshot } from "./adapters/runAdapter";
@@ -231,7 +232,7 @@ class Shell {
       onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
       onRetryTurn: () => void this.retryLastTurn(),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
-    }, this.config.attachments);
+    }, this.config.attachments, this.config.language);
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
     this.status.command = "beeCode.chat.ask";
@@ -301,8 +302,13 @@ class Shell {
         if (!event.affectsConfiguration("beeCode")) return;
         const read = readConfig();
         this.config = read.config;
+        this.panel.setLocale(this.config.language);
         for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
         this.log.info(`配置已更新：${describeConfig(this.config)}`);
+        if (event.affectsConfiguration("beeCode.ui.language")) {
+          this.updateStatus();
+          return;
+        }
 
         // 分流：只改模型相关 → 热更新（不重启进程）；其余（core/pythonPath/checkpoint…）→ 重启
         if ((event.affectsConfiguration("beeCode.model") || event.affectsConfiguration("beeCode.subagent") || event.affectsConfiguration("beeCode.summary")) && this.core) {
@@ -725,11 +731,11 @@ class Shell {
     };
     this.panel.setRetryAvailable(true);
     if (latest?.status === "waiting" || latest?.status === "starting") {
-      this.panel.setHint("检测到上次模型连接重试在等待/开始时中断，可点「重试本轮」。");
+      this.panel.setHint(tr(this.config.language, "检测到上次模型连接重试在等待/开始时中断，可点「重试本轮」。", "The previous model retry was interrupted; use Retry."));
     } else if (latest?.status === "failed") {
-      this.panel.setHint("检测到上次任务失败，可点「重试本轮」。");
+      this.panel.setHint(tr(this.config.language, "检测到上次任务失败，可点「重试本轮」。", "The previous task failed; use Retry."));
     } else {
-      this.panel.setHint("检测到上次任务未完成，可点「重试本轮」。");
+      this.panel.setHint(tr(this.config.language, "检测到上次任务未完成，可点「重试本轮」。", "The previous task did not finish; use Retry."));
     }
     this.log.info(
       `已恢复待重试请求（${pending.text.slice(0, 40)}${latest ? `，最后状态 ${latest.status}` : ""}）`,
@@ -1750,7 +1756,7 @@ class Shell {
     const hasNewOutput = fresh.stdout.length > 0 || fresh.stderr.length > 0;
     const progress = hasNewOutput
       ? this.inferCommandProgress(record.command, record.job.tail())
-      : "没有新增输出";
+      : "No new output";
     const elapsed = Math.round(snapshot.elapsedMs / 1000);
     return {
       exitCode: null,
@@ -1768,10 +1774,10 @@ class Shell {
       elapsedMs: snapshot.elapsedMs,
       progress,
       notice: first
-        ? `命令已运行 ${elapsed}s 仍未结束，已转入后台。可用 command_wait 按你选择的间隔轮询，或稍后处理；不会再自动等待。`
+        ? `The command has run for ${elapsed}s and moved to the background. Poll with command_wait at your chosen interval, or leave it running; it will not auto-wait.`
         : hasNewOutput
-          ? `后台任务有新增输出；已运行 ${elapsed}s。`
-          : `没有新增输出；任务仍在运行，已运行 ${elapsed}s。`,
+          ? `Background job produced new output; elapsed ${elapsed}s.`
+          : `No new output; the job is still running (elapsed ${elapsed}s).`,
       ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
     };
   }
@@ -1802,14 +1808,14 @@ class Shell {
   private inferCommandProgress(command: string, tail: string): string {
     const text = `${command}\n${tail}`.toLowerCase();
     if (/solving environment|collecting package metadata|parsing|resolving|repodata/.test(text)) {
-      return "环境解析/依赖求解中";
+      return "Resolving environment/dependencies";
     }
-    if (/downloading|fetching|download/.test(text)) return "下载中";
-    if (/extracting|installing|unpacking/.test(text)) return "解压/安装中";
-    if (/building|compiling|linking|bundling/.test(text)) return "构建/编译中";
-    if (/tests?|test suite|pytest|jest|vitest/.test(text)) return "测试运行中";
+    if (/downloading|fetching|download/.test(text)) return "Downloading";
+    if (/extracting|installing|unpacking/.test(text)) return "Extracting/installing";
+    if (/building|compiling|linking|bundling/.test(text)) return "Building/compiling";
+    if (/tests?|test suite|pytest|jest|vitest/.test(text)) return "Running tests";
     const last = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-1)[0];
-    return last ? `仍在运行：${last.slice(0, 160)}` : "仍在运行（暂无新输出）";
+    return last ? `Still running: ${last.slice(0, 160)}` : "Still running (no new output)";
   }
 
   private async commandWait(params: CommandWaitParams, ctx: InboundRequestContext): Promise<RunResult> {
@@ -1828,8 +1834,8 @@ class Shell {
     const snap = record.job.peek();
     const exit = snap.exitCode === null ? "unknown" : String(snap.exitCode);
     const text =
-      `后台任务 ${record.job.id} 已结束（exit ${exit}，运行 ${Math.round(snap.elapsedMs / 1000)}s）。` +
-      "用 command_list 查看状态，或用 command_wait 收集结果。";
+      `Background job ${record.job.id} finished (exit ${exit}, elapsed ${Math.round(snap.elapsedMs / 1000)}s). ` +
+      "Use command_list to inspect it or command_wait to collect its result.";
     this.panel.addMessage({ id: `bg_${record.job.id}_${Date.now()}`, role: "system", text });
     this.remember("system", text);
   }
@@ -1843,14 +1849,14 @@ class Shell {
       if (snap.finished) continue;
       const age = snap.outputAgeMs === undefined ? "无" : `${Math.round(snap.outputAgeMs / 1000)}s`;
       lines.push(
-        `- ${record.job.id} [${record.sandbox}] 已运行 ${Math.round(snap.elapsedMs / 1000)}s，最近输出 ${age}：${record.command.slice(0, 120)}`,
+        `- ${record.job.id} [${record.sandbox}] running ${Math.round(snap.elapsedMs / 1000)}s, last output ${age}: ${record.command.slice(0, 120)}`,
       );
       if (lines.length >= 8) break;
     }
     if (lines.length === 0) return undefined;
     return (
-      "[后台任务] 当前仍有命令在运行。需要结果时用 command_wait(job_id, yield_ms) 轮询；" +
-      "没有新输出会返回 noNewOutput=true；不需要时用 command_terminate。\n" +
+      "[Background jobs] Commands are still running. Use command_wait(job_id, yield_ms) when you need output; " +
+      "no new output returns noNewOutput=true. Use command_terminate when the result is no longer needed.\n" +
       lines.join("\n")
     );
   }

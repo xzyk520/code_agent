@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
+import { tr, type Locale } from "../i18n";
 
 /** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
 export interface ChatMessageView {
@@ -78,6 +79,7 @@ export interface TurnView {
 }
 
 export interface PanelState {
+  locale: Locale;
   mode: Mode;
   busy: boolean;
   proposals: ProposalDto[];
@@ -109,6 +111,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** view 作用域的监听器：重建 view 时先释放旧的 */
   private viewDisposables: vscode.Disposable[] = [];
   private state: PanelState = {
+    locale: "zh",
     mode: "chat",
     busy: false,
     proposals: [],
@@ -120,7 +123,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly handlers: PanelHandlers,
     private readonly attachmentLimits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
-  ) {}
+    locale: Locale = "zh",
+  ) {
+    this.state.locale = locale;
+  }
+
+  /** 切换用户可见语言；模型提示词不受影响 */
+  setLocale(locale: Locale): void {
+    if (this.state.locale === locale) return;
+    this.state.locale = locale;
+    this.post({ type: "locale", locale });
+    this.pushState();
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     for (const disposable of this.viewDisposables.splice(0)) disposable.dispose();
@@ -130,7 +144,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [mediaRoot],
     };
-    view.webview.html = buildHtml(view.webview, mediaRoot);
+    view.webview.html = buildHtml(view.webview, mediaRoot, this.state.locale);
     this.viewDisposables.push(view.webview.onDidReceiveMessage((raw) => this.onMessage(raw)));
     this.viewDisposables.push(
       view.onDidChangeVisibility(() => {
@@ -449,7 +463,7 @@ function toIds(raw: unknown): string[] {
   return raw.filter((x): x is string => typeof x === "string").slice(0, 500);
 }
 
-function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
+function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Locale = "zh"): string {
   const nonce = makeNonce();
   const script = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.js"));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.css"));
@@ -463,7 +477,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
   ].join("; ");
 
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${locale === "en" ? "en" : "zh-CN"}">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
@@ -477,37 +491,37 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string {
       <span id="mode-badge" class="mode-badge">Chat</span>
     </div>
     <span id="cost" class="cost"></span>
-    <button id="stop" class="stop" title="停止">■</button>
+    <button id="stop" class="stop" title="${tr(locale, "停止", "Stop")}">■</button>
   </header>
 
   <section id="attachments" class="attachments"></section>
-  <section id="reads" class="reads" aria-label="agent 最近读取的文件"></section>
+  <section id="reads" class="reads" aria-label="${tr(locale, "agent 最近读取的文件", "Files recently read by the agent")}"></section>
   <div id="retry-banner" class="retry-banner hidden" role="status"></div>
   <div class="conversation">
-    <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="对话记录"></section>
-    <aside id="trajectory" class="trajectory" aria-label="会话轨迹">
-      <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="搜索轨迹…" aria-label="搜索轨迹" />
+    <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="${tr(locale, "对话记录", "Conversation")}"></section>
+    <aside id="trajectory" class="trajectory" aria-label="${tr(locale, "会话轨迹", "Session trace")}">
+      <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="${tr(locale, "搜索轨迹…", "Search trace…")}" aria-label="${tr(locale, "搜索轨迹", "Search trace")}" />
       <div id="trajectory-list" class="trajectory-list"></div>
     </aside>
   </div>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="proposals" class="proposals hidden">
     <div class="proposals-head">
-      <span id="proposals-title">待审提案</span>
+      <span id="proposals-title">${tr(locale, "待审提案", "Proposals")}</span>
       <span class="proposals-actions">
-        <button id="acceptAll">全部接受</button>
-        <button id="rejectAll">全部拒绝</button>
+        <button id="acceptAll">${tr(locale, "全部接受", "Accept all")}</button>
+        <button id="rejectAll">${tr(locale, "全部拒绝", "Reject all")}</button>
       </span>
     </div>
     <ul id="proposals-list"></ul>
   </section>
 
   <footer class="composer">
-    <textarea id="input" placeholder="描述你的需求…（Ctrl+Enter 发送）" rows="3"></textarea>
+    <textarea id="input" placeholder="${tr(locale, "描述你的需求…（Ctrl+Enter 发送）", "Describe what you need… (Ctrl+Enter to send)")}" rows="3"></textarea>
     <div class="composer-row">
       <span id="hint" class="hint"></span>
-      <button id="retry" class="retry hidden" type="button">重试本轮</button>
-      <button id="send">发送</button>
+      <button id="retry" class="retry hidden" type="button">${tr(locale, "重试本轮", "Retry this turn")}</button>
+      <button id="send">${tr(locale, "发送", "Send")}</button>
     </div>
   </footer>
 

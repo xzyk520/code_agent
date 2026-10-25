@@ -27,7 +27,7 @@ def _clip(value: Any) -> dict[str, Any]:
     return {
         "truncated": True,
         "preview": text[:MAX_RESULT_CHARS],
-        "note": f"结果过长（{len(text)} 字符），已截断；请缩小范围（行范围/glob/max_results）",
+        "note": f"Result too long ({len(text)} chars); truncated. Narrow the range (line range/glob/max_results).",
     }
 
 
@@ -44,7 +44,7 @@ def _shape_text(text: str, *, head: int = HEAD_LINES, tail: int = TAIL_LINES) ->
         return text, 0
     omitted = len(lines) - head - tail
     shaped = "\n".join(
-        [*lines[:head], f"…（省略 {omitted} 行；需要时用 start_line/end_line 精确读取）…", *lines[-tail:]]
+        [*lines[:head], f"… ({omitted} lines omitted; use start_line/end_line to read a smaller range) …", *lines[-tail:]]
     )
     return shaped, omitted
 
@@ -75,7 +75,7 @@ async def read_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     }
     if omitted > 0:
         payload["omittedLines"] = omitted
-        payload["note"] = f"中间省略 {omitted} 行；需要细节请指定更小的行范围"
+        payload["note"] = f"{omitted} lines omitted in the middle; use a smaller line range for details"
     return _clip(payload)
 
 
@@ -175,7 +175,7 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
     content = str(params["content"])
     summary = str(params.get("summary") or "")
     if not content.strip():
-        raise ValueError("content 为空：请提供修改后的完整文件内容")
+        raise ValueError("content is empty: provide the complete new file content")
     proposal_id = await ctx.propose(path, content, summary)
     return {"ok": True, "proposalId": proposal_id, "path": path, "summary": summary}
 
@@ -188,25 +188,25 @@ async def edit_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     replace_all = bool(params.get("replace_all", False))
     summary = str(params.get("summary") or "").strip()
     if not old_string:
-        raise ValueError("old_string 不能为空")
+        raise ValueError("old_string must not be empty")
     if old_string == new_string:
-        raise ValueError("old_string 和 new_string 相同，没有修改")
+        raise ValueError("old_string and new_string are identical; nothing to change")
     path_key = _path_key(path)
     if path_key not in ctx.observed:
-        raise ValueError(f"不能修改 {path}：文件尚未读取；请先 read_file，然后重试")
+        raise ValueError(f"Cannot modify {path}: the file has not been read; call read_file first and retry")
     current = await ctx.shell.read_file(path)
     if ctx.observed.get(path_key) != current.version:
-        raise ValueError(f"不能修改 {path}：文件已被修改；请重新 read_file，然后重试")
+        raise ValueError(f"Cannot modify {path}: the file changed; call read_file again and retry")
     count = current.text.count(old_string)
     if count == 0:
-        raise ValueError(f"不能修改 {path}：old_string 在文件中找不到")
+        raise ValueError(f"Cannot modify {path}: old_string was not found")
     if count > 1 and not replace_all:
-        raise ValueError(f"不能修改 {path}：old_string 匹配 {count} 处；请提供更长的上下文，或设置 replace_all=true")
+        raise ValueError(f"Cannot modify {path}: old_string matches {count} places; provide more context or set replace_all=true")
     updated = current.text.replace(old_string, new_string) if replace_all else current.text.replace(old_string, new_string, 1)
     if updated == current.text:
-        raise ValueError("修改后内容没有变化")
+        raise ValueError("The edit produced no change")
     if not summary:
-        summary = f"edit_file: {path}（替换 {count if replace_all else 1} 处）"
+        summary = f"edit_file: {path} ({count if replace_all else 1} replacement(s))"
     proposal_id = await ctx.propose(path, updated, summary, expected_version=current.version)
     return {
         "ok": True,
@@ -220,10 +220,10 @@ async def edit_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
 async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     sandbox = str(params.get("sandbox") or "sandbox-readonly")
     if sandbox not in ("sandbox-readonly", "sandbox", "sandbox-network", "host"):
-        raise ValueError("sandbox 只能是 sandbox-readonly、sandbox、sandbox-network 或 host")
+        raise ValueError("sandbox must be sandbox-readonly, sandbox, sandbox-network, or host")
     justification = str(params.get("justification") or "").strip()
     if sandbox != "sandbox-readonly" and not justification:
-        raise ValueError(f"sandbox={sandbox} 必须提供 justification，说明为什么需要额外权限")
+        raise ValueError(f"sandbox={sandbox} requires justification explaining why the extra permission is needed")
     yield_ms = _int_or_none(params.get("yield_ms"))
     if yield_ms is None:
         # 兼容旧参数名；它不是杀进程的超时，只是本次等待多久就返回运行中
@@ -245,7 +245,7 @@ async def command_wait(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
     """继续等待一个长命令；返回新输出、已运行时间和下一步建议。"""
     job_id = str(params.get("job_id") or "").strip()
     if not job_id:
-        raise ValueError("job_id 不能为空")
+        raise ValueError("job_id must not be empty")
     yield_ms = _int_or_none(params.get("yield_ms"))
     result = await ctx.shell.wait(job_id, yield_ms=yield_ms)
     return _run_payload(result)
@@ -261,7 +261,7 @@ async def command_terminate(ctx: ToolContext, params: dict[str, Any]) -> dict[st
     """终止一个长命令并返回已收集的输出。"""
     job_id = str(params.get("job_id") or "").strip()
     if not job_id:
-        raise ValueError("job_id 不能为空")
+        raise ValueError("job_id must not be empty")
     result = await ctx.shell.terminate(job_id)
     return _run_payload(result)
 
@@ -292,10 +292,10 @@ def _run_payload(result: Any) -> dict[str, Any]:
         payload["jobId"] = result.job_id
     if result.status == "running":
         payload["elapsedMs"] = result.elapsed_ms
-        payload["progress"] = result.progress or ("没有新增输出" if result.no_new_output else "仍在运行")
+        payload["progress"] = result.progress or ("No new output" if result.no_new_output else "Still running")
         payload["hint"] = (
-            "命令仍在后台运行。由你决定 command_wait(job_id, yield_ms) 的间隔；"
-            "如果进度停滞或方向不对，用 command_terminate(job_id) 终止。不要重新执行同一命令。"
+            "The command is running in the background. Choose the interval for command_wait(job_id, yield_ms); "
+            "if progress stalls or the approach is wrong, stop it with command_terminate(job_id). Do not re-run the same command."
         )
     elif result.elapsed_ms:
         payload["elapsedMs"] = result.elapsed_ms
@@ -311,23 +311,23 @@ def _run_payload(result: Any) -> dict[str, Any]:
 async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     """把 Mermaid 源码交给壳渲染，并挂到本轮助手消息上。"""
     if ctx.diagram is None:
-        raise RuntimeError("当前 agent 不支持画图")
+        raise RuntimeError("This agent does not support diagrams")
     kind = str(params.get("kind") or "").strip().lower()
     if kind not in {"flowchart", "sequence", "class", "state", "er"}:
-        raise ValueError("kind 必须是 flowchart / sequence / class / state / er")
+        raise ValueError("kind must be flowchart / sequence / class / state / er")
     source = str(params.get("source") or "").strip()
     # 容忍模型把围栏也传进来
     source = re.sub(r"^```[a-zA-Z]*\s*\n?", "", source)
     source = re.sub(r"\n?```\s*$", "", source).strip()
     if not source:
-        raise ValueError("source 不能为空")
+        raise ValueError("source must not be empty")
     if len(source) > 8_000:
-        raise ValueError(f"图太大（{len(source)} 字符）；请压缩到 8000 字符以内、节点 ≤ 20")
+        raise ValueError(f"Diagram too large ({len(source)} chars); keep it under 8000 chars and at most 20 nodes")
     lowered = source.lower()
     if "<script" in lowered or "javascript:" in lowered:
-        raise ValueError("图里不能包含脚本或 javascript: 链接")
+        raise ValueError("Diagrams must not contain scripts or javascript: links")
     if "%%{" in source:
-        raise ValueError("不要使用 Mermaid init 指令（会覆盖安全/主题配置）")
+        raise ValueError("Do not use Mermaid init directives (they override safety/theme settings)")
     title = str(params.get("title") or "").strip()[:80]
     payload = {
         "id": f"d_{uuid.uuid4().hex[:8]}",
@@ -342,17 +342,17 @@ async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
         "id": payload["id"],
         "kind": kind,
         "title": title,
-        "note": "已渲染。请在图后补充 3-5 行结论，不要只给一张图。",
+        "note": "Rendered. Add 3-5 lines of conclusions after the diagram; do not send only the diagram.",
     }
 
 
 async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     """把计划推给面板（模型每次传全量步骤，覆盖上一次的状态）。"""
     if ctx.plan is None:
-        raise RuntimeError("当前 agent 不支持计划")
+        raise RuntimeError("This agent does not support plans")
     raw = params.get("steps")
     if not isinstance(raw, list) or not raw:
-        raise ValueError("steps 不能为空：请传 3-6 个具体步骤")
+        raise ValueError("steps must not be empty: provide 3-6 concrete steps")
     steps: list[dict[str, str]] = []
     for item in raw:
         if isinstance(item, str) and item.strip():
@@ -361,7 +361,7 @@ async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
             status = item.get("status") if item.get("status") in ("pending", "doing", "done") else "pending"
             steps.append({"text": str(item["text"]).strip(), "status": str(status)})
     if not steps:
-        raise ValueError("steps 里没有有效步骤")
+        raise ValueError("steps contains no valid steps")
     ctx.plan(steps)
     return {"ok": True, "steps": len(steps)}
 
@@ -369,10 +369,10 @@ async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
 async def spawn_subagent(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     """派一个只读子代理。结果只回传结论，不回传它的上下文。"""
     if ctx.spawn is None:
-        raise RuntimeError("当前 agent 不允许派生子代理")
+        raise RuntimeError("This agent cannot spawn subagents")
     task = str(params.get("task") or "").strip()
     if not task:
-        raise ValueError("task 不能为空：请写清楚要让子代理查什么")
+        raise ValueError("task must not be empty: state exactly what the subagent should investigate")
     max_steps = int(params.get("max_steps") or 8)
     return await ctx.spawn(task, max_steps)
 

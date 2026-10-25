@@ -1,3 +1,5 @@
+[English](architecture.en.md) | 中文
+
 # Bee Code 架构设计
 
 > 本文是 [README](../README.md) 拆出的详细设计文档：目标、分层、三模式、模型接入、Agent 循环、上下文工程、改动落地、工业界对照。

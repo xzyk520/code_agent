@@ -54,137 +54,137 @@
     "commands": [
       {
         "command": "beeCode.chat.ask",
-        "title": "提问（Chat）",
+        "title": "Ask (Chat)",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.selection.chat",
-        "title": "解释选中代码",
+        "title": "Explain selection",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.selection.build",
-        "title": "按选中代码生成改动",
+        "title": "Generate changes from selection",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.selection.debug",
-        "title": "排查选中代码",
+        "title": "Debug selection",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.files.pick",
-        "title": "选择要阅读的文件",
+        "title": "Pick files to read",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.model.configure",
-        "title": "配置模型（base_url / key / model）",
+        "title": "Configure model (base_url / key / model)",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.proposal.acceptAll",
-        "title": "接受全部提案",
+        "title": "Accept all proposals",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.proposal.cancelAcceptAll",
-        "title": "取消批量接受",
+        "title": "Cancel accept-all",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.proposal.rejectAll",
-        "title": "拒绝全部提案",
+        "title": "Reject all proposals",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.checkpoint.restore",
-        "title": "恢复到检查点…",
+        "title": "Restore checkpoint…",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.core.restart",
-        "title": "重启内核进程",
+        "title": "Restart core process",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.core.showOutput",
-        "title": "显示日志",
+        "title": "Show logs",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.exportDiagnostics",
-        "title": "导出诊断包（已脱敏）",
+        "title": "Export diagnostics (redacted)",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.confirm.resetRemembered",
-        "title": "清除记住的确认选择",
+        "title": "Clear remembered confirmations",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.session.new",
-        "title": "新建会话",
+        "title": "New session",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.session.pick",
-        "title": "历史会话…",
+        "title": "History sessions…",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.summary.configure",
-        "title": "配置摘要模型",
+        "title": "Configure summary model",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.subagent.configure",
-        "title": "配置子代理模型",
+        "title": "Configure subagent model",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.subagent.test",
-        "title": "测试子代理连接",
+        "title": "Test subagent connection",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.subagent.clearKey",
-        "title": "清除子代理 API Key",
+        "title": "Clear subagent API key",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.docker.redetect",
-        "title": "重新检测 Docker 沙箱",
+        "title": "Re-detect Docker sandbox",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.workspace.trust",
-        "title": "信任/取消信任此工作区",
+        "title": "Trust / untrust this workspace",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.model.test",
-        "title": "测试模型连接",
+        "title": "Test model connection",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.model.clearKey",
-        "title": "清除 API Key",
+        "title": "Clear API key",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.dev.crashMock",
-        "title": "模拟内核崩溃（mock）",
+        "title": "Simulate core crash (mock)",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.session.continue",
-        "title": "继续上次的操作",
+        "title": "Continue last operation",
         "category": "Bee Code"
       },
       {
         "command": "beeCode.session.regenerate",
-        "title": "重新生成上次的提案",
+        "title": "Regenerate last proposal",
         "category": "Bee Code"
       }
     ],
@@ -248,6 +248,15 @@
     "configuration": {
       "title": "Bee Code",
       "properties": {
+        "beeCode.ui.language": {
+          "type": "string",
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "default": "zh",
+          "markdownDescription": "UI language for panels, logs, hints and notifications. Default: Chinese (`zh`). Model prompts and tool descriptions are always English; model replies follow the user's language."
+        },
         "beeCode.core.mode": {
           "type": "string",
           "enum": [

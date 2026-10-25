@@ -46,10 +46,31 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, retryAvailable?: boolean, hint?: string }} PanelState */
+  /** @typedef {{ locale?: "zh" | "en", mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, retryAvailable?: boolean, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
+  /** @type {"zh" | "en"} */
+  let locale = "zh";
+  /** @param {string} zh @param {string} en */
+  function tr(zh, en) { return locale === "en" ? en : zh; }
+
+  function applyLocale() {
+    document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+    el.stop.title = tr("停止", "Stop");
+    el.reads.setAttribute("aria-label", tr("agent 最近读取的文件", "Files recently read by the agent"));
+    el.messages.setAttribute("aria-label", tr("对话记录", "Conversation"));
+    el.trajectory.setAttribute("aria-label", tr("会话轨迹", "Session trace"));
+    el.trajectoryFilter.placeholder = tr("搜索轨迹…", "Search trace…");
+    el.trajectoryFilter.setAttribute("aria-label", tr("搜索轨迹", "Search trace"));
+    el.proposalsTitle.textContent = tr("待审提案", "Proposals");
+    el.acceptAll.textContent = tr("全部接受", "Accept all");
+    el.rejectAll.textContent = tr("全部拒绝", "Reject all");
+    el.input.placeholder = tr("描述你的需求…（Ctrl+Enter 发送）", "Describe what you need… (Ctrl+Enter to send)");
+    el.retry.textContent = tr("重试本轮", "Retry this turn");
+    el.send.textContent = tr("发送", "Send");
+    renderMode();
+  }
   /** @type {HTMLElement | null} */
   let streamingNode = null;
   let streamingRaw = "";
@@ -92,7 +113,7 @@
         retryTimer = null;
       }
       el.retryBanner.classList.remove("hidden");
-      el.retryBanner.textContent = "模型连接恢复中，正在重试…";
+      el.retryBanner.textContent = tr("模型连接恢复中，正在重试…", "Reconnecting to the model…");
       return;
     }
     if (status !== "waiting") return;
@@ -107,13 +128,13 @@
       const left = Math.max(0, retryDeadline - Date.now());
       const seconds = Math.ceil(left / 1000);
       el.retryBanner.textContent =
-        `模型连接失败，${seconds}s 后重试` +
+        tr("模型连接失败", "Model connection failed") + `, ${seconds}s ` + tr("后重试", "until retry") +
         (attempt && max ? `（${attempt}/${max}）` : "") +
         (reason ? ` · ${reason.slice(0, 80)}` : "");
       if (left <= 0 && retryTimer) {
         clearInterval(retryTimer);
         retryTimer = null;
-        el.retryBanner.textContent = "模型连接恢复中，正在重试…";
+        el.retryBanner.textContent = tr("模型连接恢复中，正在重试…", "Reconnecting to the model…");
       }
     };
     tick();
@@ -178,11 +199,11 @@
     head.className = "cc-head";
     const title = document.createElement("span");
     const files = Array.isArray(item.files) ? item.files : [];
-    title.textContent = `命令修改了 ${files.length} 个文件`;
+    title.textContent = tr(`命令修改了 ${files.length} 个文件`, `${files.length} file(s) changed by the command`);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "cc-restore";
-    button.textContent = "撤销本次修改";
+    button.textContent = tr("撤销本次修改", "Undo this change");
     head.append(title, button);
 
     const command = document.createElement("div");
@@ -192,7 +213,7 @@
     const details = document.createElement("details");
     details.className = "cc-files";
     const summary = document.createElement("summary");
-    summary.textContent = "查看变更文件";
+    summary.textContent = tr("查看变更文件", "View changed files");
     const list = document.createElement("ul");
     for (const file of files.slice(0, 100)) {
       const li = document.createElement("li");
@@ -201,7 +222,7 @@
     }
     if (files.length > 100) {
       const more = document.createElement("li");
-      more.textContent = `…还有 ${files.length - 100} 个`;
+      more.textContent = tr(`…还有 ${files.length - 100} 个`, `…and ${files.length - 100} more`);
       list.appendChild(more);
     }
     details.append(summary, list);
@@ -218,10 +239,10 @@
     const button = card.querySelector(".cc-restore");
     if (button instanceof HTMLButtonElement) {
       button.disabled = true;
-      button.textContent = "已恢复";
+      button.textContent = tr("已恢复", "Restored");
     }
     const title = card.querySelector(".cc-head span");
-    if (title) title.textContent = `已恢复 ${files} 个文件`;
+    if (title) title.textContent = tr(`已恢复 ${files} 个文件`, `Restored ${files} file(s)`);
   }
 
   /**
@@ -485,7 +506,7 @@
       const card = restore.closest(".command-checkpoint");
       if (card instanceof HTMLElement && card.dataset.checkpointId) {
         restore.disabled = true;
-        restore.textContent = "撤销中…";
+        restore.textContent = tr("撤销中…", "Undoing…");
         post({ type: "restoreCommand", id: card.dataset.checkpointId });
       }
       return;
@@ -498,13 +519,13 @@
     const text = code.textContent || "";
     void navigator.clipboard.writeText(text).then(
       () => {
-        button.textContent = "已复制";
+        button.textContent = tr("已复制", "Copied");
         setTimeout(() => {
-          button.textContent = "复制";
+          button.textContent = tr("复制", "Copy");
         }, 1200);
       },
       () => {
-        button.textContent = "复制失败";
+        button.textContent = tr("复制失败", "Copy failed");
       },
     );
   });
@@ -535,11 +556,11 @@
 
     const taskNode = document.createElement("span");
     taskNode.className = "subagent-task";
-    taskNode.textContent = task || "子代理任务";
+    taskNode.textContent = task || tr("子代理任务", "Subagent task");
 
     const chip = document.createElement("span");
     chip.className = "subagent-chip running";
-    chip.textContent = "探索中";
+    chip.textContent = tr("探索中", "Exploring");
 
     summary.append(icon, taskNode, chip);
 
@@ -638,7 +659,7 @@
     if (status === "end") {
       const error = typeof msg.error === "string" ? msg.error : "";
       entry.chip.className = "subagent-chip " + (error ? "error" : "done");
-      entry.chip.textContent = error ? "失败" : "完成";
+      entry.chip.textContent = error ? tr("失败", "Failed") : tr("完成", "Done");
       entry.details.open = !error;
 
       const steps = typeof msg.steps === "number" ? msg.steps : 0;
@@ -664,7 +685,7 @@
   function renderMode() {
     const label = state.mode === "builder" ? "Builder" : state.mode === "debugger" ? "Debugger" : "Chat";
     el.modeBadge.textContent = label;
-    el.modeBadge.title = "模式由意图分析自动选择";
+    el.modeBadge.title = tr("模式由意图分析自动选择", "Mode selected automatically from intent");
     el.input.placeholder =
       state.mode === "builder"
         ? "描述要实现的改动…（Ctrl+Enter 发送）"
@@ -759,7 +780,7 @@
 
     const short = document.createElement("pre");
     short.className = "trace-preview";
-    short.textContent = (summaryText || text || detail || args || "（无内容）").slice(0, 800);
+    short.textContent = (summaryText || text || detail || args || tr("（无内容）", "(empty)")).slice(0, 800);
     body.appendChild(short);
 
     const fullText = [summaryText, args, text, detail].filter(Boolean).join("\n\n");
@@ -767,7 +788,7 @@
       const full = document.createElement("details");
       full.className = "trace-full";
       const fullSummary = document.createElement("summary");
-      fullSummary.textContent = "查看完整内容";
+      fullSummary.textContent = tr("查看完整内容", "View full content");
       const pre = document.createElement("pre");
       pre.className = "trace-full-body";
       pre.textContent = fullText;
@@ -787,21 +808,21 @@
     const summary = document.createElement("summary");
     summary.className = "trace-summary";
     const usage = formatUsage(turn);
-    summary.textContent = `${turn.status === "error" ? "任务失败" : "任务已完成"}${usage ? ` · ${usage}` : ""}`;
+    summary.textContent = `${turn.status === "error" ? tr("任务失败", "Task failed") : tr("任务已完成", "Task completed")}${usage ? ` · ${usage}` : ""}`;
     const body = document.createElement("div");
     body.className = "trace-body";
     const steps = Array.isArray(turn.trace) ? turn.trace : [];
     if (steps.length === 0) {
       const empty = document.createElement("div");
       empty.className = "trace-empty";
-      empty.textContent = "本轮没有工具调用或思考记录。";
+      empty.textContent = tr("本轮没有工具调用或思考记录。", "No tool calls or reasoning in this turn.");
       body.appendChild(empty);
     }
     for (const step of steps) body.appendChild(traceStepNode(step));
     if (turn.error) {
       const error = document.createElement("div");
       error.className = "trace-error";
-      error.textContent = `错误：${turn.error}`;
+      error.textContent = `${tr("错误", "Error")}: ${turn.error}`;
       body.appendChild(error);
       if (usage) {
         const usageNode = document.createElement("div");
@@ -828,7 +849,7 @@
     mermaidPromise = new Promise((resolve, reject) => {
       const uri = document.body.dataset.mermaidUri;
       if (!uri) {
-        reject(new Error("缺少 Mermaid 资源"));
+        reject(new Error(tr("缺少 Mermaid 资源", "Missing Mermaid asset")));
         return;
       }
       const script = document.createElement("script");
@@ -848,7 +869,7 @@
           reject(err);
         }
       };
-      script.onerror = () => reject(new Error("Mermaid 加载失败"));
+      script.onerror = () => reject(new Error(tr("Mermaid 加载失败", "Failed to load Mermaid")));
       document.head.appendChild(script);
     });
     return mermaidPromise;
@@ -870,7 +891,7 @@
     head.append(title, kind);
     const body = document.createElement("div");
     body.className = "diagram-body";
-    body.textContent = "正在加载渲染器…";
+    body.textContent = tr("正在加载渲染器…", "Loading renderer…");
     card.append(head, body);
     el.messages.appendChild(card);
     el.messages.scrollTop = el.messages.scrollHeight;
@@ -889,7 +910,7 @@
         body.textContent = "";
         const note = document.createElement("div");
         note.className = "diagram-error";
-        note.textContent = "渲染失败：" + (err instanceof Error ? err.message : String(err));
+        note.textContent = tr("渲染失败：", "Render failed: ") + (err instanceof Error ? err.message : String(err));
         const pre = document.createElement("pre");
         pre.className = "diagram-source";
         pre.textContent = source;
@@ -921,7 +942,7 @@
       node.open = true;
       const summary = document.createElement("summary");
       summary.className = "reasoning-title";
-      summary.textContent = key > 1 ? `思考过程 · 第 ${key} 次调用` : "思考过程";
+      summary.textContent = key > 1 ? `思考过程 · 第 ${key} 次调用` : tr("思考过程", "Reasoning");
       const body = document.createElement("div");
       body.className = "reasoning-body";
       node.append(summary, body);
@@ -957,14 +978,14 @@
   /** @param {string | Array<{ round?: number, text?: string }> } reasoning */
   function appendPersistedReasoning(reasoning) {
     if (typeof reasoning === "string") {
-      appendReasoningBlock("思考过程", reasoning);
+      appendReasoningBlock(tr("思考过程", "Reasoning"), reasoning);
       return;
     }
     if (!Array.isArray(reasoning)) return;
     for (const segment of reasoning) {
       const text = typeof segment?.text === "string" ? segment.text : "";
       const round = typeof segment?.round === "number" ? segment.round : 1;
-      appendReasoningBlock(round > 1 ? `思考过程 · 第 ${round} 次调用` : "思考过程", text);
+      appendReasoningBlock(round > 1 ? `思考过程 · 第 ${round} 次调用` : tr("思考过程", "Reasoning"), text);
     }
   }
 
@@ -990,7 +1011,7 @@
     dot.textContent = mode === "builder" ? "◆" : mode === "debugger" ? "●" : "○";
     const label = document.createElement("span");
     label.className = "trajectory-label";
-    label.textContent = intent || "（未记录意图）";
+    label.textContent = intent || tr("（未记录意图）", "(no intent recorded)");
     button.append(dot, label);
     const detail = typeof item.detail === "string" ? item.detail : "";
     if (detail) {
@@ -1069,7 +1090,7 @@
       planNode.className = "msg plan";
       const title = document.createElement("div");
       title.className = "plan-title";
-      title.textContent = "计划";
+      title.textContent = tr("计划", "Plan");
       const list = document.createElement("ol");
       list.className = "plan-steps";
       planNode.append(title, list);
@@ -1120,7 +1141,7 @@
    */
   function renderProposals(items) {
     el.proposals.classList.toggle("hidden", items.length === 0);
-    el.proposalsTitle.textContent = "待审提案（" + items.length + " 个文件）";
+    el.proposalsTitle.textContent = tr("待审提案（" + items.length + " 个文件）", "Proposals (" + items.length + " file(s))");
     el.proposalsList.textContent = "";
 
     for (const item of items) {
@@ -1138,7 +1159,7 @@
 
       const stat = document.createElement("span");
       stat.className = "stat";
-      stat.textContent = stale ? "已失效" : "+" + (item.additions || 0) + " −" + (item.deletions || 0);
+      stat.textContent = stale ? tr("已失效", "Stale") : "+" + (item.additions || 0) + " −" + (item.deletions || 0);
 
       head.appendChild(pathNode);
       head.appendChild(stat);
@@ -1157,7 +1178,7 @@
       actions.className = "proposal-actions";
 
       const view = document.createElement("button");
-      view.textContent = "查看改动";
+      view.textContent = tr("查看改动", "View changes");
       view.addEventListener("click", () => post({ type: "proposal.diff", id: item.id }));
 
       actions.appendChild(view);
@@ -1166,13 +1187,13 @@
       if (!stale) {
         const accept = document.createElement("button");
         accept.className = "primary";
-        accept.textContent = "接受";
+        accept.textContent = tr("接受", "Accept");
         accept.addEventListener("click", () => post({ type: "accept", ids: [item.id] }));
         actions.appendChild(accept);
       }
 
       const reject = document.createElement("button");
-      reject.textContent = stale ? "丢弃" : "拒绝";
+      reject.textContent = stale ? tr("丢弃", "Discard") : tr("拒绝", "Reject");
       reject.addEventListener("click", () => post({ type: "reject", ids: [item.id] }));
       actions.appendChild(reject);
       li.appendChild(actions);
@@ -1209,6 +1230,8 @@
       case "state": {
         const next = /** @type {PanelState} */ (msg.state);
         state = { mode: next.mode, busy: next.busy };
+        locale = next.locale === "en" ? "en" : "zh";
+        applyLocale();
         el.messages.textContent = "";
         const turnsByUser = new Map();
         for (const turn of next.turns || []) {
@@ -1264,6 +1287,11 @@
         renderAttachments(next.attachments || []);
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
+        break;
+      }
+      case "locale": {
+        locale = msg.locale === "en" ? "en" : "zh";
+        applyLocale();
         break;
       }
       case "status": {

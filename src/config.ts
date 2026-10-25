@@ -2,6 +2,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ModelConfigDto, Mode } from "./protocol";
+import { normalizeLocale, type Locale } from "./i18n";
 
 /**
  * 壳侧配置收敛层。
@@ -24,6 +25,8 @@ export const SUBAGENT_API_KEY_ENV = "BEE_CODE_SUBAGENT_API_KEY";
 export const SUMMARY_API_KEY_ENV = "BEE_CODE_SUMMARY_API_KEY";
 
 export interface ShellConfig {
+  /** 用户可见 UI / 日志语言；模型提示词和工具描述始终英文 */
+  language: Locale;
   coreMode: "python" | "mock";
   pythonPath: string;
   /** 含 beecode/ 包的目录；空串 = 自动探测（工作区 → 扩展目录） */
@@ -116,6 +119,7 @@ export function readConfig(): ConfigReadResult {
   const firstRoot = folders[0]?.uri.fsPath;
 
   const config: ShellConfig = {
+    language: normalizeLocale(reader.str("ui.language", "zh")),
     coreMode: reader.oneOf("core.mode", "python", ["python", "mock"] as const),
     pythonPath: reader.str("core.pythonPath", "python"),
     coreRoot: resolvePlaceholders(reader.str("core.coreRoot", ""), firstRoot),
