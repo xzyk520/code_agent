@@ -238,6 +238,7 @@ class Shell {
       onRetryTurn: () => void this.retryLastTurn(),
       onSessions: () => void this.showSessionSwitcher(),
       onModelSettings: () => void this.showModelSettings(),
+      onLanguage: () => void vscode.commands.executeCommand("beeCode.ui.language.switch"),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
     }, this.config.attachments, this.config.language, this.config.fontSize);
 
