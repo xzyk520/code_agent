@@ -7,6 +7,9 @@
 
 ### Added
 
+- **长命令 job**：`run_command` 不再有硬执行时限；首次等待 `yield_ms`（默认 60s），
+未结束返回 `jobId/status/progress/elapsedMs/nextPollMs`，用 `command_wait` 继续、`command_terminate` 停止；
+默认间隔 60/120/180/240/300s，避免 1s 轮询烧 token
 - **无 Docker 回退**：`sandbox-readonly` 对严格白名单命令走 host 受限只读（结果 `host-readonly`）；
 `sandbox`/`sandbox-network` 走 host 审批 + 命令级 checkpoint；非白名单只读命令仍拒绝
 - **模型连接恢复**：首 token 前最多 5 次指数退避重试（429/5xx/超时/传输），
@@ -15,12 +18,12 @@
 - **重试 UI**：面板显示重试倒计时与原因，失败后提供「重试本轮」按钮
 - **重试事件持久化**：`<session>.retries.jsonl` 记录 waiting/starting/done/failed/cancelled，
   `.pending.json` 保存最近请求；重载后恢复待重试状态和「重试本轮」
-- **沙箱分层审批（协议 v38）**：`run_command` 分 `sandbox-readonly`（默认）→
+- **沙箱分层审批（协议 v39）**：`run_command` 分 `sandbox-readonly`（默认）→
 `sandbox`（工作区可写）→ `sandbox-network`（+网络）→ `host`（真实系统）；
 每级升级都需 justification，可仅本次或本会话都允许；无 Docker 时只读白名单走 host 受限只读，写请求走 host 审批 + checkpoint
 - **命令级 checkpoint**：写操作前自动快照，命令结束后列出变更文件，可在面板一键撤销本次修改
 - **移除整轮硬墙钟**：不再默认 2 小时强制结束；长任务由每工具超时、步数/token 预算与用户停止控制
-- **协议 v35–v38 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入
+- **协议 v35–v39 / 模型响应分层计时**：首 token `modelFirstTokenSeconds`、流式空闲 `modelIdleSeconds`、总响应 `maxTurnSeconds`；上下文压缩不计入，工具执行不计入
 - **只读工具并发**：同一批只读工具（read/list/search/outline/symbol/references/diagnostics）并发执行，结果按原 calls 顺序回填；写工具、命令、子代理仍串行。新增 `maxToolCallsPerBatch`（默认 8）
 - **轨迹用量细分**：`ui.usage` 增加 `modelWaitMs` / `toolMs`，轨迹卡片显示模型等待与工具执行耗时
 - **停止传播到命令/容器**：用户停止时壳侧 abort 在飞的 `run` 请求，`runAdapter` 杀整棵进程树，Docker 运行命名容器并在取消时 `docker rm -f`；子代理随父任务取消，不再出现“界面已停止、命令还在跑”

@@ -64,13 +64,19 @@ class Symbol:
 
 @dataclass(slots=True)
 class RunResult:
-    exit_code: int
+    exit_code: int | None
     stdout: str
     stderr: str
     truncated: bool
     duration_ms: int
     sandbox: str
     killed: bool
+    job_id: str | None = None
+    status: str = "exited"
+    elapsed_ms: int = 0
+    next_poll_ms: int | None = None
+    progress: str | None = None
+    output_age_ms: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -454,8 +460,8 @@ class ShellClient:
         command: str,
         *,
         cwd: str | None = None,
-        timeout_ms: int | None = None,
-        rpc_timeout: float = 600.0,
+        yield_ms: int = 60_000,
+        rpc_timeout: float = 120.0,
         sandbox: str = "sandbox-readonly",
         justification: str = "",
     ) -> RunResult:
@@ -476,18 +482,22 @@ class ShellClient:
         }
         if cwd:
             payload["cwd"] = cwd
-        if timeout_ms is not None:
-            payload["timeoutMs"] = timeout_ms
-        result = await self._call("run", payload, timeout=rpc_timeout)
-        return RunResult(
-            exit_code=int(result.get("exitCode", -1)),
-            stdout=result.get("stdout", ""),
-            stderr=result.get("stderr", ""),
-            truncated=bool(result.get("truncated", False)),
-            duration_ms=int(result.get("durationMs", 0)),
-            sandbox=str(result.get("sandbox", "none")),
-            killed=bool(result.get("killed", False)),
-        )
+        payload["yieldMs"] = max(1000, min(int(yield_ms), 300_000))
+        result = await self._call("run", payload, timeout=max(rpc_timeout, payload["yieldMs"] / 1000 + 60))
+        return _run_result(result)
+
+    async def wait(self, job_id: str, *, yield_ms: int | None = None) -> RunResult:
+        """继续等待一个仍在运行的命令；不会重复返回之前已读过的输出。"""
+        wait_ms = 60_000 if yield_ms is None else max(1000, min(int(yield_ms), 300_000))
+        payload: dict[str, Any] = {"jobId": job_id}
+        if yield_ms is not None:
+            payload["yieldMs"] = wait_ms
+        result = await self._call("command.wait", payload, timeout=max(120.0, wait_ms / 1000 + 60))
+        return _run_result(result)
+
+    async def terminate(self, job_id: str) -> RunResult:
+        result = await self._call("command.terminate", {"jobId": job_id}, timeout=30.0)
+        return _run_result(result)
 
     async def confirm(self, question: str, options: list[dict[str, str]], detail: str | None = None) -> str | None:
         result = await self._call(
@@ -500,3 +510,22 @@ class ShellClient:
     async def get_secret(self, key: str) -> str | None:
         result = await self._call("secrets.get", {"key": key})
         return result.get("value")
+
+
+def _run_result(result: dict[str, Any]) -> RunResult:
+    raw_exit = result.get("exitCode")
+    return RunResult(
+        exit_code=int(raw_exit) if raw_exit is not None else None,
+        stdout=str(result.get("stdout", "")),
+        stderr=str(result.get("stderr", "")),
+        truncated=bool(result.get("truncated", False)),
+        duration_ms=int(result.get("durationMs", 0)),
+        sandbox=str(result.get("sandbox", "none")),
+        killed=bool(result.get("killed", False)),
+        job_id=str(result["jobId"]) if result.get("jobId") else None,
+        status=str(result.get("status") or "exited"),
+        elapsed_ms=int(result.get("elapsedMs") or result.get("durationMs") or 0),
+        next_poll_ms=int(result["nextPollMs"]) if result.get("nextPollMs") is not None else None,
+        progress=str(result["progress"]) if result.get("progress") else None,
+        output_age_ms=int(result["outputAgeMs"]) if result.get("outputAgeMs") is not None else None,
+    )

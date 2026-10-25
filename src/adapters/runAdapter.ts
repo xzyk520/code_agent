@@ -47,6 +47,11 @@ export interface RunAdapterDeps {
  */
 export function createRunAdapter(deps: RunAdapterDeps) {
   return {
+    /** 启动一个不设硬超时的后台命令；由壳侧用 wait/kill 管理 */
+    async start(params: RunParams, ctx: InboundRequestContext): Promise<CommandJob> {
+      return startJob(deps, params, ctx);
+    },
+
     async run(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
       ctx.throwIfCancelled();
       const command = (params.command ?? "").trim();
@@ -305,6 +310,236 @@ function runProcess(
 }
 
 // ───────────────────────── 工具 ─────────────────────────
+
+// ───────────────────────── 长命令 job ─────────────────────────
+
+export interface CommandJobSnapshot {
+  id: string;
+  finished: boolean;
+  exitCode: number | null;
+  killed: boolean;
+  truncated: boolean;
+  stdout: string;
+  stderr: string;
+  elapsedMs: number;
+  outputAgeMs?: number;
+}
+
+export interface CommandJob {
+  id: string;
+  sandbox: RunResult["sandbox"];
+  startedAt: number;
+  wait(ms: number): Promise<CommandJobSnapshot>;
+  kill(): void;
+  /** 子进程结束时通知一次（用于命令结束后落 checkpoint） */
+  onFinished(callback: () => void): void;
+  /** 消费自上次 readNew 以来的输出；不会重复返回旧内容 */
+  readNew(): CommandJobSnapshot;
+  tail(maxChars?: number): string;
+}
+
+interface JobSpec {
+  file: string;
+  args: string[];
+  cwd: string;
+  shell: boolean;
+  containerName?: string;
+  sandbox: RunResult["sandbox"];
+}
+
+async function startJob(deps: RunAdapterDeps, params: RunParams, ctx: InboundRequestContext): Promise<CommandJob> {
+  ctx.throwIfCancelled();
+  const command = (params.command ?? "").trim();
+  if (!command) throw new Error("command 不能为空");
+  if (command.length > MAX_COMMAND_LENGTH) {
+    throw new Error(`命令过长（${command.length} > ${MAX_COMMAND_LENGTH} 字符）：请写成脚本文件再执行`);
+  }
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) throw new Error("未打开工作区：命令必须在工作区内执行");
+  const cwd = resolveCwd(root, params.cwd);
+  const policy = deps.policy();
+  const requested = params.sandbox ?? "auto";
+  const useDocker =
+    requested === "host"
+      ? false
+      : requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network"
+        ? true
+        : policy.sandbox === "docker" || (policy.sandbox === "auto" && deps.dockerAvailable());
+  if (
+    (requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network") &&
+    !deps.dockerAvailable()
+  ) {
+    throw new Error("请求在 Docker 沙箱内执行，但当前环境找不到 docker；如确需真实环境执行，请用 sandbox=host 并说明理由。");
+  }
+  if (policy.sandbox === "docker" && !deps.dockerAvailable() && requested !== "host") {
+    throw new Error("沙箱模式为 docker，但当前环境找不到 docker（请安装/启动 docker，或把 beeCode.permissions.sandbox 改为 auto/off）");
+  }
+
+  let spec: JobSpec;
+  if (useDocker) {
+    const relative = path.relative(root, cwd).split(path.sep).join("/");
+    if (relative.startsWith("..")) {
+      throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
+    }
+    const workdir = relative ? `/workspace/${relative}` : "/workspace";
+    const container = `bee-code-${randomUUID().slice(0, 8)}`;
+    const args = [
+      "run", "--rm", "--name", container, "-i",
+      "--network", requested === "sandbox-network" ? "bridge" : "none",
+      "--read-only", "--tmpfs", "/tmp",
+      "-v", `${root}:/workspace${requested === "sandbox-readonly" ? ":ro" : ""}`,
+      "-w", workdir, "--memory", "2g", "--pids-limit", "256",
+      "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+      policy.dockerImage, "sh", "-lc", command,
+    ];
+    spec = {
+      file: "docker",
+      args,
+      cwd: root,
+      shell: false,
+      containerName: container,
+      sandbox:
+        requested === "sandbox-network" ? "docker-network" : requested === "sandbox-readonly" ? "docker-readonly" : "docker",
+    };
+  } else {
+    spec = {
+      file: command,
+      args: [],
+      cwd,
+      shell: true,
+      sandbox: requested === "host" ? "host" : "none",
+    };
+  }
+  return createJob(deps, spec, command, ctx.signal);
+}
+
+function createJob(
+  deps: RunAdapterDeps,
+  spec: JobSpec,
+  command: string,
+  signal?: AbortSignal,
+): CommandJob {
+  const id = randomUUID();
+  const startedAt = Date.now();
+  const state = { stdout: "", stderr: "", truncated: false, killed: false, exitCode: null as number | null, finished: false, lastOutputAt: 0 as number };
+  let cursorOut = 0;
+  let cursorErr = 0;
+  const waiters = new Set<() => void>();
+  const finishCallbacks: Array<() => void> = [];
+  let finishNotified = false;
+
+  const notify = () => {
+    for (const waiter of [...waiters]) waiter();
+  };
+  const child = spawn(spec.file, spec.args, {
+    cwd: spec.cwd,
+    shell: spec.shell,
+    windowsHide: true,
+    detached: process.platform !== "win32",
+    env: spec.shell ? sanitizedEnv() : undefined,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    appendCapped(state, "stdout", chunk);
+    state.lastOutputAt = Date.now();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    appendCapped(state, "stderr", chunk);
+    state.lastOutputAt = Date.now();
+  });
+  child.on("error", (err) => {
+    state.finished = true;
+    state.exitCode = -1;
+    if (!state.stderr) state.stderr = `启动命令失败：${err.message}`;
+    signal?.removeEventListener("abort", onAbort);
+    notify();
+    if (!finishNotified) {
+      finishNotified = true;
+      for (const callback of finishCallbacks) callback();
+    }
+  });
+  child.on("close", (code) => {
+    state.finished = true;
+    state.exitCode = code ?? (state.killed ? 124 : -1);
+    signal?.removeEventListener("abort", onAbort);
+    notify();
+    if (!finishNotified) {
+      finishNotified = true;
+      for (const callback of finishCallbacks) callback();
+    }
+  });
+
+  const kill = () => {
+    if (state.killed || state.finished) return;
+    state.killed = true;
+    killTree(child, deps.logger);
+    if (spec.containerName) stopContainer(spec.containerName);
+  };
+  const onAbort = () => kill();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) kill();
+
+  const snapshot = (): CommandJobSnapshot => ({
+    id,
+    finished: state.finished,
+    exitCode: state.finished ? state.exitCode : null,
+    killed: state.killed,
+    truncated: state.truncated,
+    stdout: state.stdout,
+    stderr: state.stderr,
+    elapsedMs: Date.now() - startedAt,
+    ...(state.lastOutputAt > 0 ? { outputAgeMs: Date.now() - state.lastOutputAt } : {}),
+  });
+
+  const wait = (ms: number): Promise<CommandJobSnapshot> => {
+    if (state.finished) {
+      signal?.removeEventListener("abort", onAbort);
+      return Promise.resolve(snapshot());
+    }
+    return new Promise((resolve) => {
+      if (state.finished) {
+        resolve(snapshot());
+        return;
+      }
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        waiters.delete(finish);
+        resolve(snapshot());
+      };
+      const timer = setTimeout(finish, Math.max(0, Math.min(ms, 300_000)));
+      timer.unref?.();
+      waiters.add(finish);
+    }).finally(() => {
+      if (state.finished) signal?.removeEventListener("abort", onAbort);
+    }) as Promise<CommandJobSnapshot>;
+  };
+
+  const readNew = (): CommandJobSnapshot => {
+    const snap = snapshot();
+    const out = snap.stdout.slice(cursorOut);
+    const err = snap.stderr.slice(cursorErr);
+    cursorOut = snap.stdout.length;
+    cursorErr = snap.stderr.length;
+    return { ...snap, stdout: out, stderr: err };
+  };
+
+  const tail = (maxChars = 4_000): string => {
+    const text = `${state.stdout}\n${state.stderr}`.trim();
+    return text.length <= maxChars ? text : text.slice(-maxChars);
+  };
+
+  const onFinished = (callback: () => void): void => {
+    if (finishNotified) callback();
+    else finishCallbacks.push(callback);
+  };
+
+  deps.logger.info(`job ${id.slice(0, 8)} started: ${command.slice(0, 120)}`);
+  return { id, sandbox: spec.sandbox, startedAt, wait, kill, onFinished, readNew, tail };
+}
 
 function appendCapped(state: { stdout: string; stderr: string; truncated: boolean }, stream: "stdout" | "stderr", chunk: Buffer): void {
   const current = Buffer.byteLength(state[stream], "utf8");

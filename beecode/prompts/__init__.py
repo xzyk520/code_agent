@@ -26,7 +26,12 @@ _BASE = """你是 Bee Code，一个运行在 VS Code 里的编程助手。
 2. 确需写工作区时才申请 `sandbox`；
 3. 确需下载依赖/访问网络时才申请 `sandbox-network`；
 4. 只有必须操作真实系统（如安装系统包）才申请 `host`。
-每次升级都要说明具体理由，不要一次性申请当前不需要的权限。"""
+每次升级都要说明具体理由，不要一次性申请当前不需要的权限。
+
+长命令没有硬性执行时限。`run_command` 默认等 60 秒；如果返回 `status=running`，说明命令还在跑，
+用 `command_wait(job_id, yield_ms)` 继续等待并读取新输出。每次返回会给出已运行时间、progress 和 nextPollMs；
+你要根据进度判断继续等，还是用 `command_terminate(job_id)` 终止并换方案。不要重新执行同一条命令。
+对 conda/npm 等慢操作，优先用 60s、120s、180s 的递进间隔，不要每秒轮询。"""
 
 _MODE = {
     "chat": """当前模式：Chat（解释与讨论）。

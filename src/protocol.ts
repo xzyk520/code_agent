@@ -12,7 +12,7 @@
  *
  * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
  */
-export const PROTOCOL_VERSION = 38;
+export const PROTOCOL_VERSION = 39;
 
 // ─────────────────────────── 报文 ───────────────────────────
 
@@ -331,13 +331,15 @@ export interface RunParams {
   /** 工作区相对目录；省略 = 工作区根 */
   cwd?: string;
   timeoutMs?: number;
+  /** 本次最多等待多久就返回运行中状态（不是杀进程的超时） */
+  yieldMs?: number;
   /** 执行环境请求：sandbox-readonly = Docker 只读；sandbox = Docker 工作区可写；sandbox-network = Docker + 网络；host = 真实系统 Shell */
   sandbox?: "sandbox-readonly" | "sandbox" | "sandbox-network" | "host";
   /** sandbox-network / host 请求必须说明理由（会展示给用户审批） */
   justification?: string;
 }
 export interface RunResult {
-  exitCode: number;
+  exitCode: number | null;
   stdout: string;
   stderr: string;
   /** 输出超过上限被截断 */
@@ -346,6 +348,27 @@ export interface RunResult {
   sandbox: "none" | "docker-readonly" | "docker" | "docker-network" | "host" | "host-readonly";
   /** 超时被杀（exitCode 通常为 124） */
   killed: boolean;
+  /** 长命令后台任务 id；有它表示命令还在运行 */
+  jobId?: string;
+  status?: "running" | "exited";
+  /** 从启动到本次返回的已运行毫秒数 */
+  elapsedMs?: number;
+  /** 建议下一次 command_wait 的等待毫秒数 */
+  nextPollMs?: number;
+  /** 根据输出尾部推断的当前阶段 */
+  progress?: string;
+  /** 距离最近一次新输出的毫秒数；没有输出时为 undefined */
+  outputAgeMs?: number;
+}
+
+export interface CommandWaitParams {
+  jobId: string;
+  /** 本次最多等待多久；默认 60000，上限 300000 */
+  yieldMs?: number;
+}
+
+export interface CommandTerminateParams {
+  jobId: string;
 }
 
 /** 一轮用于总结的输入 */
@@ -389,6 +412,8 @@ export interface ShellMethodParams {
   "secrets.get": SecretsGetParams;
   "context.summarize": ContextSummarizeParams;
   "run": RunParams;
+  "command.wait": CommandWaitParams;
+  "command.terminate": CommandTerminateParams;
 }
 
 export interface ShellMethodResults {
@@ -407,6 +432,8 @@ export interface ShellMethodResults {
   "secrets.get": SecretsGetResult;
   "context.summarize": ContextSummarizeResult;
   "run": RunResult;
+  "command.wait": RunResult;
+  "command.terminate": RunResult;
 }
 
 export type ShellMethod = keyof ShellMethodParams;
@@ -654,6 +681,16 @@ export interface UiReasoningParams {
   text: string;
   /** 第几次模型调用（用于分段显示） */
   round?: number;
+}
+
+export interface CommandWaitParams {
+  jobId: string;
+  /** 本次最多等待多久；默认 60000，上限 300000 */
+  yieldMs?: number;
+}
+
+export interface CommandTerminateParams {
+  jobId: string;
 }
 
 export interface UiRetryParams {

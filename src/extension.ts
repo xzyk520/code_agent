@@ -28,7 +28,7 @@ import { SummaryStore } from "./summaryStore";
 import { RetryStore, type PendingTurn, type RetryEvent } from "./retryStore";
 import { mergeNotices } from "./notices";
 import { buildRuleSet, evaluate, isSensitiveWrite, type Evaluation, type RuleSet } from "./permissions";
-import { createRunAdapter, detectDocker } from "./adapters/runAdapter";
+import { createRunAdapter, detectDocker, type CommandJob, type CommandJobSnapshot } from "./adapters/runAdapter";
 import { ensureWorkspaceTrust, isTrusted, toggleWorkspaceTrust } from "./trust";
 import { decide as decidePolicy, isHostReadOnlyCommand, isReadOnlyCommand, type AgentRole, type PolicyDecision } from "./policy";
 import { addApprovedRoot, isInside, resolveTarget } from "./paths";
@@ -45,6 +45,8 @@ import type {
   ChatMessage,
   ProposalChangedParams,
   ProposalDto,
+  CommandTerminateParams,
+  CommandWaitParams,
   RunParams,
   RunResult,
   UiDeltaParams,
@@ -146,6 +148,20 @@ class Shell {
   private lastTurnRequest?: { text: string; mode: Mode; attachments: AttachedContext[] };
   /** 命令级 checkpoint：命令结束后可一键撤销 */
   private readonly commandCheckpoints = new Map<string, { files: string[]; command: string; createdAt: number }>();
+  /** 长命令 job（无硬超时；由 command_wait / command_terminate 管理） */
+  private readonly commandJobs = new Map<
+    string,
+    {
+      job: CommandJob;
+      sessionId: string;
+      command: string;
+      checkpointId: string;
+      sandbox: RunResult["sandbox"];
+      pollCount: number;
+      nextPollMs: number;
+      finalized: boolean;
+    }
+  >();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
   private readonly attachmentNotices: string[] = [];
   private attachmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -338,6 +354,8 @@ class Shell {
     if (this.disposed) return;
     this.disposed = true;
 
+    for (const record of this.commandJobs.values()) record.job.kill();
+    this.commandJobs.clear();
     // 先把最后几条消息落盘，再停内核
     await this.sessions.updateStatus(this.sessionId, "idle").catch(() => undefined);
     await this.sessions.flush().catch(() => undefined);
@@ -714,6 +732,7 @@ class Shell {
 
   /** 新建会话：换 id、清空面板、重开上下文 */
   private async newSession(): Promise<void> {
+    this.killSessionCommandJobs();
     await this.sessions.flush();
     this.sessionId = newSessionId();
     await this.context.globalState.update(SESSION_KEY, this.sessionId);
@@ -762,6 +781,7 @@ class Shell {
     });
     if (!picked || picked.id === this.sessionId) return;
 
+    this.killSessionCommandJobs();
     await this.sessions.flush();
     this.sessionId = picked.id;
     await this.context.globalState.update(SESSION_KEY, this.sessionId);
@@ -897,7 +917,17 @@ class Shell {
     this.updateStatus();
   }
 
+  /** 停止当前会话仍在跑的命令 job（切换会话/用户停止/停用） */
+  private killSessionCommandJobs(): void {
+    for (const [id, record] of this.commandJobs) {
+      if (record.sessionId !== this.sessionId) continue;
+      record.job.kill();
+      this.commandJobs.delete(id);
+    }
+  }
+
   private async abort(): Promise<void> {
+    this.killSessionCommandJobs();
     const core = this.core;
     if (!core) return;
     await core.abort(this.sessionId).catch((err: unknown) => {
@@ -1659,31 +1689,121 @@ class Shell {
           })
       : "";
 
-    try {
-      const result = await this.runner.run(effectiveParams, ctx);
-      return hostReadonlyFallback ? { ...result, sandbox: "host-readonly" as const } : result;
-    } finally {
-      if (checkpointId) {
-        void this.checkpoint
-          .diff(checkpointId)
-          .then((files) => {
-            if (files.length === 0) return;
-            this.commandCheckpoints.set(checkpointId, {
-              files,
-              command: params.command,
-              createdAt: Date.now(),
-            });
-            this.panel.commandCheckpointEvent({
-              id: checkpointId,
-              files,
-              command: params.command,
-            });
-          })
-          .catch((err: unknown) => {
-            this.log.warn(`命令变更清单失败：${err instanceof Error ? err.message : String(err)}`);
-          });
-      }
+    const job = await this.runner.start(effectiveParams, ctx);
+    const record = {
+      job,
+      sessionId: this.sessionId,
+      command: params.command,
+      checkpointId,
+      sandbox: (hostReadonlyFallback ? "host-readonly" : job.sandbox) as RunResult["sandbox"],
+      pollCount: 1,
+      nextPollMs: 120_000,
+      finalized: false,
+    };
+    this.commandJobs.set(job.id, record);
+    job.onFinished(() => {
+      void this.finalizeCommandJob(record);
+    });
+    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 60_000, 300_000));
+    const snapshot = await job.wait(yieldMs);
+    return await this.commandJobResult(record, snapshot);
+  }
+
+  /** 把 job 状态变成模型可见的 RunResult；running 时保留 jobId 供 command_wait 续等 */
+  private async commandJobResult(
+    record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>,
+    snapshot: CommandJobSnapshot,
+  ): Promise<RunResult> {
+    const fresh = record.job.readNew();
+    if (fresh.finished) {
+      await this.finalizeCommandJob(record);
+      return {
+        exitCode: fresh.exitCode,
+        stdout: fresh.stdout,
+        stderr: fresh.stderr,
+        truncated: fresh.truncated,
+        durationMs: fresh.elapsedMs,
+        sandbox: record.sandbox,
+        killed: fresh.killed,
+        jobId: record.job.id,
+        status: "exited",
+        elapsedMs: fresh.elapsedMs,
+        ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
+      };
     }
+    const progress = this.inferCommandProgress(record.command, record.job.tail());
+    const nextPollMs = Math.min(300_000, 60_000 * (record.pollCount + 1));
+    record.pollCount += 1;
+    record.nextPollMs = nextPollMs;
+    return {
+      exitCode: null,
+      stdout: fresh.stdout,
+      stderr: fresh.stderr,
+      truncated: fresh.truncated,
+      durationMs: snapshot.elapsedMs,
+      sandbox: record.sandbox,
+      killed: false,
+      jobId: record.job.id,
+      status: "running",
+      elapsedMs: snapshot.elapsedMs,
+      nextPollMs,
+      progress,
+      ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
+    };
+  }
+
+  private async finalizeCommandJob(record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>): Promise<void> {
+    if (record.finalized) return;
+    if (this.disposed || record.sessionId !== this.sessionId) return;
+    record.finalized = true;
+    if (!record.checkpointId) return;
+    try {
+      const files = await this.checkpoint.diff(record.checkpointId);
+      if (files.length === 0) return;
+      this.commandCheckpoints.set(record.checkpointId, {
+        files,
+        command: record.command,
+        createdAt: Date.now(),
+      });
+      this.panel.commandCheckpointEvent({
+        id: record.checkpointId,
+        files,
+        command: record.command,
+      });
+    } catch (err) {
+      this.log.warn(`命令变更清单失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private inferCommandProgress(command: string, tail: string): string {
+    const text = `${command}\n${tail}`.toLowerCase();
+    if (/solving environment|collecting package metadata|parsing|resolving|repodata/.test(text)) {
+      return "环境解析/依赖求解中";
+    }
+    if (/downloading|fetching|download/.test(text)) return "下载中";
+    if (/extracting|installing|unpacking/.test(text)) return "解压/安装中";
+    if (/building|compiling|linking|bundling/.test(text)) return "构建/编译中";
+    if (/tests?|test suite|pytest|jest|vitest/.test(text)) return "测试运行中";
+    const last = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-1)[0];
+    return last ? `仍在运行：${last.slice(0, 160)}` : "仍在运行（暂无新输出）";
+  }
+
+  private async commandWait(params: CommandWaitParams, ctx: InboundRequestContext): Promise<RunResult> {
+    const record = this.commandJobs.get(params.jobId);
+    if (!record) throw deniedError("未知或已结束的命令 job；请重新执行命令");
+    if (record.sessionId !== this.sessionId) throw deniedError("这个命令 job 不属于当前会话");
+    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? record.nextPollMs, 300_000));
+    const snapshot = await record.job.wait(yieldMs);
+    return await this.commandJobResult(record, snapshot);
+  }
+
+  private async commandTerminate(params: CommandTerminateParams): Promise<RunResult> {
+    const record = this.commandJobs.get(params.jobId);
+    if (!record) throw deniedError("未知或已结束的命令 job");
+    if (record.sessionId !== this.sessionId) throw deniedError("这个命令 job 不属于当前会话");
+    record.job.kill();
+    const snapshot = await record.job.wait(5_000);
+    return await this.commandJobResult(record, snapshot);
   }
 
   private async restoreCommandCheckpoint(id: string): Promise<void> {
@@ -2626,6 +2746,8 @@ class Shell {
       return this.edit.apply(params, ctx);
     });
     this.server.register("run", (params, ctx) => this.runCommand(params, ctx));
+    this.server.register("command.wait", (params, ctx) => this.commandWait(params, ctx));
+    this.server.register("command.terminate", (params) => this.commandTerminate(params));
     this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));

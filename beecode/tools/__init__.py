@@ -77,6 +77,8 @@ READ_ONLY_TOOLS = (
     "find_references",
     "get_diagnostics",
     "run_command",
+    "command_wait",
+    "command_terminate",
 )
 
 
@@ -207,14 +209,16 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（必须用户批准）。按最小权限逐级申请：默认 sandbox-readonly（Docker 只读）；"
-            "需要写工作区才用 sandbox；需要下载依赖/访问网络才用 sandbox-network；只有必须真实系统才用 host。"
-            "每升一级都要填写 justification，不要一次性申请不必要的权限。",
+            "在工作区内执行命令（必须用户批准）。命令不再有硬性执行时限：先等待 yield_ms（默认 60s）；"
+            "如果还没结束会返回 status=running、jobId、已运行时间和 progress。"
+            "此时用 command_wait 继续等待并获取新输出；由你根据进度决定继续等还是 command_terminate 换方案。"
+            "不要重新执行同一条命令。按最小权限逐级申请：默认 sandbox-readonly；需要写工作区才用 sandbox；"
+            "需要下载依赖/访问网络才用 sandbox-network；只有必须真实系统才用 host。每升一级都要 justification。",
             _obj(
                 {
                     "command": _str("要执行的命令"),
                     "cwd": _str("工作区相对目录（可选）"),
-                    "timeout_ms": _int("超时毫秒（默认使用长工具时限，通常 600000）"),
+                    "yield_ms": _int("本次最多等待多少毫秒就返回运行中（默认 60000，上限 300000；不是杀进程超时）"),
                     "sandbox": {
                         "type": "string",
                         "enum": ["sandbox-readonly", "sandbox", "sandbox-network", "host"],
@@ -224,6 +228,24 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                 },
                 ["command"],
             ),
+        ),
+        ToolSpec(
+            "command_wait",
+            "继续等待一个仍在运行的 run_command 任务。返回新输出、status、已运行时间、progress 和 nextPollMs。"
+            "如果 status=exited 就是最终结果；如果仍是 running，由你判断继续等待还是 command_terminate。",
+            _obj(
+                {
+                    "job_id": _str("run_command 返回的 jobId"),
+                    "yield_ms": _int("本次最多等待多少毫秒（默认 60000，上限 300000）"),
+                },
+                ["job_id"],
+            ),
+        ),
+        ToolSpec(
+            "command_terminate",
+            "终止一个仍在运行的 run_command 任务，返回已收集的输出和最终状态。"
+            "用于进度停滞、方案错误或不再需要结果时。",
+            _obj({"job_id": _str("run_command 返回的 jobId")}, ["job_id"]),
         ),
     ]
 
@@ -237,6 +259,8 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         "get_diagnostics": builtin.get_diagnostics,
         "propose_edit": builtin.propose_edit,
         "run_command": builtin.run_command,
+        "command_wait": builtin.command_wait,
+        "command_terminate": builtin.command_terminate,
         "spawn_subagent": builtin.spawn_subagent,
         "update_plan": builtin.update_plan,
         "diagram": builtin.diagram,

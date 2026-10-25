@@ -181,21 +181,43 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
     justification = str(params.get("justification") or "").strip()
     if sandbox != "sandbox-readonly" and not justification:
         raise ValueError(f"sandbox={sandbox} 必须提供 justification，说明为什么需要额外权限")
-    timeout_ms = _int_or_none(params.get("timeout_ms"))
-    if timeout_ms is None:
-        # 命令默认用长工具时限，下载/构建不再被 120s 默认值误杀
-        timeout_ms = int(ctx.long_tool_timeout_s * 1000)
-    rpc_timeout = max(600.0, ctx.long_tool_timeout_s + 60.0)
-    if timeout_ms:
-        rpc_timeout = max(rpc_timeout, timeout_ms / 1000.0 + 60.0)
+    yield_ms = _int_or_none(params.get("yield_ms"))
+    if yield_ms is None:
+        # 兼容旧参数名；它不是杀进程的超时，只是本次等待多久就返回运行中
+        yield_ms = _int_or_none(params.get("timeout_ms"))
+    if yield_ms is None:
+        yield_ms = 60_000
+    yield_ms = max(1_000, min(int(yield_ms), 300_000))
     result = await ctx.shell.run(
         str(params["command"]),
         cwd=_str_or_none(params.get("cwd")),
-        timeout_ms=timeout_ms,
-        rpc_timeout=rpc_timeout,
+        yield_ms=yield_ms,
         sandbox=sandbox,
         justification=justification,
     )
+    return _run_payload(result)
+
+
+async def command_wait(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """继续等待一个长命令；返回新输出、已运行时间和下一步建议。"""
+    job_id = str(params.get("job_id") or "").strip()
+    if not job_id:
+        raise ValueError("job_id 不能为空")
+    yield_ms = _int_or_none(params.get("yield_ms"))
+    result = await ctx.shell.wait(job_id, yield_ms=yield_ms)
+    return _run_payload(result)
+
+
+async def command_terminate(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """终止一个长命令并返回已收集的输出。"""
+    job_id = str(params.get("job_id") or "").strip()
+    if not job_id:
+        raise ValueError("job_id 不能为空")
+    result = await ctx.shell.terminate(job_id)
+    return _run_payload(result)
+
+
+def _run_payload(result: Any) -> dict[str, Any]:
     stdout, out_omitted = _shape_text(result.stdout, head=100, tail=40)
     stderr, err_omitted = _shape_text(result.stderr, head=40, tail=10)
     payload: dict[str, Any] = {
@@ -206,8 +228,23 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         "killed": result.killed,
         "sandbox": result.sandbox,
         "durationMs": result.duration_ms,
+        "status": result.status,
         "ok": result.ok,
     }
+    if result.job_id:
+        payload["jobId"] = result.job_id
+    if result.status == "running":
+        payload["elapsedMs"] = result.elapsed_ms
+        payload["nextPollMs"] = result.next_poll_ms or 60_000
+        payload["progress"] = result.progress or "仍在运行"
+        payload["hint"] = (
+            "命令仍在运行。用 command_wait(job_id, yield_ms) 继续等待并获取新输出；"
+            "如果进度停滞或方向不对，用 command_terminate(job_id) 终止。不要重新执行同一命令。"
+        )
+    elif result.elapsed_ms:
+        payload["elapsedMs"] = result.elapsed_ms
+    if result.output_age_ms is not None:
+        payload["outputAgeMs"] = result.output_age_ms
     if out_omitted:
         payload["stdoutOmittedLines"] = out_omitted
     if err_omitted:
