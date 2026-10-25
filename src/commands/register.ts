@@ -10,6 +10,7 @@ export interface CommandDeps {
   log: Logger;
   configureModel(): Promise<void>;
   restartCore(): Promise<void>;
+  setupPython(): Promise<void>;
   restoreCheckpoint(): Promise<void>;
   acceptAll(): Promise<void>;
   rejectAll(): Promise<void>;
@@ -106,6 +107,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   register("beeCode.proposal.rejectAll", () => deps.rejectAll());
   register("beeCode.checkpoint.restore", () => deps.restoreCheckpoint());
   register("beeCode.core.restart", () => deps.restartCore());
+  register("beeCode.core.setup", () => deps.setupPython());
   register("beeCode.core.showOutput", () => deps.log.show());
   register("beeCode.exportDiagnostics", () => deps.exportDiagnostics());
   register("beeCode.dev.crashMock", () => deps.crashMock());

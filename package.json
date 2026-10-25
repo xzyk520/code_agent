@@ -116,6 +116,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.core.setup",
+        "title": "Set up Python core",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.core.showOutput",
         "title": "Show logs",
         "category": "Bee Code"

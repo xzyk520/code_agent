@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import * as os from "node:os";
 import * as nodePath from "node:path";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { clearRememberedChoices, createConfirmAdapter, createSecretAdapter } from "./adapters/interactionAdapter";
 import { createDiagnosticsAdapter } from "./adapters/diagnosticsAdapter";
@@ -67,6 +69,7 @@ import type {
   UiUsageParams,
 } from "./protocol";
 const SESSION_KEY = "beeCode.sessionId";
+const execFileAsync = promisify(execFile);
 
 import { PythonCore } from "./rpc/client";
 import { ShellServer } from "./rpc/server";
@@ -278,6 +281,7 @@ class Shell {
       log: this.log,
       configureModel: () => this.configureModel(),
       restartCore: () => this.restartCore(),
+      setupPython: () => this.setupPython(),
       restoreCheckpoint: () => this.restoreCheckpoint(),
       acceptAll: () => this.acceptAllProposals(),
       rejectAll: () => this.rejectAllProposals(),
@@ -872,6 +876,12 @@ class Shell {
           role: "system",
           text: tr(this.config.language, `内核已退出（${reason}，code=${code ?? "?"}）。可运行「Bee Code: 重启内核进程」重试。`, `Core exited (${reason}, code=${code ?? "?"}). You can run "Bee Code: Restart Core Process" to retry.`),
         });
+        void vscode.window
+          .showErrorMessage(`Bee Code: the Python core exited (${reason}).`, "Set up Python", "Show logs")
+          .then((choice) => {
+            if (choice === "Set up Python") void this.setupPython();
+            else if (choice === "Show logs") this.log.showStderr();
+          });
         this.updateStatus();
       });
 
@@ -2769,6 +2779,121 @@ class Shell {
         await vscode.workspace.fs.writeFile(to, await vscode.workspace.fs.readFile(from));
       }
     }
+  }
+
+  // ── Python environment setup ─────────────────────────────────────────────
+
+  /** Probe candidate interpreters, install missing dependencies, and save the selected path. */
+  private async setupPython(): Promise<void> {
+    const candidates: Array<{ file: string; args: string[] }> = [
+      { file: this.config.pythonPath, args: [] },
+      { file: "python3", args: [] },
+      { file: "python", args: [] },
+      ...(process.platform === "win32" ? [{ file: "py", args: ["-3"] }] : []),
+    ];
+    const seen = new Set<string>();
+    const probes: Array<{ file: string; args: string[]; version: string; httpx: boolean }> = [];
+    for (const candidate of candidates) {
+      const key = `${candidate.file} ${candidate.args.join(" ")}`;
+      if (seen.has(key) || !candidate.file) continue;
+      seen.add(key);
+      const probe = await this.probePython(candidate.file, candidate.args);
+      if (probe) probes.push({ ...candidate, ...probe });
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      [
+        ...probes.map((probe) => ({
+          label: `${probe.file}${probe.args.length ? ` ${probe.args.join(" ")}` : ""}`,
+          description: `Python ${probe.version}${probe.httpx ? "" : " · missing httpx"}`,
+          file: probe.file,
+          args: probe.args,
+          httpx: probe.httpx,
+          version: probe.version,
+        })),
+        { label: "Enter a Python path manually…", description: "", file: "", args: [] as string[], httpx: false, version: "" },
+      ],
+      { title: "Bee Code: set up the Python core", placeHolder: "Choose the Python interpreter that should run beecode" },
+    );
+    if (!picked) return;
+
+    let file = picked.file;
+    let args = picked.args;
+    if (!file) {
+      const input = await vscode.window.showInputBox({
+        title: "Bee Code: Python interpreter path",
+        prompt: "Absolute path to python.exe / python3",
+        value: this.config.pythonPath,
+        ignoreFocusOut: true,
+      });
+      if (!input?.trim()) return;
+      file = input.trim();
+      args = [];
+    }
+
+    let probe = await this.probePython(file, args);
+    if (!probe) {
+      void vscode.window.showErrorMessage(`Bee Code: ${file} could not be started as Python.`);
+      return;
+    }
+    if (!probe.httpx) {
+      const install = await vscode.window.showWarningMessage(
+        `Bee Code: ${file} (Python ${probe.version}) is missing httpx. Install the beecode dependencies now?`,
+        { modal: true },
+        "Install dependencies",
+      );
+      if (install !== "Install dependencies") return;
+      await this.installPythonDeps(file, args);
+      probe = await this.probePython(file, args);
+      if (!probe?.httpx) {
+        void vscode.window.showErrorMessage("Bee Code: dependencies are still missing. See the terminal output for details.");
+        return;
+      }
+    }
+    if (!this.versionAtLeast(probe.version, 3, 11)) {
+      void vscode.window.showErrorMessage(`Bee Code: Python ${probe.version} is too old; 3.11 or newer is required.`);
+      return;
+    }
+
+    await vscode.workspace.getConfiguration("beeCode").update("core.pythonPath", file, vscode.ConfigurationTarget.Global);
+    this.config = readConfig().config;
+    void vscode.window.showInformationMessage(`Bee Code: Python core set to ${file} (Python ${probe.version}).`);
+    await this.restartCore();
+  }
+
+  private async probePython(file: string, args: string[]): Promise<{ version: string; httpx: boolean } | undefined> {
+    const script =
+      'import sys,json\n' +
+      'try:\n import httpx; ok=True\nexcept Exception:\n ok=False\n' +
+      'print(json.dumps({"version":".".join(map(str,sys.version_info[:3])),"httpx":ok}))';
+    try {
+      const { stdout } = await execFileAsync(file, [...args, "-c", script], { timeout: 8000, windowsHide: true });
+      const parsed = JSON.parse(stdout.trim().split(/\r?\n/).pop() ?? "{}") as { version?: string; httpx?: boolean };
+      if (!parsed.version) return undefined;
+      return { version: parsed.version, httpx: Boolean(parsed.httpx) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private versionAtLeast(version: string, major: number, minor: number): boolean {
+    const [a, b] = version.split(".").map((part) => Number.parseInt(part, 10));
+    return (a ?? 0) > major || ((a ?? 0) === major && (b ?? 0) >= minor);
+  }
+
+  private async installPythonDeps(file: string, args: string[]): Promise<void> {
+    const coreRoot = this.config.coreRoot || this.context.extensionUri.fsPath;
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Bee Code: installing Python dependencies" },
+      async () => {
+        try {
+          await execFileAsync(file, [...args, "-m", "pip", "install", "-e", coreRoot], { timeout: 300_000, windowsHide: true });
+        } catch (err) {
+          this.log.warn(`pip install failed: ${err instanceof Error ? err.message : String(err)}`);
+          await execFileAsync(file, [...args, "-m", "pip", "install", "httpx>=0.27", "pydantic>=2.7"], { timeout: 300_000, windowsHide: true });
+        }
+      },
+    );
   }
 
   /** Command palette: choose the user-visible UI language. */
