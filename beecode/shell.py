@@ -74,9 +74,12 @@ class RunResult:
     job_id: str | None = None
     status: str = "exited"
     elapsed_ms: int = 0
-    next_poll_ms: int | None = None
     progress: str | None = None
     output_age_ms: int | None = None
+    backgrounded: bool = False
+    has_new_output: bool = False
+    no_new_output: bool = False
+    notice: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -495,6 +498,11 @@ class ShellClient:
         result = await self._call("command.wait", payload, timeout=max(120.0, wait_ms / 1000 + 60))
         return _run_result(result)
 
+    async def list_jobs(self) -> list[dict[str, Any]]:
+        result = await self._call("command.list", {})
+        jobs = result.get("jobs")
+        return list(jobs) if isinstance(jobs, list) else []
+
     async def terminate(self, job_id: str) -> RunResult:
         result = await self._call("command.terminate", {"jobId": job_id}, timeout=30.0)
         return _run_result(result)
@@ -525,7 +533,10 @@ def _run_result(result: dict[str, Any]) -> RunResult:
         job_id=str(result["jobId"]) if result.get("jobId") else None,
         status=str(result.get("status") or "exited"),
         elapsed_ms=int(result.get("elapsedMs") or result.get("durationMs") or 0),
-        next_poll_ms=int(result["nextPollMs"]) if result.get("nextPollMs") is not None else None,
         progress=str(result["progress"]) if result.get("progress") else None,
         output_age_ms=int(result["outputAgeMs"]) if result.get("outputAgeMs") is not None else None,
+        backgrounded=bool(result.get("backgrounded", False)),
+        has_new_output=bool(result.get("hasNewOutput", False)),
+        no_new_output=bool(result.get("noNewOutput", False)),
+        notice=str(result["notice"]) if result.get("notice") else None,
     )

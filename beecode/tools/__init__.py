@@ -79,6 +79,7 @@ READ_ONLY_TOOLS = (
     "run_command",
     "command_wait",
     "command_terminate",
+    "command_list",
 )
 
 
@@ -209,7 +210,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "run_command",
-            "在工作区内执行命令（必须用户批准）。命令不再有硬性执行时限：先等待 yield_ms（默认 60s）；"
+            "在工作区内执行命令（必须用户批准）。命令不再有硬性执行时限：先等待 yield_ms（默认 120s）；"
             "如果还没结束会返回 status=running、jobId、已运行时间和 progress。"
             "此时用 command_wait 继续等待并获取新输出；由你根据进度决定继续等还是 command_terminate 换方案。"
             "不要重新执行同一条命令。按最小权限逐级申请：默认 sandbox-readonly；需要写工作区才用 sandbox；"
@@ -218,7 +219,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                 {
                     "command": _str("要执行的命令"),
                     "cwd": _str("工作区相对目录（可选）"),
-                    "yield_ms": _int("本次最多等待多少毫秒就返回运行中（默认 60000，上限 300000；不是杀进程超时）"),
+                    "yield_ms": _int("前台最多等多少毫秒；默认 120000，上限 300000。超过后转入后台，不是杀进程超时"),
                     "sandbox": {
                         "type": "string",
                         "enum": ["sandbox-readonly", "sandbox", "sandbox-network", "host"],
@@ -231,15 +232,21 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         ),
         ToolSpec(
             "command_wait",
-            "继续等待一个仍在运行的 run_command 任务。返回新输出、status、已运行时间、progress 和 nextPollMs。"
+            "按你选择的间隔等待后台任务。返回自上次读取以来的全部新输出；没有新输出时返回 noNewOutput。"
             "如果 status=exited 就是最终结果；如果仍是 running，由你判断继续等待还是 command_terminate。",
             _obj(
                 {
                     "job_id": _str("run_command 返回的 jobId"),
-                    "yield_ms": _int("本次最多等待多少毫秒（默认 60000，上限 300000）"),
+                    "yield_ms": _int("本次轮询间隔（毫秒，默认 120000，上限 300000）；由你决定"),
                 },
                 ["job_id"],
             ),
+        ),
+        ToolSpec(
+            "command_list",
+            "列出当前会话的后台任务：job_id、命令、运行中/已结束、已运行时间、最近输出时间。"
+            "当你忘记了 job_id 或想确认还有哪些任务在跑时使用。",
+            _obj({}),
         ),
         ToolSpec(
             "command_terminate",
@@ -261,6 +268,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         "run_command": builtin.run_command,
         "command_wait": builtin.command_wait,
         "command_terminate": builtin.command_terminate,
+        "command_list": builtin.command_list,
         "spawn_subagent": builtin.spawn_subagent,
         "update_plan": builtin.update_plan,
         "diagram": builtin.diagram,

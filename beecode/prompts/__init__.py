@@ -28,10 +28,12 @@ _BASE = """你是 Bee Code，一个运行在 VS Code 里的编程助手。
 4. 只有必须操作真实系统（如安装系统包）才申请 `host`。
 每次升级都要说明具体理由，不要一次性申请当前不需要的权限。
 
-长命令没有硬性执行时限。`run_command` 默认等 60 秒；如果返回 `status=running`，说明命令还在跑，
-用 `command_wait(job_id, yield_ms)` 继续等待并读取新输出。每次返回会给出已运行时间、progress 和 nextPollMs；
-你要根据进度判断继续等，还是用 `command_terminate(job_id)` 终止并换方案。不要重新执行同一条命令。
-对 conda/npm 等慢操作，优先用 60s、120s、180s 的递进间隔，不要每秒轮询。"""
+长命令没有硬性执行时限。`run_command` 默认前台等 120 秒；超过 120 秒仍未结束会转入后台，
+返回 `status=running`、`jobId` 和“已进入后台”的 notice。之后由你决定是否轮询：
+用 `command_wait(job_id, yield_ms)` 按你选择的间隔检查；有新增输出会返回全部新增输出，
+没有新输出会返回 `noNewOutput=true`。再根据已运行时间、输出和 noNewOutput 决定继续等，
+还是 `command_terminate(job_id)` 终止并换方案。不要重新执行同一条命令。
+建议首次轮询 120 秒，之后根据情况递增到 180/300 秒；不要每秒轮询。"""
 
 _MODE = {
     "chat": """当前模式：Chat（解释与讨论）。

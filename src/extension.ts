@@ -45,6 +45,7 @@ import type {
   ChatMessage,
   ProposalChangedParams,
   ProposalDto,
+  CommandListResult,
   CommandTerminateParams,
   CommandWaitParams,
   RunParams,
@@ -157,9 +158,10 @@ class Shell {
       command: string;
       checkpointId: string;
       sandbox: RunResult["sandbox"];
-      pollCount: number;
-      nextPollMs: number;
       finalized: boolean;
+      backgrounded: boolean;
+      resultDelivered: boolean;
+      noticeSent: boolean;
     }
   >();
   /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
@@ -461,10 +463,13 @@ class Shell {
     const all = await this.sessions.open(this.sessionId);
     // 机械裁剪负责"取最近 8 条 + 兜底摘要"；模型摘要负责"更早轮次的可读总结"
     const built = buildContext(all, undefined);
-    if (built.folded === 0) return { summary: built.summary, history: built.messages };
+    const jobNote = this.activeCommandJobNote();
+    const history: ChatMessage[] = [...built.messages];
+    if (jobNote) history.push({ role: "system", text: jobNote });
+    if (built.folded === 0) return { summary: built.summary, history };
 
     const summary = await this.modelSummary(all.length);
-    return { summary: summary ?? built.summary, history: built.messages };
+    return { summary: summary ?? built.summary, history };
   }
 
   /** 聊天回滚：摘要按"仍保留的轮次"截断，并同步落盘 */
@@ -1696,26 +1701,31 @@ class Shell {
       command: params.command,
       checkpointId,
       sandbox: (hostReadonlyFallback ? "host-readonly" : job.sandbox) as RunResult["sandbox"],
-      pollCount: 1,
-      nextPollMs: 120_000,
       finalized: false,
+      backgrounded: false,
+      resultDelivered: false,
+      noticeSent: false,
     };
     this.commandJobs.set(job.id, record);
     job.onFinished(() => {
       void this.finalizeCommandJob(record);
+      // 给首次等待的结果一个微小窗口；超过窗口仍未交付才发完成通知，避免重复
+      setTimeout(() => this.notifyCommandJobFinished(record), 300);
     });
-    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 60_000, 300_000));
+    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 120_000, 300_000));
     const snapshot = await job.wait(yieldMs);
-    return await this.commandJobResult(record, snapshot);
+    return await this.commandJobResult(record, snapshot, true);
   }
 
   /** 把 job 状态变成模型可见的 RunResult；running 时保留 jobId 供 command_wait 续等 */
   private async commandJobResult(
     record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>,
     snapshot: CommandJobSnapshot,
+    first = false,
   ): Promise<RunResult> {
     const fresh = record.job.readNew();
     if (fresh.finished) {
+      record.resultDelivered = true;
       await this.finalizeCommandJob(record);
       return {
         exitCode: fresh.exitCode,
@@ -1727,14 +1737,18 @@ class Shell {
         killed: fresh.killed,
         jobId: record.job.id,
         status: "exited",
+        ...(record.backgrounded ? { backgrounded: true, notice: "后台任务已结束。" } : {}),
+        hasNewOutput: fresh.stdout.length > 0 || fresh.stderr.length > 0,
         elapsedMs: fresh.elapsedMs,
         ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
       };
     }
-    const progress = this.inferCommandProgress(record.command, record.job.tail());
-    const nextPollMs = Math.min(300_000, 60_000 * (record.pollCount + 1));
-    record.pollCount += 1;
-    record.nextPollMs = nextPollMs;
+    record.backgrounded = true;
+    const hasNewOutput = fresh.stdout.length > 0 || fresh.stderr.length > 0;
+    const progress = hasNewOutput
+      ? this.inferCommandProgress(record.command, record.job.tail())
+      : "没有新增输出";
+    const elapsed = Math.round(snapshot.elapsedMs / 1000);
     return {
       exitCode: null,
       stdout: fresh.stdout,
@@ -1745,9 +1759,16 @@ class Shell {
       killed: false,
       jobId: record.job.id,
       status: "running",
+      backgrounded: true,
+      hasNewOutput,
+      noNewOutput: !hasNewOutput,
       elapsedMs: snapshot.elapsedMs,
-      nextPollMs,
       progress,
+      notice: first
+        ? `命令已运行 ${elapsed}s 仍未结束，已转入后台。可用 command_wait 按你选择的间隔轮询，或稍后处理；不会再自动等待。`
+        : hasNewOutput
+          ? `后台任务有新增输出；已运行 ${elapsed}s。`
+          : `没有新增输出；任务仍在运行，已运行 ${elapsed}s。`,
       ...(fresh.outputAgeMs !== undefined ? { outputAgeMs: fresh.outputAgeMs } : {}),
     };
   }
@@ -1792,9 +1813,60 @@ class Shell {
     const record = this.commandJobs.get(params.jobId);
     if (!record) throw deniedError("未知或已结束的命令 job；请重新执行命令");
     if (record.sessionId !== this.sessionId) throw deniedError("这个命令 job 不属于当前会话");
-    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? record.nextPollMs, 300_000));
+    const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 120_000, 300_000));
     const snapshot = await record.job.wait(yieldMs);
     return await this.commandJobResult(record, snapshot);
+  }
+
+  private notifyCommandJobFinished(record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>): void {
+    if (record.noticeSent || record.resultDelivered || !record.backgrounded) return;
+    if (this.disposed || record.sessionId !== this.sessionId) return;
+    record.noticeSent = true;
+    const snap = record.job.peek();
+    const exit = snap.exitCode === null ? "unknown" : String(snap.exitCode);
+    const text =
+      `后台任务 ${record.job.id} 已结束（exit ${exit}，运行 ${Math.round(snap.elapsedMs / 1000)}s）。` +
+      "用 command_list 查看状态，或用 command_wait 收集结果。";
+    this.panel.addMessage({ id: `bg_${record.job.id}_${Date.now()}`, role: "system", text });
+    this.remember("system", text);
+  }
+
+  /** 让模型在后续轮次知道还有哪些后台任务；不把历史输出重复塞进上下文 */
+  private activeCommandJobNote(): string | undefined {
+    const lines: string[] = [];
+    for (const record of this.commandJobs.values()) {
+      if (record.sessionId !== this.sessionId) continue;
+      const snap = record.job.peek();
+      if (snap.finished) continue;
+      const age = snap.outputAgeMs === undefined ? "无" : `${Math.round(snap.outputAgeMs / 1000)}s`;
+      lines.push(
+        `- ${record.job.id} [${record.sandbox}] 已运行 ${Math.round(snap.elapsedMs / 1000)}s，最近输出 ${age}：${record.command.slice(0, 120)}`,
+      );
+      if (lines.length >= 8) break;
+    }
+    if (lines.length === 0) return undefined;
+    return (
+      "[后台任务] 当前仍有命令在运行。需要结果时用 command_wait(job_id, yield_ms) 轮询；" +
+      "没有新输出会返回 noNewOutput=true；不需要时用 command_terminate。\n" +
+      lines.join("\n")
+    );
+  }
+
+  private async commandList(): Promise<CommandListResult> {
+    const jobs: CommandListResult["jobs"] = [];
+    for (const record of this.commandJobs.values()) {
+      if (record.sessionId !== this.sessionId) continue;
+      const snap = record.job.peek();
+      jobs.push({
+        jobId: record.job.id,
+        command: record.command.slice(0, 200),
+        status: snap.finished ? "exited" : "running",
+        elapsedMs: snap.elapsedMs,
+        ...(snap.outputAgeMs !== undefined ? { outputAgeMs: snap.outputAgeMs } : {}),
+        sandbox: record.sandbox,
+      });
+    }
+    return { jobs };
   }
 
   private async commandTerminate(params: CommandTerminateParams): Promise<RunResult> {
@@ -2748,6 +2820,7 @@ class Shell {
     this.server.register("run", (params, ctx) => this.runCommand(params, ctx));
     this.server.register("command.wait", (params, ctx) => this.commandWait(params, ctx));
     this.server.register("command.terminate", (params) => this.commandTerminate(params));
+    this.server.register("command.list", () => this.commandList());
     this.server.register("checkpoint.create", (params) => this.checkpoint.create(params));
     this.server.register("checkpoint.restore", (params) => this.checkpoint.restore(params));
     this.server.register("diff.open", (params) => this.diff.open(params));
@@ -2865,9 +2938,12 @@ function toAttachment(context: AttachedContext): Attachment {
  * 而 `text` 又会单独传一次。不去重的话内核会收到两份同样的用户消息。
  */
 function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] {
-  const last = history[history.length - 1];
-  if (last && last.role === "user" && last.text.trim() === text.trim()) {
-    return history.slice(0, -1);
+  // 后面可能追加了后台任务系统提示；跳过尾部 system 再找当前用户消息
+  let index = history.length - 1;
+  while (index >= 0 && history[index]?.role === "system") index -= 1;
+  const candidate = history[index];
+  if (candidate && candidate.role === "user" && candidate.text.trim() === text.trim()) {
+    return history.filter((_, i) => i !== index);
   }
   return history;
 }

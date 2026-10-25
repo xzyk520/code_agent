@@ -730,7 +730,9 @@ class AgentLoop:
                 return
         if not summary.strip():
             return
-        note = {"role": "system", "content": f"【轮内压缩摘要】{summary.strip()[:600]}"}
+        job_lines = _running_job_lines(chunk)
+        job_note = ("\n【仍在运行的后台任务】\n" + "\n".join(job_lines)) if job_lines else ""
+        note = {"role": "system", "content": f"【轮内压缩摘要】{summary.strip()[:600]}{job_note}"}
         messages[1:last_user] = [note]
         self._compact_log(session, f"模型摘要替代了 {len(chunk)} 条早期消息")
 
@@ -1037,11 +1039,15 @@ class AgentLoop:
         )
         timeout_s = (
             self._config.long_tool_timeout_s
-            if call.name in ("run_command", "spawn_subagent")
+            if call.name in ("run_command", "command_wait", "spawn_subagent")
             else self._config.tool_timeout_s
         )
         if call.name == "run_command":
-            requested_ms = args.get("timeout_ms")
+            requested_ms = args.get("yield_ms") or args.get("timeout_ms")
+            if isinstance(requested_ms, (int, float)) and requested_ms > 0:
+                timeout_s = max(timeout_s, float(requested_ms) / 1000.0 + 30.0)
+        elif call.name == "command_wait":
+            requested_ms = args.get("yield_ms")
             if isinstance(requested_ms, (int, float)) and requested_ms > 0:
                 timeout_s = max(timeout_s, float(requested_ms) / 1000.0 + 30.0)
         elif call.name == "spawn_subagent":
@@ -1527,6 +1533,30 @@ def _content_text(message: dict[str, Any]) -> str:
     return ""
 
 
+def _running_job_lines(messages: list[dict[str, Any]]) -> list[str]:
+    """从当前上下文提取仍在运行的后台任务，压缩时不能把 jobId 丢掉。"""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        try:
+            data = json.loads(str(message.get("content") or ""))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        job_id = data.get("jobId")
+        if not job_id or data.get("status") != "running" or str(job_id) in seen:
+            continue
+        seen.add(str(job_id))
+        lines.append(
+            f"- {job_id} [{data.get('sandbox') or '?'}] 已运行 {int(data.get('elapsedMs') or 0)/1000:.0f}s"
+            f"；{data.get('progress') or '仍在运行'}；用 command_wait 轮询或 command_terminate 终止"
+        )
+    return lines
+
+
 def _digest_tool_content(raw: str) -> dict[str, Any]:
     """把一条工具结果压成"观察摘要"：留指针与关键指标，不留正文。"""
     try:
@@ -1558,6 +1588,23 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "note": "图已渲染；完整源码在助手消息的 diagrams 字段里",
         }
     if "exitCode" in data:
+        if data.get("jobId"):
+            # 后台任务的状态和 jobId 不能丢；旧轮询输出只留尾部
+            tail = str(data.get("stdout") or data.get("stderr") or "")[-300:]
+            return {
+                "digest": True,
+                "tool": "run_command",
+                "jobId": data.get("jobId"),
+                "status": data.get("status"),
+                "exitCode": data.get("exitCode"),
+                "ok": data.get("ok"),
+                "elapsedMs": data.get("elapsedMs"),
+                "outputAgeMs": data.get("outputAgeMs"),
+                "progress": data.get("progress"),
+                "noNewOutput": data.get("noNewOutput"),
+                **({"lastOutput": tail} if tail.strip() else {}),
+                "note": "后台任务状态保留；完整输出请用 command_wait",
+            }
         return {
             "digest": True,
             "tool": "run_command",
@@ -1565,6 +1612,20 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "ok": data.get("ok"),
             "note": "输出已省略（需要时重新运行）",
         }
+    if "jobs" in data and isinstance(data.get("jobs"), list):
+        jobs = []
+        for item in data["jobs"][:8]:
+            if not isinstance(item, dict):
+                continue
+            jobs.append(
+                {
+                    "jobId": item.get("jobId"),
+                    "status": item.get("status"),
+                    "elapsedMs": item.get("elapsedMs"),
+                    "command": str(item.get("command") or "")[:120],
+                }
+            )
+        return {"digest": True, "tool": "command_list", "jobs": jobs, "count": len(data["jobs"])}
     if "hits" in data:
         return {"digest": True, "tool": "search_code", "hits": len(data.get("hits") or []), "note": "命中内容已省略"}
     if "files" in data and "path" not in data:
@@ -1592,6 +1653,21 @@ def _drop_oldest_exchanges(messages: list[dict[str, Any]]) -> int:
         message = messages[index]
         if message.get("role") == "assistant" and message.get("tool_calls"):
             ids = {str(call.get("id")) for call in message["tool_calls"]}
+            # 正在运行的后台 job 的 tool 结果不能丢：模型还要靠 jobId 轮询/终止
+            running_job = False
+            for tool_message in messages[index + 1 :]:
+                if tool_message.get("role") != "tool" or str(tool_message.get("tool_call_id")) not in ids:
+                    continue
+                try:
+                    data = json.loads(str(tool_message.get("content") or ""))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(data, dict) and data.get("jobId") and data.get("status") == "running":
+                    running_job = True
+                    break
+            if running_job:
+                index += 1
+                continue
             del messages[index]
             dropped += 1
             last_user -= 1

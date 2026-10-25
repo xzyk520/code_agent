@@ -7,9 +7,8 @@
 
 ### Added
 
-- **长命令 job**：`run_command` 不再有硬执行时限；首次等待 `yield_ms`（默认 60s），
-未结束返回 `jobId/status/progress/elapsedMs/nextPollMs`，用 `command_wait` 继续、`command_terminate` 停止；
-默认间隔 60/120/180/240/300s，避免 1s 轮询烧 token
+- **长命令 job**：`run_command` 不再有硬执行时限；首次等待 120s，未结束则进入后台并返回 `backgrounded`/`notice`，
+模型自行决定 `command_wait` 的轮询间隔；有新增输出返回全部新增，无新增返回 `noNewOutput=true`；`command_terminate` 停止，`command_list` 找回 job
 - **无 Docker 回退**：`sandbox-readonly` 对严格白名单命令走 host 受限只读（结果 `host-readonly`）；
 `sandbox`/`sandbox-network` 走 host 审批 + 命令级 checkpoint；非白名单只读命令仍拒绝
 - **模型连接恢复**：首 token 前最多 5 次指数退避重试（429/5xx/超时/传输），

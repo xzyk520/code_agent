@@ -17,7 +17,8 @@
     "secrets.get": { "required": ["key"], "optional": [], "result": ["value"] },
     "run": { "required": ["command"], "optional": ["cwd", "timeoutMs", "yieldMs", "role", "sandbox", "justification"], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] },
     "command.wait": { "required": ["jobId"], "optional": ["yieldMs"], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] },
-    "command.terminate": { "required": ["jobId"], "optional": [], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] }
+    "command.terminate": { "required": ["jobId"], "optional": [], "result": ["exitCode", "stdout", "stderr", "truncated", "durationMs", "sandbox", "killed"] },
+    "command.list": { "required": [], "optional": [], "result": ["jobs"] }
   },
   "coreMethods": [
     "initialize",

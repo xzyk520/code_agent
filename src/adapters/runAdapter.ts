@@ -333,6 +333,8 @@ export interface CommandJob {
   kill(): void;
   /** 子进程结束时通知一次（用于命令结束后落 checkpoint） */
   onFinished(callback: () => void): void;
+  /** 不消费游标地查看当前状态；用于 command_list */
+  peek(): CommandJobSnapshot;
   /** 消费自上次 readNew 以来的输出；不会重复返回旧内容 */
   readNew(): CommandJobSnapshot;
   tail(maxChars?: number): string;
@@ -538,7 +540,7 @@ function createJob(
   };
 
   deps.logger.info(`job ${id.slice(0, 8)} started: ${command.slice(0, 120)}`);
-  return { id, sandbox: spec.sandbox, startedAt, wait, kill, onFinished, readNew, tail };
+  return { id, sandbox: spec.sandbox, startedAt, wait, kill, onFinished, readNew, peek: snapshot, tail };
 }
 
 function appendCapped(state: { stdout: string; stderr: string; truncated: boolean }, stream: "stdout" | "stderr", chunk: Buffer): void {

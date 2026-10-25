@@ -353,8 +353,14 @@ export interface RunResult {
   status?: "running" | "exited";
   /** 从启动到本次返回的已运行毫秒数 */
   elapsedMs?: number;
-  /** 建议下一次 command_wait 的等待毫秒数 */
-  nextPollMs?: number;
+  /** 首次超过前台等待后转入后台 */
+  backgrounded?: boolean;
+  /** 本次 command_wait 是否读到了新输出 */
+  hasNewOutput?: boolean;
+  /** 运行中且没有新输出 */
+  noNewOutput?: boolean;
+  /** 展示给模型的后台/轮询提示 */
+  notice?: string;
   /** 根据输出尾部推断的当前阶段 */
   progress?: string;
   /** 距离最近一次新输出的毫秒数；没有输出时为 undefined */
@@ -369,6 +375,19 @@ export interface CommandWaitParams {
 
 export interface CommandTerminateParams {
   jobId: string;
+}
+
+export interface CommandJobInfo {
+  jobId: string;
+  command: string;
+  status: "running" | "exited";
+  elapsedMs: number;
+  outputAgeMs?: number;
+  sandbox: RunResult["sandbox"];
+}
+
+export interface CommandListResult {
+  jobs: CommandJobInfo[];
 }
 
 /** 一轮用于总结的输入 */
@@ -414,6 +433,7 @@ export interface ShellMethodParams {
   "run": RunParams;
   "command.wait": CommandWaitParams;
   "command.terminate": CommandTerminateParams;
+  "command.list": Record<string, never>;
 }
 
 export interface ShellMethodResults {
@@ -434,6 +454,7 @@ export interface ShellMethodResults {
   "run": RunResult;
   "command.wait": RunResult;
   "command.terminate": RunResult;
+  "command.list": CommandListResult;
 }
 
 export type ShellMethod = keyof ShellMethodParams;

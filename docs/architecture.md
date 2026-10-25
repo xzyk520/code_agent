@@ -652,7 +652,7 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | 结果无变化 | 连续 3 次工具结果哈希相同 | 回填 `no_progress` 错误，要求换策略或总结 |
 | 计划未完成 | 计划里**非最后一步**仍有 pending/doing，且模型不再调用工具 | 催一次「计划里还有未完成步骤」；最后一步规定为总结，可以留到最后 |
 | 提前收工 | 用户要求改代码但本轮 0 个提案 | 追问「你还没有提交任何修改」，允许一次补提案 |
-| 单工具超时 | 普通工具 `toolTimeoutMs`（默认 30s）；`spawn_subagent` 用 `longToolTimeoutMs`（默认 600s）。`run_command` **没有硬执行时限**：每次只等 `yieldMs`（默认 60s），未结束就返回 `status=running` + `jobId`，由 `command_wait` 继续等待或 `command_terminate` 终止 | 进程不会因固定墙钟被杀；超过等待窗口只返回运行中状态，工具调用本身仍受 RPC/步数预算约束 |
+| 单工具超时 | 普通工具 `toolTimeoutMs`（默认 30s）；`spawn_subagent` 用 `longToolTimeoutMs`（默认 600s）。`run_command` **没有硬执行时限**：每次只等 `yieldMs`（默认 120s），未结束就返回 `status=running` + `jobId`，由 `command_wait` 继续等待或 `command_terminate` 终止 | 进程不会因固定墙钟被杀；超过等待窗口只返回运行中状态，工具调用本身仍受 RPC/步数预算约束 |
 | 主 agent 模型响应 | 首 token `modelFirstTokenSeconds`（60s）+ 空闲 `modelIdleSeconds`（45s）+ 总响应 `maxTurnSeconds` / `largeTaskSeconds`（600s / 1800s） | 只计模型调用，不计工具；超时强制停止本轮 |
 | 单批工具数 | `maxToolCallsPerBatch`（默认 8） | 超出部分回填 `batch_limit` 错误，要求模型拆批 |
 | 工具异常 | 任意异常 | 捕获后回填 `{error, kind}`；**不中断循环**，模型可改策略 |
@@ -1633,16 +1633,21 @@ await vscode.commands.executeCommand("vscode.diff", realFileUri, proposedVirtual
 长命令使用 job 模型：
 
 ```text
-run_command(yield_ms=60000)
-  → 60s 内结束：直接返回最终结果
-  → 未结束：返回 status=running、jobId、elapsedMs、progress、nextPollMs
-      → command_wait(jobId, yield_ms=nextPollMs)
-      → 仍 running：再返回新输出/进度
+run_command(yield_ms=120000)
+  → 120s 内结束：直接返回最终结果
+  → 未结束：返回 status=running、jobId、elapsedMs、progress、backgrounded
+      → 命令进入后台，模型收到 notice
+      → 模型自行决定 command_wait(jobId, yield_ms=轮询间隔)
+      → 有新增输出：返回全部新增输出；无新增：noNewOutput=true
       → status=exited：最终结果
       → command_terminate(jobId)：终止并返回已收集输出
 ```
 
-默认等待间隔递进：60s → 120s → 180s → 240s → 300s（上限）。没有固定命令总时长；进程由用户停止、`command_terminate`、会话切换/停用清理。
+后台任务没有固定命令总时长；轮询间隔由模型决定（默认 120s，上限 300s）。进程由用户停止、`command_terminate`、会话切换/停用清理。
+
+压缩时：后台任务的 `jobId/status/elapsedMs/outputAgeMs` 必须保留；无新输出的轮询折叠成一条状态，
+不能按普通工具输出丢掉；有新增输出只保留尾部。跨轮历史通过 `command_list`/后台任务系统提示恢复 job，
+`command_list` 结果也保留 job 摘要，避免压缩后模型忘记还在跑的任务。
 
 `run` RPC 已落地，默认**不可用**——`permissions.mode: manual` 下每条命令都要确认，`plan` 模式直接拒绝。
 

@@ -186,7 +186,7 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         # 兼容旧参数名；它不是杀进程的超时，只是本次等待多久就返回运行中
         yield_ms = _int_or_none(params.get("timeout_ms"))
     if yield_ms is None:
-        yield_ms = 60_000
+        yield_ms = 120_000
     yield_ms = max(1_000, min(int(yield_ms), 300_000))
     result = await ctx.shell.run(
         str(params["command"]),
@@ -206,6 +206,12 @@ async def command_wait(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
     yield_ms = _int_or_none(params.get("yield_ms"))
     result = await ctx.shell.wait(job_id, yield_ms=yield_ms)
     return _run_payload(result)
+
+
+async def command_list(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """列出当前会话仍在管理中的后台任务。"""
+    jobs = await ctx.shell.list_jobs()
+    return {"jobs": jobs, "count": len(jobs)}
 
 
 async def command_terminate(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
@@ -231,14 +237,21 @@ def _run_payload(result: Any) -> dict[str, Any]:
         "status": result.status,
         "ok": result.ok,
     }
+    if result.backgrounded:
+        payload["backgrounded"] = True
+    if result.has_new_output:
+        payload["hasNewOutput"] = True
+    if result.no_new_output:
+        payload["noNewOutput"] = True
+    if result.notice:
+        payload["notice"] = result.notice
     if result.job_id:
         payload["jobId"] = result.job_id
     if result.status == "running":
         payload["elapsedMs"] = result.elapsed_ms
-        payload["nextPollMs"] = result.next_poll_ms or 60_000
-        payload["progress"] = result.progress or "仍在运行"
+        payload["progress"] = result.progress or ("没有新增输出" if result.no_new_output else "仍在运行")
         payload["hint"] = (
-            "命令仍在运行。用 command_wait(job_id, yield_ms) 继续等待并获取新输出；"
+            "命令仍在后台运行。由你决定 command_wait(job_id, yield_ms) 的间隔；"
             "如果进度停滞或方向不对，用 command_terminate(job_id) 终止。不要重新执行同一命令。"
         )
     elif result.elapsed_ms:
