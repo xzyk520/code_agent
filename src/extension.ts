@@ -189,7 +189,7 @@ class Shell {
     this.log = new Logger();
     const read = readConfig();
     this.config = read.config;
-    for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
+    for (const problem of read.problems) this.log.warn(`Configuration problem: ${problem}`);
     this.server = new ShellServer(this.log);
     this.diff = new DiffAdapter(this.log);
     this.checkpoint = new CheckpointAdapter(
@@ -242,7 +242,7 @@ class Shell {
   }
 
   async start(): Promise<void> {
-    this.log.info(`激活：${describeConfig(this.config)}`);
+    this.log.info(`Activated: ${describeConfig(this.config)}`);
 
     await this.ensureSession();
     await this.refreshPermissions();
@@ -304,8 +304,8 @@ class Shell {
         const read = readConfig();
         this.config = read.config;
         this.panel.setLocale(this.config.language);
-        for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
-        this.log.info(`配置已更新：${describeConfig(this.config)}`);
+        for (const problem of read.problems) this.log.warn(`Configuration problem: ${problem}`);
+        this.log.info(`Configuration updated: ${describeConfig(this.config)}`);
         if (event.affectsConfiguration("beeCode.ui.language")) {
           this.updateStatus();
           return;
@@ -334,7 +334,7 @@ class Shell {
                       ...(summaryKey.key ? { summaryApiKey: summaryKey.key } : {}),
                     })
                     .catch((err: unknown) =>
-                      this.log.warn(`model.reload 失败: ${err instanceof Error ? err.message : String(err)}`),
+                      this.log.warn(`model.reload failed: ${err instanceof Error ? err.message : String(err)}`),
                     )
                 : undefined,
             );
@@ -376,7 +376,7 @@ class Shell {
       await core.shutdown().catch(() => undefined);
       core.dispose();
     }
-    this.log.info("已停用");
+    this.log.info("Deactivated");
   }
 
   // ───────────────────────── 会话与上下文 ─────────────────────────
@@ -405,7 +405,7 @@ class Shell {
     );
     this.persisted = existing.length;
     this.panel.resetReasoning();
-    this.log.info(`会话已恢复：${existing.length} 条消息（${this.sessionId}）`);
+    this.log.info(`Session restored: ${existing.length} messages (${this.sessionId})`);
     this.panel.setPlan(this.sessions.meta(this.sessionId)?.plan);
     await this.loadSummary(existing.length);
     await this.refreshTurns();
@@ -499,7 +499,7 @@ class Shell {
       text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
     };
     await this.summaries.save(this.sessionId, { covered: lines.length, coveredMessageIndex, lines });
-    this.log.info(`摘要随聊天回滚截断到 ${lines.length} 轮`);
+    this.log.info(`Summary truncated with chat rollback to ${lines.length} turns`);
   }
 
   /** 附件限制提示先入队，250ms 内的多条合并成一条 toast + 一条系统消息 */
@@ -519,7 +519,7 @@ class Shell {
     const notices = [...this.attachmentNotices];
     this.attachmentNotices.length = 0;
     const merged = mergeNotices(notices);
-    this.log.warn(`附件提示：${merged}`);
+    this.log.warn(`Attachment notice: ${merged}`);
     this.panel.addMessage({
       id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
       role: "system",
@@ -580,7 +580,7 @@ class Shell {
       return;
     }
     if (stored.coveredMessageIndex > totalMessages) {
-      this.log.warn(`摘要记录覆盖 ${stored.coveredMessageIndex} 条，但会话只有 ${totalMessages} 条，丢弃旧摘要`);
+      this.log.warn(`Summary covered ${stored.coveredMessageIndex} messages but the session has ${totalMessages}; discarding stale summary`);
       this.summaryCache = undefined;
       await this.summaries.remove(this.sessionId);
       return;
@@ -592,7 +592,7 @@ class Shell {
       lines,
       text: `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`,
     };
-    this.log.info(`摘要已恢复：覆盖 ${lines.length} 轮（${this.sessionId}）`);
+    this.log.info(`Summary restored: ${lines.length} turns (${this.sessionId})`);
   }
 
   /**
@@ -638,7 +638,7 @@ class Shell {
         text = result.summary;
       }
       if (!text) {
-        this.log.debug("模型摘要为空，退回机械摘要");
+        this.log.debug("Model summary was empty; falling back to mechanical summary");
         return cached?.text;
       }
       const coveredMessageIndex = covered[covered.length - 1]?.messageIndex ?? totalMessages;
@@ -648,10 +648,10 @@ class Shell {
         coveredMessageIndex,
         lines,
       });
-      this.log.info(`模型摘要：累计 ${covered.length} 轮（本次新增 ${fresh.length} 轮），已持久化`);
+      this.log.info(`Model summary: ${covered.length} turns total (${fresh.length} new), persisted`);
       return text;
     } catch (err) {
-      this.log.warn(`模型摘要失败（退回机械摘要）：${err instanceof Error ? err.message : String(err)}`);
+      this.log.warn(`Model summary failed (falling back to mechanical summary): ${err instanceof Error ? err.message : String(err)}`);
     }
     return cached?.text;
   }
@@ -739,7 +739,7 @@ class Shell {
       this.panel.setHint(tr(this.config.language, "检测到上次任务未完成，可点「重试本轮」。", "The previous task did not finish; use Retry."));
     }
     this.log.info(
-      `已恢复待重试请求（${pending.text.slice(0, 40)}${latest ? `，最后状态 ${latest.status}` : ""}）`,
+      `Restored pending retry (${pending.text.slice(0, 40)}${latest ? `, last status ${latest.status}` : ""})`,
     );
   }
 
@@ -884,7 +884,7 @@ class Shell {
 
       await core.initialize(params);
       this.core = core;
-      this.log.info(`内核就绪（${core.kind}）`);
+      this.log.info(`Core ready (${core.kind})`);
       this.updateStatus();
       return core;
     })();
@@ -906,7 +906,7 @@ class Shell {
       cwdOverride: this.config.cwd,
     });
 
-    this.log.info(`内核定位：${describeLaunch(spec)}（PYTHONPATH=${spec.env["PYTHONPATH"] ?? ""}）`);
+    this.log.info(`Core located: ${describeLaunch(spec)} (PYTHONPATH=${spec.env["PYTHONPATH"] ?? ""})`);
     const core = new PythonCore({
       pythonPath: this.config.pythonPath,
       args: spec.args,
@@ -945,7 +945,7 @@ class Shell {
     const core = this.core;
     if (!core) return;
     await core.abort(this.sessionId).catch((err: unknown) => {
-      this.log.warn(`abort 失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.log.warn(`abort failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     this.busy = false;
     void this.retries.append({
@@ -990,14 +990,14 @@ class Shell {
         fallbackLines: this.config.focus.fallbackLines,
         maxLines: this.config.focus.maxLines,
       }).catch((err: unknown) => {
-        this.log.debug(`读取光标位置失败: ${err instanceof Error ? err.message : String(err)}`);
+        this.log.debug(`Failed to read cursor focus: ${err instanceof Error ? err.message : String(err)}`);
         return undefined;
       });
       if (focus) {
         effectiveAttachments = [toFocusContext(focus)];
         if (this.config.focus.highlight) this.focusHighlight.show(focus);
         this.log.info(
-          `自动附加光标代码：${focus.path}:${focus.startLine}-${focus.endLine}（${focus.kind}${focus.symbol ? ` ${focus.symbol}` : ""}）`,
+          `Auto-attached cursor code: ${focus.path}:${focus.startLine}-${focus.endLine} (${focus.kind}${focus.symbol ? ` ${focus.symbol}` : ""})`,
         );
       }
     }
@@ -1024,7 +1024,7 @@ class Shell {
         attachments: effectiveAttachments,
         savedAt: Date.now(),
       })
-      .catch((err: unknown) => this.log.warn(`保存待重试请求失败: ${err instanceof Error ? err.message : String(err)}`));
+      .catch((err: unknown) => this.log.warn(`Failed to save pending retry: ${err instanceof Error ? err.message : String(err)}`));
     this.setBusy(true);
     this.assistantBuffer = "";
     this.turnIntent = undefined;
@@ -1089,7 +1089,7 @@ class Shell {
       }
       // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
       await this.appendTurn(userText, assistantText, mode).catch((err: unknown) => {
-        this.log.warn(`轮次记录失败：${err instanceof Error ? err.message : String(err)}`);
+        this.log.warn(`Failed to write turn record: ${err instanceof Error ? err.message : String(err)}`);
       });
       await this.refreshTurns();
       if (!turnFailed) await this.retries.clearPending(this.sessionId);
@@ -1162,7 +1162,7 @@ class Shell {
     try {
       core = await this.ensureCore();
     } catch (err) {
-      this.log.error("接受提案失败：内核不可用", err instanceof Error ? err.message : String(err));
+      this.log.error("Failed to accept proposal: core unavailable", err instanceof Error ? err.message : String(err));
       return false;
     }
 
@@ -1174,7 +1174,7 @@ class Shell {
       await this.assertWriteAllowed(dto.path, localContext(), { userApproved: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log.warn(`提案 ${id} 被权限拒绝：${message}`);
+      this.log.warn(`Proposal ${id} denied by permissions: ${message}`);
       void vscode.window.showWarningMessage(`Bee Code: ${message}`);
       return false;
     }
@@ -1183,7 +1183,7 @@ class Shell {
     if (this.config.checkpointEnabled) {
       const checkpoint = await this.checkpoint.create({ label: `accept ${dto.path}` }).catch(() => undefined);
       if (checkpoint?.id) {
-        this.log.debug(`自动检查点 ${checkpoint.id.slice(0, 8)}（${dto.path}）`);
+        this.log.debug(`Automatic checkpoint ${checkpoint.id.slice(0, 8)} (${dto.path})`);
         // 代码快照的同时快照聊天记录：回滚时可以选"代码 + 聊天一起回"
         const messages = await this.sessions.open(this.sessionId);
         await this.chatIndex.save(checkpoint.id, this.sessionId, messages.length);
@@ -1197,13 +1197,13 @@ class Shell {
     );
 
     if (result.applied) {
-      this.log.info(`提案已应用 ${id}`);
+      this.log.info(`Proposal applied ${id}`);
       this.panel.planStepDone(dto.path);
       const plan = this.panel.getPlan();
       if (plan) this.sessions.updatePlan(this.sessionId, plan);
       return true;
     }
-    this.log.warn(`提案未应用 ${id}（${dto.path}）：${result.message ?? "未知原因"}`);
+    this.log.warn(`Proposal not applied ${id} (${dto.path}): ${result.message ?? "unknown reason"}`);
     if (result.conflict) {
       this.proposals.markStale(id);
       void vscode.window.showWarningMessage(
@@ -1247,7 +1247,7 @@ class Shell {
   private cancelAcceptAll(): void {
     this.acceptAllCancelled = true;
     this.acceptAllToken += 1;
-    this.log.info("用户取消了批量接受");
+    this.log.info("User cancelled accept-all");
   }
 
   private async rejectAllProposals(): Promise<void> {
@@ -1286,7 +1286,7 @@ class Shell {
     const recorded = this.context.globalState.get<{ choice?: "yes" | "no"; fingerprint?: string }>("beeCode.docker");
 
     if (detected) {
-      this.log.info("docker 可用：命令将在沙箱内执行");
+      this.log.info("Docker available: commands run in the sandbox");
       await this.context.globalState.update("beeCode.docker", { choice: "yes", fingerprint });
       if (force || recorded?.choice !== "yes") {
         void vscode.window.showInformationMessage("Bee Code: 已检测到 Docker，命令将在沙箱内执行。");
@@ -1296,7 +1296,7 @@ class Shell {
 
     const askedBefore = recorded?.choice !== undefined && recorded.fingerprint === fingerprint;
     if (askedBefore && !force) {
-      this.log.info("docker 不可用（此前已提示过）：按无沙箱策略运行");
+      this.log.info("Docker unavailable (already reported): running with the no-sandbox policy");
       return;
     }
 
@@ -1326,7 +1326,7 @@ class Shell {
         fingerprint,
       });
     }
-    this.log.info(`docker 不可用：${this.dockerAvailable ? "?" : "无沙箱策略"}`);
+    this.log.info(`Docker unavailable: ${this.dockerAvailable ? "?" : "no-sandbox policy"}`);
   }
 
   private async redetectSandbox(): Promise<void> {
@@ -1381,7 +1381,7 @@ class Shell {
       ? await ensureWorkspaceTrust(this.context, this.log)
       : vscode.workspace.isTrusted;
     this.log.info(
-      `权限：mode=${this.config.permissions.mode} trusted=${this.trusted} ` +
+      `Permissions: mode=${this.config.permissions.mode} trusted=${this.trusted} ` +
         `rules(allow=${this.rules.allow.length} ask=${this.rules.ask.length} deny=${this.rules.deny.length})`,
     );
   }
@@ -1698,7 +1698,7 @@ class Shell {
           .create({ label: `command: ${params.command.slice(0, 80)}` })
           .then((result) => result.id)
           .catch((err: unknown) => {
-            this.log.warn(`命令级 checkpoint 创建失败：${err instanceof Error ? err.message : String(err)}`);
+            this.log.warn(`Command checkpoint creation failed: ${err instanceof Error ? err.message : String(err)}`);
             return "";
           })
       : "";
@@ -1802,7 +1802,7 @@ class Shell {
         command: record.command,
       });
     } catch (err) {
-      this.log.warn(`命令变更清单失败：${err instanceof Error ? err.message : String(err)}`);
+      this.log.warn(`Command change list failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1912,11 +1912,11 @@ class Shell {
       const restored = await this.checkpoint.restorePaths(id, record.files);
       this.commandCheckpoints.delete(id);
       this.panel.commandCheckpointRestored(id, restored.length);
-      this.log.info(`命令级恢复完成：${restored.length} 个文件`);
+      this.log.info(`Command restore complete: ${restored.length} files`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       void vscode.window.showErrorMessage(`Bee Code: 撤销失败：${message}`);
-      this.log.error(`命令级恢复失败：${message}`);
+      this.log.error(`Command restore failed: ${message}`);
     }
   }
 
@@ -1933,7 +1933,7 @@ class Shell {
       const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
       editor.selection = new vscode.Selection(range.start, range.start);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-      this.log.debug(`跳转到 ${path}:${start + 1}-${end + 1}`);
+      this.log.debug(`Jumped to ${path}:${start + 1}-${end + 1}`);
 
       // 跳转后重新画一次高亮：面板 chip 可能已经存在很久，实时高亮早就过期了。
       // addRead 自带 6 秒定时清除，且会去重（同一范围不会重复叠加）。
@@ -1942,7 +1942,7 @@ class Shell {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log.warn(`打开 ${path} 失败：${message}`);
+      this.log.warn(`Failed to open ${path}: ${message}`);
       void vscode.window.showWarningMessage(`Bee Code: 无法打开 ${path}（${message}）`);
     }
   }
@@ -2058,7 +2058,7 @@ class Shell {
       const elapsed = Date.now() - started;
       if (!response.ok) {
         const body = (await response.text()).slice(0, 200);
-        this.log.warn(`${label}自检失败：HTTP ${response.status} ${url}（key 来源 ${source}）`);
+        this.log.warn(`${label} self-check failed: HTTP ${response.status} ${url} (key source ${source})`);
         void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败 HTTP ${response.status}（${elapsed}ms）：${body}`);
         return;
       }
@@ -2067,13 +2067,13 @@ class Shell {
       const hasModel = Array.isArray(data.data) && data.data.some((m) => m.id === modelName);
       const sourceText =
         source === "env" ? "环境变量" : source === "main" ? "沿用主代理" : "凭据库";
-      this.log.info(`${label}自检通过：${url}（${count} 个模型，key 来源 ${source}）`);
+      this.log.info(`${label} self-check passed: ${url} (${count} models, key source ${source})`);
       void vscode.window.showInformationMessage(
         `Bee Code: ${label}连接正常（${elapsed}ms，${count} 个模型${hasModel ? `，包含 ${modelName}` : ""}；key 来源：${sourceText}）`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.log.warn(`${label}自检异常：${message}`);
+      this.log.warn(`${label} self-check error: ${message}`);
       void vscode.window.showWarningMessage(`Bee Code: ${label}连接失败：${message}`);
     }
   }
@@ -2131,7 +2131,7 @@ class Shell {
     const read = readConfig();
     this.config = read.config;
     this.log.info(
-      `子代理已配置：${this.effectiveSubagent().model} @ ${this.effectiveSubagent().baseUrl}`,
+      `Subagent configured: ${this.effectiveSubagent().model} @ ${this.effectiveSubagent().baseUrl}`,
     );
     void vscode.window.showInformationMessage("Bee Code: 子代理配置完成。");
 
@@ -2220,7 +2220,7 @@ class Shell {
 
     this.config = readConfig().config;
     this.log.info(
-      `摘要模型已配置：${this.config.summary.model || "（沿用主模型）"} @ ${this.config.summary.baseUrl || "（沿用主模型）"}`,
+      `Summary model configured: ${this.config.summary.model || "(inherit main)"} @ ${this.config.summary.baseUrl || "(inherit main)"}`,
     );
     void vscode.window.showInformationMessage(
       `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`,
@@ -2300,7 +2300,7 @@ class Shell {
     );
     if (confirm !== "清除") return;
     await this.context.secrets.delete(this.config.subagent.apiKeyId);
-    this.log.info("已清除子代理 API Key");
+    this.log.info("Subagent API key cleared");
     void vscode.window.showInformationMessage("Bee Code: 已清除子代理 API Key。");
   }
 
@@ -2318,7 +2318,7 @@ class Shell {
     );
     if (confirm !== "清除") return;
     await this.context.secrets.delete(this.config.apiKeyId);
-    this.log.info("已清除凭据库中的 API Key");
+    this.log.info("API key cleared from the credential store");
     void vscode.window.showInformationMessage("Bee Code: 已清除 API Key。");
   }
 
@@ -2374,8 +2374,8 @@ class Shell {
 
     const read = readConfig();
     this.config = read.config;
-    for (const problem of read.problems) this.log.warn(`配置有问题：${problem}`);
-    this.log.info(`模型已配置：${this.config.model.model} @ ${this.config.model.baseUrl}（key 已入库）`);
+    for (const problem of read.problems) this.log.warn(`Configuration problem: ${problem}`);
+    this.log.info(`Model configured: ${this.config.model.model} @ ${this.config.model.baseUrl} (key stored)`);
     void vscode.window.showInformationMessage("Bee Code: 模型配置完成。");
 
     // 配置变更监听会走 modelReload（不重启进程），这里不重复调用
@@ -2457,7 +2457,7 @@ class Shell {
     const { voided } = await this.checkpoint.rewind(picked.id);
     await this.chatIndex.remove(voided);
     this.log.info(
-      `回滚到 ${picked.id.slice(0, 8)}：恢复 ${result.restored.length} 个文件，作废 ${voided.length} 个后续快照`,
+      `Rolled back to ${picked.id.slice(0, 8)}: restored ${result.restored.length} files, invalidated ${voided.length} later snapshots`,
     );
 
     // 回滚后待审提案必然基于旧代码，直接清掉，避免误点「接受」
@@ -2546,7 +2546,7 @@ class Shell {
       ts: Date.now(),
       messageIndex: all.length,
     });
-    this.log.info(`回滚通知已写入会话（${withChat ? "含聊天回滚" : "仅代码"}）`);
+    this.log.info(`Rollback notice written to session (${withChat ? "with chat rollback" : "code only"})`);
   }
   /**
    * 导出诊断包（已脱敏）。
@@ -2800,7 +2800,7 @@ class Shell {
         return;
       }
       default:
-        this.log.debug(`未处理的内核通知: ${method}`);
+        this.log.debug(`Unhandled core notification: ${method}`);
     }
   }
 
@@ -2855,7 +2855,7 @@ class Shell {
     this.server.register("confirm.ask", (params, ctx) => this.confirm.ask(params, ctx));
 
     // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
-    this.log.info(`已注册 RPC 方法: ${this.server.listed().join(", ")}`);
+    this.log.info(`Registered RPC methods: ${this.server.listed().join(", ")}`);
 
     this.verifyProtocolContract();
   }
@@ -2866,10 +2866,10 @@ class Shell {
   private verifyCommands(registered: string[]): void {
     const problems = undeclaredCommands(this.context, registered);
     if (problems.length === 0) {
-      this.log.info(`命令对账通过（${registered.length} 个）`);
+      this.log.info(`Command reconciliation passed (${registered.length})`);
       return;
     }
-    for (const problem of problems) this.log.error(`命令对账：${problem}`);
+    for (const problem of problems) this.log.error(`Command reconciliation: ${problem}`);
     void vscode.window.showWarningMessage(`Bee Code: 命令声明与注册不一致（${problems.length} 处），详见输出面板。`);
   }
 
@@ -2887,15 +2887,15 @@ class Shell {
       process.cwd(),
     ]);
     if (!check.contract) {
-      for (const problem of check.problems) this.log.warn(`协议契约：${problem}`);
+      for (const problem of check.problems) this.log.warn(`Protocol contract: ${problem}`);
       return;
     }
     const problems = verifyRegistration(check.contract, this.server.listed());
     if (problems.length === 0) {
-      this.log.info(`协议契约校验通过（version=${check.contract.version}, ${this.server.listed().length} 个方法）`);
+      this.log.info(`Protocol contract verified (version=${check.contract.version}, ${this.server.listed().length} methods)`);
       return;
     }
-    for (const problem of problems) this.log.error(`协议契约不一致：${problem}`);
+    for (const problem of problems) this.log.error(`Protocol contract mismatch: ${problem}`);
     void vscode.window.showWarningMessage(
       `Bee Code: 协议契约与实际注册不一致（${problems.length} 处），详见输出面板。`,
     );
