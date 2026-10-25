@@ -1,9 +1,10 @@
-"""壳 ↔ 内核的传输层（JSON-RPC 2.0 over stdio / NDJSON）。
+"""Shell ↔ kernel transport layer (JSON-RPC 2.0 over stdio / NDJSON).
 
-这一层是**协议骨架**，与 agent 逻辑无关：循环、分发、取消、请求超时。
-业务处理函数由 `__main__.py` 注册。
+This layer is the **protocol skeleton** and has nothing to do with agent logic: the loop,
+dispatch, cancellation, and request timeouts. Business handlers are registered by
+`__main__.py`.
 
-对应 TS 侧：`src/rpc/client.ts`（壳作为服务端）与 `src/protocol.ts`（类型）。
+TS counterpart: `src/rpc/client.ts` (the shell acts as server) and `src/protocol.ts` (types).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any, Awaitable, Callable
 PROTOCOL_VERSION = 39
 
 # ---------------------------------------------------------------------------
-# 错误码（与 src/protocol.ts 的 RpcError 保持一致）
+# Error codes (kept in sync with RpcError in src/protocol.ts)
 # ---------------------------------------------------------------------------
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -42,9 +43,9 @@ class RpcError(Exception):
 
 @dataclass
 class RequestContext:
-    """一次壳 → 内核请求的上下文。"""
+    """Context of a single shell → kernel request."""
 
-    #: JSON-RPC 允许 number 或 string
+    #: JSON-RPC allows number or string
     id: int | str
     method: str
     cancelled: asyncio.Event = field(default_factory=asyncio.Event)
@@ -58,11 +59,12 @@ Handler = Callable[[dict[str, Any], RequestContext], Any | Awaitable[Any]]
 
 
 class JsonRpcPeer:
-    """stdin/stdout 上的 NDJSON 对端。
+    """NDJSON peer on stdin/stdout.
 
-    两个方向都要支持：
-      - 壳 → 内核：本类负责**分发**到注册的 handler
-      - 内核 → 壳：本类负责**发请求**并等待响应（`request()`），对应 `shell.py`
+    Both directions must be supported:
+      - shell → kernel: this class **dispatches** to the registered handler
+      - kernel → shell: this class **sends requests** and awaits responses (`request()`),
+        matching `shell.py`
     """
 
     def __init__(
@@ -76,22 +78,22 @@ class JsonRpcPeer:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        #: 请求上下文：取消时要能 set 它的 cancelled 事件（同步代码也能感知取消）
+        #: Request contexts: on cancellation we must set their cancelled event (so synchronous code can observe cancellation too)
         self._contexts: dict[str, RequestContext] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
 
-    # ───────────────────────── 注册与发送 ─────────────────────────
+    # ───────────────────────── Registration and sending ─────────────────────────
 
     def register(self, method: str, handler: Handler) -> None:
         self._handlers[method] = handler
 
     def notify(self, method: str, params: Any | None = None) -> None:
-        """单向通知（无 id，不等回复）。"""
+        """One-way notification (no id, no reply expected)."""
         self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
     async def request(self, method: str, params: Any | None = None, timeout: float = 30.0) -> Any:
-        """内核 → 壳的请求，等待响应。超时抛 RpcError。"""
+        """Kernel → shell request that waits for the response. Raises RpcError on timeout."""
         req_id = self._next_id
         self._next_id += 1
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
@@ -103,8 +105,9 @@ class JsonRpcPeer:
             self._cancel_outbound(req_id)
             raise RpcError(SHELL_ERROR, f"RPC 超时：{method}（{timeout}s）") from exc
         except asyncio.CancelledError:
-            # 父任务被取消时，必须通知壳中止对应的入站请求，
-            # 否则 run_command 的进程/容器会继续跑（见 runAdapter 的 abort 处理）。
+            # When the parent task is cancelled we must tell the shell to abort the matching
+            # inbound request, otherwise the run_command process/container keeps running
+            # (see abort handling in runAdapter).
             self._cancel_outbound(req_id)
             raise
         finally:
@@ -113,10 +116,10 @@ class JsonRpcPeer:
     def _cancel_outbound(self, req_id: int) -> None:
         try:
             self._write({"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": req_id}})
-        except Exception:  # noqa: BLE001 - 对端可能已经关闭
+        except Exception:  # noqa: BLE001 - the peer may already be closed
             pass
 
-    # ───────────────────────── 主循环 ─────────────────────────
+    # ───────────────────────── Main loop ─────────────────────────
 
     async def run(self) -> None:
         while not self._closed:
@@ -133,7 +136,7 @@ class JsonRpcPeer:
                 continue
             self._dispatch(message)
 
-        # stdin 关闭：取消所有在飞任务后退出
+        # stdin closed: cancel all in-flight tasks, then exit
         for task in list(self._tasks.values()):
             task.cancel()
         self._closed = True
@@ -141,11 +144,11 @@ class JsonRpcPeer:
     def _dispatch(self, message: dict[str, Any]) -> None:
         method = message.get("method")
         raw_id = message.get("id")
-        # JSON-RPC 允许 number 或 string；bool 是 int 的子类，要排除
+        # JSON-RPC allows number or string; bool is a subclass of int, so exclude it
         has_id = isinstance(raw_id, (int, str)) and not isinstance(raw_id, bool)
 
         if "method" not in message:
-            # 这是对端（壳）给我们的响应
+            # This is a response from the peer (the shell) to us
             self._settle(message)
             return
 
@@ -180,7 +183,7 @@ class JsonRpcPeer:
             result = handler(params, RequestContext(id=0, method=method))
             if inspect.isawaitable(result):
                 asyncio.create_task(result)  # type: ignore[arg-type]
-        except Exception:  # noqa: BLE001 - 通知失败不能拖垮主循环
+        except Exception:  # noqa: BLE001 - a failed notification must not take down the main loop
             pass
 
     async def _run_handler(self, req_id: int | str, method: str, params: dict[str, Any]) -> None:
@@ -208,7 +211,7 @@ class JsonRpcPeer:
 
     def _settle(self, message: dict[str, Any]) -> None:
         req_id = message.get("id")
-        # 我们发出去的请求 id 都是 int；string id 是对端 bug
+        # Every request id we send out is an int; a string id is a peer bug
         if not isinstance(req_id, int) or isinstance(req_id, bool):
             return
         future = self._pending.get(req_id)
@@ -220,10 +223,10 @@ class JsonRpcPeer:
         else:
             future.set_result(message.get("result"))
 
-    # ───────────────────────── 输出 ─────────────────────────
+    # ───────────────────────── Output ─────────────────────────
 
     def _write(self, payload: dict[str, Any]) -> None:
-        # JSON 里不会有裸换行，所以 NDJSON 分帧是安全的
+        # JSON never contains raw newlines, so NDJSON framing is safe
         line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         self._writer.write(line + "\n")
         self._writer.flush()

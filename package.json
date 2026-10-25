@@ -34,11 +34,11 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "不受信任的工作区只能读取与对话；写文件与执行命令会被拒绝。"
+      "description": "Untrusted workspaces allow read-only chat; file writes and command execution are denied."
     },
     "virtualWorkspaces": {
       "supported": false,
-      "description": "依赖真实文件系统与 git（影子检查点），不支持虚拟工作区。"
+      "description": "Requires a real filesystem and git (shadow checkpoints); virtual workspaces are not supported."
     }
   },
   "activationEvents": [],
@@ -52,6 +52,11 @@
   },
   "contributes": {
     "commands": [
+      {
+        "command": "beeCode.ui.language.switch",
+        "title": "Switch language",
+        "category": "Bee Code"
+      },
       {
         "command": "beeCode.chat.ask",
         "title": "Ask (Chat)",
@@ -254,8 +259,8 @@
             "zh",
             "en"
           ],
-          "default": "zh",
-          "markdownDescription": "UI language for panels, logs, hints and notifications. Default: Chinese (`zh`). Model prompts and tool descriptions are always English; model replies follow the user's language."
+          "default": "en",
+          "markdownDescription": "UI language for panels, logs, hints and notifications. Default: English (`en`). Model prompts and tool descriptions are always English; model replies follow the user's language."
         },
         "beeCode.core.mode": {
           "type": "string",
@@ -264,22 +269,22 @@
             "mock"
           ],
           "default": "python",
-          "markdownDescription": "内核模式：`python` 拉起真实内核；`mock` 用内置假内核（只调壳时用）。"
+          "markdownDescription": "Core mode: `python` starts the real core; `mock` uses the built-in fake core for shell-only work."
         },
         "beeCode.core.pythonPath": {
           "type": "string",
           "default": "python",
-          "markdownDescription": "Python 解释器路径。留 `python` 走 PATH；conda 环境请填绝对路径（如 `D:\\\\APP\\\\conda\\\\envs\\\\beeagent\\\\python.exe`）。"
+          "markdownDescription": "Python interpreter path. Leave `python` to use PATH; for Conda use an absolute path."
         },
         "beeCode.core.coreRoot": {
           "type": "string",
           "default": "",
-          "markdownDescription": "包含 `beecode/` 包的目录（会加入 `PYTHONPATH`）。留空则自动探测：先看工作区根（开发模式），再看扩展安装目录（安装模式）。"
+          "markdownDescription": "Directory containing the `beecode/` package (added to `PYTHONPATH`). Empty = auto-detect: workspace root first, then the extension directory."
         },
         "beeCode.core.cwd": {
           "type": "string",
           "default": "${workspaceFolder}",
-          "markdownDescription": "内核进程的工作目录，默认第一个工作区根。"
+          "markdownDescription": "Working directory for the core process. Defaults to the first workspace root."
         },
         "beeCode.core.args": {
           "type": "array",
@@ -287,28 +292,28 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "传递给解释器的参数。**留空表示 `-m beecode`**；调试内核时可改成 `[\"-m\",\"debugpy\",\"--listen\",\"5679\",\"-m\",\"beecode\"]`。"
+          "markdownDescription": "Interpreter arguments. Empty means `-m beecode`. For debugging use debugpy arguments."
         },
         "beeCode.model.baseUrl": {
           "type": "string",
           "scope": "machine",
           "order": 1,
           "default": "",
-          "markdownDescription": "OpenAI 兼容端点，例如 `https://api.deepseek.com/v1`（**不含** `/chat/completions`）。"
+          "markdownDescription": "OpenAI-compatible base URL, e.g. `https://api.deepseek.com/v1` (do not include `/chat/completions`)."
         },
         "beeCode.model.model": {
           "type": "string",
           "scope": "window",
           "order": 2,
           "default": "",
-          "markdownDescription": "模型名，例如 `deepseek-chat`。"
+          "markdownDescription": "Model name, e.g. `deepseek-chat`."
         },
         "beeCode.model.apiKeyId": {
           "type": "string",
           "scope": "machine",
           "order": 3,
           "default": "beeCode.apiKey.default",
-          "markdownDescription": "`SecretStorage` 里的键名。**密钥本身永不写入 settings.json。**"
+          "markdownDescription": "SecretStorage key name. The key itself is never written to settings.json."
         },
         "beeCode.model.temperature": {
           "type": "number",
@@ -324,12 +329,12 @@
             "never"
           ],
           "enumDescriptions": [
-            "默认不回传；服务端报错要求 reasoning_content 时自动补上",
-            "总是把思考内容随 assistant 消息回传",
-            "从不回传（兼容明确禁止回传的模型）"
+            "Default: do not replay; add reasoning_content automatically if the server rejects the request",
+            "Always replay reasoning with assistant messages",
+            "Never replay (for models that forbid it)"
           ],
           "default": "auto",
-          "markdownDescription": "思考内容的回传策略。思考内容本身只给用户看，不进上下文、不落盘。"
+          "markdownDescription": "Reasoning replay policy. Reasoning is shown to the user only; it is not sent to the model or persisted."
         },
         "beeCode.model.contextWindow": {
           "type": "number",
@@ -338,7 +343,7 @@
           "default": 32768,
           "minimum": 4096,
           "maximum": 2000000,
-          "markdownDescription": "模型上下文窗口（token）。轮内压缩按「窗口 × 70%」触发，影响长任务能否继续。"
+          "markdownDescription": "Model context window in tokens. In-turn compaction triggers at 70% of the window."
         },
         "beeCode.model.maxOutputTokens": {
           "type": "number",
@@ -354,17 +359,17 @@
             "off"
           ],
           "enumDescriptions": [
-            "先带图尝试，被拒后自动降级并记住",
-            "强制当作视觉模型",
-            "强制当作纯文本模型"
+            "Try with images; degrade and remember on rejection",
+            "Force vision support",
+            "Force text-only"
           ],
           "default": "auto",
-          "markdownDescription": "模型能否接收图片。`auto` = 先带图尝试；若服务端明确拒绝图片，自动改为文字描述并记住（不靠模型名枚举）。"
+          "markdownDescription": "Whether the model accepts images. `auto` tries images and remembers an explicit rejection."
         },
         "beeCode.model.supportsTools": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "端点是否支持原生 function calling；关掉后内核走 JSON 模式降级。"
+          "markdownDescription": "Whether the endpoint supports native function calling; disable to fall back to JSON mode."
         },
         "beeCode.permissions.mode": {
           "type": "string",
@@ -378,14 +383,14 @@
             "bypass"
           ],
           "enumDescriptions": [
-            "只读：不允许改文件、不允许执行命令",
-            "手动：写文件与执行命令都要确认（默认）",
-            "自动接受编辑：写文件不再逐次确认，执行命令仍要确认",
-            "自动：低风险操作自动放行（写文件放行，命令仍需确认）",
-            "全放行：不做任何确认，只应在容器/虚拟机里使用"
+            "Read-only: no file writes, no command execution",
+            "Manual: confirm writes and commands (default)",
+            "Accept edits: writes are no longer confirmed; commands still are",
+            "Auto: allow low-risk writes; commands still need confirmation",
+            "Bypass: no confirmations; only use inside a container or VM"
           ],
           "default": "manual",
-          "markdownDescription": "权限模式。规则（allow/ask/deny）优先于模式。"
+          "markdownDescription": "Permission mode. Rules (allow/ask/deny) take precedence."
         },
         "beeCode.permissions.allow": {
           "type": "array",
@@ -395,7 +400,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "允许规则，例如 `Read(src/**)`、`Run(npm test *)`。优先级：deny > ask > allow。"
+          "markdownDescription": "Allow rules, e.g. `Read(src/**)` or `Run(npm test *)`. Precedence: deny > ask > allow."
         },
         "beeCode.permissions.ask": {
           "type": "array",
@@ -405,7 +410,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "必须确认的规则，例如 `Edit(.github/**)`。"
+          "markdownDescription": "Ask rules, e.g. `Edit(.github/**)`."
         },
         "beeCode.permissions.deny": {
           "type": "array",
@@ -415,7 +420,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "禁止规则，例如 `Run(git push *)`、`Edit(.env*)`。**deny 永远优先**，allow 不能挖例外。"
+          "markdownDescription": "Deny rules, e.g. `Run(git push *)` or `Edit(.env*)`. Deny always wins."
         },
         "beeCode.permissions.sandbox": {
           "type": "string",
@@ -427,33 +432,33 @@
             "auto"
           ],
           "enumDescriptions": [
-            "直接在宿主执行（仅策略约束）",
-            "强制在 docker 容器内执行",
-            "有 docker 就用，没有则直连"
+            "Run directly on the host (policy-only)",
+            "Always run in Docker",
+            "Use Docker when available, otherwise run directly"
           ],
           "default": "off",
-          "markdownDescription": "命令执行的隔离级别。docker 模式会以 `--network none --read-only` 运行，见文档 §12.4。"
+          "markdownDescription": "Command isolation level. Docker uses `--network none --read-only`; see architecture §12.4."
         },
         "beeCode.permissions.dockerImage": {
           "type": "string",
           "scope": "window",
           "order": 25,
           "default": "node:22-alpine",
-          "markdownDescription": "沙箱镜像（需要包含你要执行的运行时，例如 node/python）。"
+          "markdownDescription": "Sandbox image; it must contain the runtime you execute (e.g. node/python)."
         },
         "beeCode.permissions.fullAccess": {
           "type": "boolean",
           "scope": "window",
           "order": 27,
           "default": false,
-          "markdownDescription": "开放完整权限：命令与写文件不再逐次确认（**不**解除「未受信任工作区只读」与「工作区外需确认」）。"
+          "markdownDescription": "Full access: no per-write/command confirmation. Untrusted-workspace and outside-workspace restrictions still apply."
         },
         "beeCode.permissions.requireTrust": {
           "type": "boolean",
           "scope": "window",
           "order": 26,
           "default": true,
-          "markdownDescription": "是否要求工作区被显式信任（不受信任时禁写、禁命令）。"
+          "markdownDescription": "Require explicit workspace trust; untrusted workspaces are read-only and cannot run commands."
         },
         "beeCode.attachments.maxCount": {
           "type": "number",
@@ -462,7 +467,7 @@
           "default": 10,
           "minimum": 1,
           "maximum": 50,
-          "markdownDescription": "单轮最多附加多少段代码/文件。"
+          "markdownDescription": "Maximum code/file attachments per turn."
         },
         "beeCode.attachments.maxCharsPerItem": {
           "type": "number",
@@ -471,7 +476,7 @@
           "default": 40000,
           "minimum": 2000,
           "maximum": 500000,
-          "markdownDescription": "单个附件最多多少字符；超出截断并标记。"
+          "markdownDescription": "Maximum characters per attachment; longer content is truncated and marked."
         },
         "beeCode.attachments.maxTotalChars": {
           "type": "number",
@@ -480,14 +485,14 @@
           "default": 120000,
           "minimum": 10000,
           "maximum": 1000000,
-          "markdownDescription": "本轮所有附件合计最多多少字符；超出时拒绝追加。"
+          "markdownDescription": "Maximum total attachment characters per turn."
         },
         "beeCode.focus.autoAttach": {
           "type": "boolean",
           "scope": "window",
           "order": 41,
           "default": true,
-          "markdownDescription": "发送消息时自动附上光标所在的**整个函数**（不在函数里则取上下若干行）。"
+          "markdownDescription": "Automatically attach the whole function at the cursor (or surrounding lines when outside a function)."
         },
         "beeCode.focus.fallbackLines": {
           "type": "number",
@@ -496,7 +501,7 @@
           "default": 30,
           "minimum": 5,
           "maximum": 200,
-          "markdownDescription": "光标不在函数里时，向上/向下各取多少行。"
+          "markdownDescription": "Lines above/below the cursor when outside a function."
         },
         "beeCode.focus.maxLines": {
           "type": "number",
@@ -505,63 +510,63 @@
           "default": 300,
           "minimum": 20,
           "maximum": 2000,
-          "markdownDescription": "函数超过这么多行就退化成「光标上下 N 行」，避免一次送几千行。"
+          "markdownDescription": "Functions longer than this fall back to N surrounding lines to avoid sending thousands of lines."
         },
         "beeCode.focus.highlight": {
           "type": "boolean",
           "scope": "window",
           "order": 44,
           "default": true,
-          "markdownDescription": "发送时在编辑器里用虚线框高亮 agent 实际读取的代码范围（5 秒后自动消失）。"
+          "markdownDescription": "Highlight the code range read by the agent in the editor for 5 seconds."
         },
         "beeCode.summary.model": {
           "type": "string",
           "scope": "window",
           "order": 55,
           "default": "",
-          "markdownDescription": "历史会话摘要使用的模型；留空则沿用主 agent 的模型。"
+          "markdownDescription": "Model used for history summaries; empty = main agent model."
         },
         "beeCode.summary.baseUrl": {
           "type": "string",
           "scope": "machine",
           "order": 56,
           "default": "",
-          "markdownDescription": "摘要模型的 base_url；留空则沿用主 agent。"
+          "markdownDescription": "Summary model base URL; empty = main agent URL."
         },
         "beeCode.summary.apiKeyId": {
           "type": "string",
           "scope": "machine",
           "order": 57,
           "default": "beeCode.summaryApiKey",
-          "markdownDescription": "摘要模型 API Key 在 SecretStorage 里的键名；留空/无密钥时沿用主密钥。"
+          "markdownDescription": "SecretStorage key for the summary model; empty = main key."
         },
         "beeCode.subagent.enabled": {
           "type": "boolean",
           "scope": "window",
           "order": 30,
           "default": true,
-          "markdownDescription": "是否允许主代理派生子代理（只读探索）。关闭后主代理没有 `spawn_subagent` 工具。"
+          "markdownDescription": "Allow the main agent to spawn read-only exploration subagents. Disabling removes `spawn_subagent`."
         },
         "beeCode.subagent.baseUrl": {
           "type": "string",
           "scope": "machine",
           "order": 31,
           "default": "",
-          "markdownDescription": "子代理的 OpenAI 兼容端点。留空 = 沿用主代理 `beeCode.model.baseUrl`。"
+          "markdownDescription": "Subagent OpenAI-compatible endpoint. Empty = `beeCode.model.baseUrl`."
         },
         "beeCode.subagent.model": {
           "type": "string",
           "scope": "window",
           "order": 32,
           "default": "",
-          "markdownDescription": "子代理的模型名。留空 = 沿用主代理 `beeCode.model.model`（建议用便宜/快的模型）。"
+          "markdownDescription": "Subagent model. Empty = main model (a cheaper/faster model is recommended)."
         },
         "beeCode.subagent.apiKeyId": {
           "type": "string",
           "scope": "machine",
           "order": 33,
           "default": "beeCode.apiKey.subagent",
-          "markdownDescription": "子代理密钥在 `SecretStorage` 里的键名。密钥本身永不写入 settings.json；留空则沿用主代理密钥。"
+          "markdownDescription": "SecretStorage key for the subagent. Empty = main key."
         },
         "beeCode.subagent.maxSteps": {
           "type": "number",
@@ -570,7 +575,7 @@
           "default": 8,
           "minimum": 1,
           "maximum": 12,
-          "markdownDescription": "子代理最多走几步（上限 12）。"
+          "markdownDescription": "Maximum subagent steps (up to 12)."
         },
         "beeCode.subagent.supportsVision": {
           "type": "string",
@@ -582,12 +587,12 @@
             "off"
           ],
           "enumDescriptions": [
-            "先带图尝试，被拒后自动降级并记住",
-            "强制当作视觉模型",
-            "强制当作纯文本模型"
+            "Try with images; degrade and remember on rejection",
+            "Force vision support",
+            "Force text-only"
           ],
           "default": "auto",
-          "markdownDescription": "子代理模型能否接收图片。"
+          "markdownDescription": "Whether the subagent model accepts images."
         },
         "beeCode.review.granularity": {
           "type": "string",
@@ -597,7 +602,7 @@
             "file"
           ],
           "default": "function",
-          "markdownDescription": "Keep/Undo 的分组粒度。"
+          "markdownDescription": "Grouping granularity for Keep/Undo."
         },
         "beeCode.agent.largeTaskSteps": {
           "type": "number",
@@ -606,7 +611,7 @@
           "default": 24,
           "minimum": 1,
           "maximum": 60,
-          "markdownDescription": "意图分析判定为「大任务」时使用的步数上限（普通任务用 `beeCode.agent.maxSteps`）。"
+          "markdownDescription": "Step limit for large tasks (normal tasks use `beeCode.agent.maxSteps`)."
         },
         "beeCode.agent.maxTurnTokens": {
           "type": "number",
@@ -615,7 +620,7 @@
           "default": 200000,
           "minimum": 10000,
           "maximum": 2000000,
-          "markdownDescription": "单轮 token 预算（输入 + 输出累计）。用尽后 agent 会收尾并报告未完成部分。"
+          "markdownDescription": "Per-turn token budget (input + output). When exhausted the agent wraps up and reports remaining work."
         },
         "beeCode.agent.largeTaskSeconds": {
           "type": "number",
@@ -624,7 +629,7 @@
           "default": 1800,
           "minimum": 60,
           "maximum": 14400,
-          "markdownDescription": "意图判定为「大任务」时，主 agent 单次等待模型响应的时限（秒）；工具执行时间不计入。普通任务用 `beeCode.agent.maxTurnSeconds`。"
+          "markdownDescription": "Model-response timeout for large tasks in seconds; tool time is excluded. Normal tasks use `maxTurnSeconds`."
         },
         "beeCode.agent.maxTurnSeconds": {
           "type": "number",
@@ -633,7 +638,7 @@
           "default": 600,
           "minimum": 60,
           "maximum": 7200,
-          "markdownDescription": "主 agent 单次等待模型响应的时限（秒）。工具执行本身不计入；模型超时会被强制停止。大任务另见 `largeTaskSeconds`。"
+          "markdownDescription": "Model-response timeout in seconds; tool time is excluded. See `largeTaskSeconds` for large tasks."
         },
         "beeCode.agent.maxSteps": {
           "type": "number",
@@ -645,7 +650,7 @@
           "default": 60,
           "minimum": 5,
           "maximum": 600,
-          "markdownDescription": "主 agent 等待模型首个 token 的时限（秒）。超过即判定模型卡住。"
+          "markdownDescription": "First-token timeout in seconds; exceeding it stops the turn."
         },
         "beeCode.agent.modelIdleSeconds": {
           "type": "number",
@@ -653,7 +658,7 @@
           "default": 45,
           "minimum": 5,
           "maximum": 600,
-          "markdownDescription": "主 agent 流式输出中，两个 token 之间的最大空闲时间（秒）。超过即强制停止本轮。"
+          "markdownDescription": "Maximum idle time between streaming tokens in seconds."
         },
         "beeCode.agent.maxToolCallsPerBatch": {
           "type": "number",
@@ -661,12 +666,12 @@
           "default": 8,
           "minimum": 1,
           "maximum": 32,
-          "markdownDescription": "一次 assistant 消息里最多执行多少个工具调用；超过的部分回填错误，要求模型拆批。"
+          "markdownDescription": "Maximum tool calls per assistant message; excess calls receive an error and require batching."
         },
         "beeCode.agent.toolTimeoutMs": {
           "type": "number",
           "default": 30000,
-          "markdownDescription": "普通工具的单次时限（毫秒）。命令执行和派生子代理改用 `beeCode.agent.longToolTimeoutMs`。"
+          "markdownDescription": "Normal tool timeout in ms. Commands and subagents use `longToolTimeoutMs`."
         },
         "beeCode.agent.longToolTimeoutMs": {
           "type": "number",
@@ -674,12 +679,12 @@
           "default": 600000,
           "minimum": 30000,
           "maximum": 3600000,
-          "markdownDescription": "命令执行（run_command）与派生子代理（spawn_subagent）这类长工具的时限（毫秒）。工具执行时间不计入主 agent 的模型响应超时。"
+          "markdownDescription": "Timeout for long tools (run_command, spawn_subagent) in ms; tool time is excluded from model-response timeouts."
         },
         "beeCode.checkpoint.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "写入前落影子 git 快照（`<globalStorage>/shadow.git`），用于整轮 Restore。"
+          "markdownDescription": "Create a shadow-git snapshot before writes (`<globalStorage>/shadow.git`) for whole-turn Restore."
         },
         "beeCode.checkpoint.retention": {
           "type": "number",

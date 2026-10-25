@@ -1,4 +1,4 @@
-"""Agent loop 包。实现见 `agent.py`。"""
+"""Agent loop package. See `agent.py` for the implementation."""
 
 from .agent import AgentLoop, TurnConfig, TurnStats
 

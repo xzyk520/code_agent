@@ -24,7 +24,7 @@ English | [中文](README.md)
 
 ## Language
 
-Use `beeCode.ui.language` (`zh` by default, or `en`) to switch the panel, hints, notifications and logs. Model-facing prompts and tool descriptions are English-only; model replies follow the language of your request.
+Use `beeCode.ui.language` (`en` by default, or `zh`) to switch the panel, hints, notifications and logs. Model-facing prompts and tool descriptions are English-only; model replies follow the language of your request.
 
 ## Architecture at a glance
 

@@ -119,7 +119,7 @@ export function readConfig(): ConfigReadResult {
   const firstRoot = folders[0]?.uri.fsPath;
 
   const config: ShellConfig = {
-    language: normalizeLocale(reader.str("ui.language", "zh")),
+    language: normalizeLocale(reader.str("ui.language", "en")),
     coreMode: reader.oneOf("core.mode", "python", ["python", "mock"] as const),
     pythonPath: reader.str("core.pythonPath", "python"),
     coreRoot: resolvePlaceholders(reader.str("core.coreRoot", ""), firstRoot),

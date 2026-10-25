@@ -1,16 +1,18 @@
-"""内核入口：`python -m beecode`。
+"""Kernel entry point: `python -m beecode`.
 
-当前实现范围（M1）：
+Current scope (M1):
   - `initialize` / `shutdown` / `model.reload` / `proposal.read` / `proposal.decide`
-  - **`chat.send`：单轮对话**（用户输入 → 调模型 → 流式吐字），见 `loop/agent.py`
-  - `session.abort`：取消正在跑的那一轮
+  - **`chat.send`: single-turn conversation** (user input → model call → streamed tokens),
+    see `loop/agent.py`
+  - `session.abort`: cancel the turn that is currently running
 
-下一步（M2）才是工具循环；提示词、上下文、守卫都还是最小实现。
+The tool loop only arrives next (M2); prompts, context, and guards are still minimal.
 
-约定（与 TS 壳一致）：
-  - 每行一个 JSON（NDJSON），stdin 读、stdout 写
-  - **不要**往 stdout 打印任何调试信息！会破坏协议帧。调试用 stderr
-  - `chat.send` 整轮结束才返回；进度用 `ui.delta` / `ui.tool` / `ui.usage` 通知
+Conventions (matching the TS shell):
+  - One JSON per line (NDJSON): read from stdin, write to stdout
+  - **Never** print any debug output to stdout! It corrupts protocol frames. Use stderr for debug
+  - `chat.send` returns only when the whole turn is over; progress is reported via
+    `ui.delta` / `ui.tool` / `ui.usage` notifications
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from .session import Session
 from .shell import ShellClient
 from .summarize import summarize_turns
 
-#: 全局状态。真正复杂之后应该抽成 `Kernel` 类，现在够用。
+#: Global state. Once this gets genuinely complex it should be extracted into a `Kernel` class; it is enough for now.
 _state: dict[str, Any] = {
     "initialized": False,
     "workspace_roots": [],
@@ -58,11 +60,11 @@ _state: dict[str, Any] = {
     "summary_api_key": None,
 }
 
-#: 会话表：sessionId → Session（内存态，不持久化——历史由壳负责）
+#: Session table: sessionId → Session (in-memory, not persisted — history is the shell's job)
 _sessions: dict[str, Session] = {}
-#: 每个会话最多一个在跑的回合：sessionId → Task
+#: At most one running turn per session: sessionId → Task
 _tasks: dict[str, asyncio.Task[None]] = {}
-#: 提案："虚拟文件"内容只放在这里，壳按需通过 proposal.read 拉取
+#: Proposals: "virtual file" contents live only here; the shell pulls them on demand via proposal.read
 _PROPOSALS: dict[str, dict[str, Any]] = {}
 
 
@@ -77,7 +79,7 @@ def _notify(method: str, params: dict[str, Any]) -> None:
     _peer().notify(method, params)
 
 
-# ───────────────────────── 生命周期 ─────────────────────────
+# ───────────────────────── Lifecycle ─────────────────────────
 
 
 def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -88,7 +90,7 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
     _state["initialized"] = True
     _state["workspace_roots"] = list(params.get("workspaceRoots", []))
     _state["model_config"] = dict(params.get("modelConfig", {}))
-    # 密钥只留在内存里，不落盘、不进日志
+    # The key stays in memory only: never written to disk, never logged
     _state["api_key"] = params.get("apiKey")
     _state["max_steps"] = int(params.get("maxSteps") or 12)
     _state["tool_timeout_ms"] = int(params.get("toolTimeoutMs") or 60_000)
@@ -110,7 +112,7 @@ def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any
 
 
 async def _on_shutdown(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    _log("shutdown：取消在飞回合")
+    _log("shutdown: cancelling in-flight turns")
     for sid, task in list(_tasks.items()):
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -131,7 +133,7 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
         _state["summary_config"] = dict(params.get("summaryConfig") or {})
     if params.get("summaryApiKey"):
         _state["summary_api_key"] = params.get("summaryApiKey")
-    # 已存在的会话同步新配置（否则旧会话还在用旧 base_url）
+    # Sync the new config into existing sessions (otherwise old sessions keep using the old base_url)
     for session in _sessions.values():
         session.model_config = dict(_state["model_config"])
         session.api_key = _state["api_key"]
@@ -139,7 +141,7 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
     return {}
 
 
-# ───────────────────────── 一轮对话 ─────────────────────────
+# ───────────────────────── One conversation turn ─────────────────────────
 
 
 async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -147,7 +149,8 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
     if not session_id:
         raise RpcError(INVALID_PARAMS, "缺少 sessionId")
 
-    # 并发保护：同一会话同时只允许跑一轮（壳侧也有 busy 兜底，这里是纵深防御）
+    # Concurrency guard: only one turn may run per session at a time (the shell also has a busy
+    # fallback; this is defense in depth)
     running = _tasks.get(session_id)
     if running is not None and not running.done():
         raise RpcError(SIG_CONFLICT, "上一轮还没结束，请先停止或等待")
@@ -214,7 +217,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
     try:
         await task
     except asyncio.CancelledError:
-        _log(f"chat.send 已取消：{session_id}")
+        _log(f"chat.send cancelled: {session_id}")
         raise RpcError(SHELL_ERROR, "本轮已取消") from None
     except ModelError as exc:
         raise RpcError(SHELL_ERROR, str(exc)) from exc
@@ -227,17 +230,17 @@ async def _on_abort(params: dict[str, Any], ctx: RequestContext) -> dict[str, An
     session_id = str(params.get("sessionId") or "")
     task = _tasks.get(session_id)
     if task is None:
-        _log(f"session.abort：{session_id} 没有在跑的回合")
+        _log(f"session.abort: {session_id} has no running turn")
         return {"aborted": False}
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
-    _log(f"session.abort：已取消 {session_id}")
+    _log(f"session.abort: cancelled {session_id}")
     return {"aborted": True}
 
 
 async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    """按轮次做模型摘要（壳在压缩上下文时调用）。"""
+    """Produce a model summary per turn (called by the shell while compressing context)."""
     turns = list(params.get("turns") or [])
     config = _state.get("model_config") or {}
     summary = _state.get("summary_config") or {}
@@ -249,7 +252,7 @@ async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> 
             model=summary_model,
             api_key=_state.get("summary_api_key") or _state.get("api_key"),
         )
-        _log(f"context.summarize：使用摘要模型 {summary_model}")
+        _log(f"context.summarize: using summary model {summary_model}")
     else:
         client = OpenAIClient(
             base_url=str(config.get("baseUrl") or ""),
@@ -261,18 +264,18 @@ async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> 
     except ModelError as exc:
         if not summary_model:
             raise
-        _log(f"摘要模型失败，回退主模型：{exc}")
+        _log(f"summary model failed, falling back to the main model: {exc}")
         fallback = OpenAIClient(
             base_url=str(config.get("baseUrl") or ""),
             model=str(config.get("model") or ""),
             api_key=_state.get("api_key"),
         )
         result = await summarize_turns(fallback, turns, log=_log)
-    _log(f"context.summarize：{len(turns)} 轮 → {len(result.get('pairs') or [])} 条")
+    _log(f"context.summarize: {len(turns)} turns → {len(result.get('pairs') or [])} pairs")
     return result
 
 
-# ───────────────────────── 提案 ─────────────────────────
+# ───────────────────────── Proposals ─────────────────────────
 
 
 def _shell() -> ShellClient:
@@ -283,10 +286,11 @@ def _shell() -> ShellClient:
 
 
 async def _propose(path: str, content: str, summary: str, *, expected_version: int | None = None) -> str:
-    """把模型给出的完整文件内容登记为提案，并通知壳。
+    """Register the full file content given by the model as a proposal, and notify the shell.
 
-    - 先读一次当前文件拿 `version`：接受时作为 expectedVersion，防止覆盖用户新编辑
-    - additions/deletions 用于卡片展示
+    - Read the current file once to obtain its `version`: used as expectedVersion on accept,
+      so a fresh user edit is never overwritten
+    - additions/deletions are used for card display
     """
     proposal_id = f"p_{uuid.uuid4().hex[:10]}"
     base_text = ""
@@ -299,10 +303,10 @@ async def _propose(path: str, content: str, summary: str, *, expected_version: i
             raise ValueError(f"{path} 已被修改（版本 {current.version} != {expected_version}）；请重新读取后再修改")
     except ValueError:
         raise
-    except Exception as exc:  # noqa: BLE001 - 新文件或读取失败都不该阻断提案
+    except Exception as exc:  # noqa: BLE001 - a new file or a failed read must not block the proposal
         if expected_version is not None:
             raise ValueError(f"{path} 在修改前被删除或无法读取；请重新读取后再修改") from exc
-        _log(f"proposal: 读取 {path} 失败（按新文件处理）：{exc}")
+        _log(f"proposal: failed to read {path} (treating it as a new file): {exc}")
 
     additions, deletions = _count_changes(base_text, content)
     _PROPOSALS[proposal_id] = {
@@ -342,7 +346,7 @@ def _count_changes(old: str, new: str) -> tuple[int, int]:
 
 
 def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    """返回提案正文。用户点「查看」或「接受」时才会被调用。"""
+    """Return the proposal body. Only called when the user clicks "view" or "accept"."""
     proposal_id = str(params.get("id", ""))
     proposal = _PROPOSALS.get(proposal_id)
     if proposal is None:
@@ -351,26 +355,27 @@ def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, 
 
 
 def _on_proposal_decide(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-    """壳已经落盘（accept）或已丢弃（reject）之后才调用。
+    """Only called after the shell has written (accept) or discarded (reject) the proposal.
 
-    时序约定见 README §10：**壳先写、内核后知**，这里只做状态清理。
+    See README §10 for the ordering contract: **the shell writes first, the kernel learns
+    afterwards**; this handler only cleans up state.
     """
     proposal_id = str(params.get("id", ""))
     decision = str(params.get("decision", ""))
     if decision not in ("accept", "reject"):
         raise RpcError(INVALID_PARAMS, f"未知的 decision：{decision}")
     existed = _PROPOSALS.pop(proposal_id, None) is not None
-    _log(f"proposal.decide {proposal_id} → {decision}（{'存在' if existed else '已不存在'}）")
+    _log(f"proposal.decide {proposal_id} → {decision} ({'present' if existed else 'already gone'})")
     if existed:
         _notify("proposal.changed", {"removed": [proposal_id]})
     return {"ok": existed}
 
 
-# ───────────────────────── 入口 ─────────────────────────
+# ───────────────────────── Entry point ─────────────────────────
 
 
 def _log(message: str) -> None:
-    # 只能写 stderr：stdout 是协议通道
+    # stderr only: stdout is the protocol channel
     print(f"[beecode] {message}", file=sys.stderr, flush=True)
 
 
@@ -388,7 +393,7 @@ async def _serve() -> None:
     peer.register("session.abort", _on_abort)
     peer.register("context.summarize", _on_context_summarize)
 
-    _log(f"beecode {__version__} 已启动，等待壳的 initialize…")
+    _log(f"beecode {__version__} started, waiting for the shell's initialize…")
     await peer.run()
 
 

@@ -771,11 +771,11 @@
     const args = typeof step?.args === "string" ? step.args : "";
     const summaryText = typeof step?.summary === "string" ? step.summary : "";
     const preview = (summaryText || text || detail || args || "").replace(/\s+/g, " ").slice(0, 120);
-    let label = "步骤";
-    if (type === "reasoning") label = `思考 · 第 ${step.round ?? 1} 次`;
-    else if (type === "tool") label = `工具 · ${step.name ?? "?"}${step.status ? ` · ${step.status}` : ""}`;
-    else if (type === "diagram") label = `图 · ${step.title || step.name || "mermaid"}`;
-    else if (type === "error") label = "错误";
+    let label = tr("步骤", "Step");
+    if (type === "reasoning") label = tr(`思考 · 第 ${step.round ?? 1} 次`, `Reasoning · call ${step.round ?? 1}`);
+    else if (type === "tool") label = tr(`工具 · ${step.name ?? "?"}${step.status ? ` · ${step.status}` : ""}`, `Tool · ${step.name ?? "?"}${step.status ? ` · ${step.status}` : ""}`);
+    else if (type === "diagram") label = tr(`图 · ${step.title || step.name || "mermaid"}`, `Diagram · ${step.title || step.name || "mermaid"}`);
+    else if (type === "error") label = tr("错误", "Error");
     summary.textContent = `${label}${preview ? ` · ${preview}` : ""}`;
 
     const short = document.createElement("pre");
@@ -884,7 +884,7 @@
     head.className = "diagram-head";
     const title = document.createElement("span");
     title.className = "diagram-title";
-    title.textContent = diagram.title || `${diagram.kind || "diagram"} 图`;
+    title.textContent = diagram.title || tr(`${diagram.kind || "diagram"} 图`, `${diagram.kind || "diagram"} diagram`);
     const kind = document.createElement("span");
     kind.className = "diagram-kind";
     kind.textContent = diagram.kind || "mermaid";

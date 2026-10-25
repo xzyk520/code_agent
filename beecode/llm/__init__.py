@@ -1,7 +1,8 @@
-"""OpenAI 兼容客户端：只做一件事——**流式**聊天补全。
+"""OpenAI-compatible client: it does exactly one thing — **streaming** chat completions.
 
-为什么统一成 OpenAI 格式：DeepSeek / Qwen / Kimi / GLM / OpenRouter / Ollama / vLLM
-都提供兼容层。用户只需要填 `base_url` + `model` + `api_key`。
+Why standardize on the OpenAI format: DeepSeek / Qwen / Kimi / GLM / OpenRouter / Ollama /
+vLLM all provide a compatibility layer. Users only need to fill in `base_url` + `model` +
+`api_key`.
 """
 
 from __future__ import annotations

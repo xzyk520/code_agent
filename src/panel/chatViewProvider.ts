@@ -111,7 +111,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** view 作用域的监听器：重建 view 时先释放旧的 */
   private viewDisposables: vscode.Disposable[] = [];
   private state: PanelState = {
-    locale: "zh",
+    locale: "en",
     mode: "chat",
     busy: false,
     proposals: [],
@@ -123,7 +123,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly handlers: PanelHandlers,
     private readonly attachmentLimits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
-    locale: Locale = "zh",
+    locale: Locale = "en",
   ) {
     this.state.locale = locale;
   }
@@ -463,7 +463,7 @@ function toIds(raw: unknown): string[] {
   return raw.filter((x): x is string => typeof x === "string").slice(0, 500);
 }
 
-function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Locale = "zh"): string {
+function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Locale = "en"): string {
   const nonce = makeNonce();
   const script = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.js"));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.css"));

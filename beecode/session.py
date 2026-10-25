@@ -1,10 +1,12 @@
-"""会话状态：内核里"一轮对话"的全部可变数据。
+"""Session state: all mutable data for "one conversation turn" inside the kernel.
 
-和壳侧的关系：
-  - 壳持久化完整 transcript（`<globalStorage>/sessions/*.jsonl`）；
-  - 内核只持有**当前会话**的内存副本，并从 `chat.send` 收到 `history` / `summary`
-    （壳已经裁剪过，不是全量历史）。
-所以这里不做持久化，也不做裁剪——那是壳的职责（`sessionStore.ts` / `contextBuilder.ts`）。
+Relationship with the shell side:
+  - The shell persists the full transcript (`<globalStorage>/sessions/*.jsonl`);
+  - The kernel only holds an in-memory copy of the **current session**, and receives
+    `history` / `summary` from `chat.send` (the shell has already trimmed them, so they
+    are not the full history).
+Therefore nothing here does persistence or trimming — that is the shell's job
+(`sessionStore.ts` / `contextBuilder.ts`).
 """
 
 from __future__ import annotations
@@ -19,29 +21,29 @@ Mode = Literal["chat", "builder", "debugger"]
 
 @dataclass(slots=True)
 class Session:
-    """一个会话的内存状态。"""
+    """In-memory state of one session."""
 
     id: str
     mode: Mode = "chat"
     model_config: dict[str, Any] = field(default_factory=dict)
-    #: 密钥只在内存，不落盘、不进日志
+    #: The key stays in memory only: never written to disk, never logged
     api_key: str | None = None
     created_at: float = field(default_factory=time.time)
-    #: OpenAI 兼容格式：{"role": "user"|"assistant"|"system", "content": str}
+    #: OpenAI-compatible format: {"role": "user"|"assistant"|"system", "content": str}
     messages: list[dict[str, Any]] = field(default_factory=list)
-    #: 上一轮的意图分析结果（供下一轮判断是否延续）
+    #: Intent analysis result of the previous turn (used to detect continuation)
     last_intent: dict[str, Any] | None = None
-    #: 已读文件 → 读取时 version；edit_file 的 read-before-edit / 冲突检测
+    #: Read files → version at read time; used by edit_file for read-before-edit / conflict detection
     observed_files: dict[str, int | None] = field(default_factory=dict)
 
     @classmethod
     def create(cls, session_id: str, mode: Mode, model_config: dict[str, Any], api_key: str | None) -> "Session":
         return cls(id=session_id, mode=mode, model_config=dict(model_config), api_key=api_key)
 
-    # ───────────────────────── 消息 ─────────────────────────
+    # ───────────────────────── Messages ─────────────────────────
 
     def add_user(self, text: str, attachments: list[dict[str, Any]] | None = None) -> None:
-        """追加一条用户消息；附件拼成可读文本块（M1 不做多模态）。"""
+        """Append a user message; attachments are folded into readable text blocks (M1 is not multimodal)."""
         content = text
         if attachments:
             blocks: list[str] = []
@@ -69,7 +71,7 @@ class Session:
     def add_system(self, text: str) -> None:
         self.messages.append({"role": "system", "content": text})
 
-    # ───────────────────────── 供模型使用 ─────────────────────────
+    # ───────────────────────── For model consumption ─────────────────────────
 
     def build_request_messages(
         self,
@@ -81,13 +83,13 @@ class Session:
         attachments: list[dict[str, Any]] | None = None,
         vision: bool = False,
     ) -> list[dict[str, Any]]:
-        """组装这一轮发给模型的消息。
+        """Assemble the messages sent to the model for this turn.
 
-        顺序（与壳侧 `contextBuilder` 的分层对应）：
-          1. system_prompt：模式提示词
-          2. summary：早前对话摘要（壳压缩过的 L1）
-          3. history：最近若干条逐字消息（壳裁剪过的 L2）
-          4. user_text：本轮输入（含附件文本）
+        Order (mirrors the layering of `contextBuilder` on the shell side):
+          1. system_prompt: mode prompt
+          2. summary: earlier conversation summary (L1, compressed by the shell)
+          3. history: the most recent verbatim messages (L2, trimmed by the shell)
+          4. user_text: this turn's input (including attachment text)
         """
         out: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         if summary:
@@ -107,13 +109,13 @@ class Session:
                 text = f"{text}\n\n{fences}".strip()
             out.append({"role": role, "content": text})
         if user_text is not None or attachments:
-            # 复用 add_user 的格式化逻辑，但**不写进会话历史**（避免重复：历史由壳维护）
+            # Reuse add_user's formatting logic, but do **not** write it into the session history (to avoid duplication: history is maintained by the shell)
             formatted = _format_user_content(user_text or "", attachments or [], vision=vision)
             out.append({"role": "user", "content": formatted})
         return out
 
 
-#: 附件防御性上限（壳已限制，这里是最后一道）
+#: Defensive attachment limits (the shell already caps them; this is the last line of defense)
 MAX_ATTACHMENT_CHARS = 40_000
 MAX_ATTACHMENT_TOTAL = 120_000
 
@@ -124,10 +126,11 @@ def _format_user_content(
     *,
     vision: bool = False,
 ) -> str | list[dict[str, Any]]:
-    """把"用户输入 + 附件"拼成 OpenAI 消息内容。
+    """Assemble "user input + attachments" into OpenAI message content.
 
-    - 纯文本附件（代码选区）→ 直接拼进字符串
-    - 图片附件：视觉模型转成 `image_url` 多模态片段；非视觉模型降级成一行文字说明
+    - Plain-text attachments (code selections) → concatenated into the string directly
+    - Image attachments: vision models get `image_url` multimodal parts; non-vision models
+      degrade to a one-line textual note
     """
     if not attachments:
         return text
@@ -174,9 +177,9 @@ def _format_user_content(
 
 
 def strip_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """把多模态消息里的图片换成一行文字说明（用于"模型不支持图片"后的重试）。
+    """Replace images in multimodal messages with a one-line textual note (used after "model does not support images").
 
-    就地修改并返回同一个列表，方便调用方直接复用。
+    Modified in place; returns the same list so callers can reuse it directly.
     """
     note = "【图片已省略：当前模型不接受图像输入】"
     for message in messages:

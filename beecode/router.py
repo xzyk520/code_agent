@@ -1,9 +1,10 @@
-"""意图识别：**用主模型自己判断**，不靠关键词硬编码。
+"""Intent classification: **ask the main model to decide**, no keyword hardcoding.
 
-输出被约束成三类（chat / builder / debugger）。优先用 JSON Schema 强制结构化；
-服务端不支持 `response_format` 时逐级降级（json_object → 纯文本 + 解析）。
-模型给了三类之外的值 → 带着错误信息要求它改，连续两次仍不合法就退回 chat
-（宁可答错也不让整轮对话失败）。
+Output is constrained to three classes (chat / builder / debugger). JSON Schema is preferred
+to force structure; when the server does not support `response_format` we degrade step by
+step (json_object → plain text + parsing). If the model returns a value outside the three
+classes we feed the error back and ask it to correct itself; if it is still invalid twice in
+a row we fall back to chat (better a wrong classification than failing the whole turn).
 """
 
 from __future__ import annotations
@@ -61,12 +62,12 @@ class Intent:
     scale: str
     needs_proposal: bool
     reason: str
-    #: 一句话用户意图（持久化，供后续按轮总结使用）
+    #: One-sentence user intent (persisted, used by later per-turn summaries)
     intent: str = ""
     usage: dict[str, int] | None = None
-    #: 是否走了降级（模型不配合 / 接口不支持结构化输出）
+    #: Whether a degraded path was taken (model uncooperative / endpoint without structured output)
     degraded: bool = False
-    #: 模型判定：是否延续上一轮意图
+    #: Model decision: whether this continues the previous turn's intent
     continues_previous: bool = False
 
     @property
@@ -174,7 +175,7 @@ async def classify(
     log: Callable[[str], None] | None = None,
     previous: dict[str, Any] | None = None,
 ) -> Intent:
-    """调一次主模型做意图分类。失败时退回 chat，绝不把异常抛给上层。"""
+    """Call the main model once to classify intent. On failure fall back to chat; never raise to the caller."""
     say = log or (lambda _m: None)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM},
@@ -196,10 +197,10 @@ async def classify(
             content, usage = await client.complete(messages, response_format=response_format, timeout=25.0)
         except ModelError as exc:
             if response_format is not None and _is_format_rejection(str(exc)):
-                say(f"意图识别：服务端不支持 {response_format.get('type')}，降级重试")
+                say(f"Intent classification: server does not support {response_format.get('type')}, retrying with fallback")
                 format_index += 1
                 continue
-            say(f"意图识别失败：{exc}")
+            say(f"Intent classification failed: {exc}")
             return _fallback(str(exc), usage_total)
 
         if usage:
@@ -219,7 +220,7 @@ async def classify(
             return intent
 
         validation_retries += 1
-        say(f"意图识别：输出不合法（{error}），要求模型重试")
+        say(f"Intent classification: invalid output ({error}), asking the model to retry")
         if validation_retries > 2:
             return _fallback(error, usage_total)
         messages = [

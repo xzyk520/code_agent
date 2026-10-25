@@ -294,6 +294,7 @@ class Shell {
         if (this.config.focus.highlight) this.focusHighlight.show(focus);
       },
       exportDiagnostics: () => this.exportDiagnostics(),
+      switchLanguage: () => this.switchLanguage(),
     });
     this.verifyCommands(registeredCommands);
 
@@ -2553,6 +2554,23 @@ class Shell {
    * 落点：`<globalStorage>/diagnostics/` —— 扩展私有目录，不会被误提交进 git，
    * 也不在用户工作区里制造文件。用户要发 issue 时再「另存为…」到桌面/文档。
    */
+  /** Command palette: choose the user-visible UI language. */
+  private async switchLanguage(): Promise<void> {
+    const current = this.config.language;
+    const picked = await vscode.window.showQuickPick(
+      [
+        { label: "English", description: current === "en" ? "Current" : "", value: "en" as const },
+        { label: "中文", description: current === "zh" ? "当前" : "", value: "zh" as const },
+      ],
+      { title: "Bee Code: switch UI language", placeHolder: "Panel, logs, hints and notifications" },
+    );
+    if (!picked) return;
+    await vscode.workspace
+      .getConfiguration("beeCode")
+      .update("ui.language", picked.value, vscode.ConfigurationTarget.Global);
+    void vscode.window.showInformationMessage(`Bee Code: UI language set to ${picked.label}.`);
+  }
+
   private async exportDiagnostics(): Promise<void> {
     const uri = await writeDiagnostics({
       context: this.context,

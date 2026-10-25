@@ -48,6 +48,8 @@ export interface CommandDeps {
   /** 在编辑器里高亮 agent 实际读取的范围 */
   highlightFocus(focus: import("../focus").FocusInfo | undefined): void;
   exportDiagnostics(): Promise<void>;
+  /** Choose the user-visible UI language (zh/en). */
+  switchLanguage(): Promise<void>;
 }
 
 /**
@@ -81,6 +83,8 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }),
     );
   };
+
+  register("beeCode.ui.language.switch", () => deps.switchLanguage());
 
   register("beeCode.chat.ask", () => {
     deps.panel.reveal();

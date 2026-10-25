@@ -1,16 +1,19 @@
-"""按"用户意图"逐轮总结（模型调用，结构化输出）。
+"""Per-turn summaries based on "user intent" (model call, structured output).
 
-用途：上下文压缩时，把"早前若干轮"压成一组句子。每个句子必须覆盖三件事：
+Purpose: during context compression, squeeze "the earlier N turns" into a group of sentences.
+Each sentence must cover three things:
 
-  1. 调用了什么工具
-  2. 改动了哪些文件
-  3. 实现了什么需求
+  1. which tools were called
+  2. which files were changed
+  3. which requirement was implemented
 
-输入是壳侧持久化的轮次记录（intent + AI 回答 + 工具名 + 文件），输出是一组
-`{intent, summary}` 键值对；壳再把它们拼成一段摘要塞进 system。
+Input is the turn records persisted on the shell side (intent + AI answer + tool names +
+files); output is a set of `{intent, summary}` pairs, which the shell then joins into a
+summary block and injects into system.
 
-降级：服务端不支持 `response_format` 时逐级退到 `json_object` → 纯文本解析；
-模型不按 schema 输出时重试一次，仍不行就整体失败（壳会退回机械摘要）。
+Degradation: when the server does not support `response_format`, fall back step by step to
+`json_object` → plain-text parsing; when the model does not follow the schema, retry once
+and fail as a whole if it still does not (the shell then falls back to a mechanical summary).
 """
 
 from __future__ import annotations
@@ -126,7 +129,7 @@ async def summarize_turns(
     *,
     log: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """返回 `{summary, pairs, usage}`；失败抛 ModelError（由壳退回机械摘要）。"""
+    """Return `{summary, pairs, usage}`; raise ModelError on failure (the shell falls back to a mechanical summary)."""
     say = log or (lambda _m: None)
     prepared = _prepare(turns)
     if not prepared:
@@ -153,7 +156,7 @@ async def summarize_turns(
             if response_format is not None and any(
                 hint in str(exc).lower() for hint in ("response_format", "json_schema", "json schema", "strict")
             ):
-                say("摘要：服务端不支持结构化输出，降级重试")
+                say("Summary: server does not support structured output, retrying with fallback")
                 format_index += 1
                 continue
             raise
@@ -172,7 +175,7 @@ async def summarize_turns(
                 summary = "\n".join(f"- {pair['intent']}：{pair['summary']}" for pair in pairs)
                 return {"summary": f"[早前对话摘要 · 模型生成]\n{summary}", "pairs": pairs, "usage": usage}
 
-        say(f"摘要：输出不合法（{last_error}），重试（第 {attempt + 1} 次）")
+        say(f"Summary: invalid output ({last_error}), retrying (attempt {attempt + 1})")
         messages = messages[:2] + [
             {"role": "assistant", "content": content[:1000]},
             {"role": "user", "content": f"输出不合法：{last_error}。请严格按 schema 输出 JSON。"},

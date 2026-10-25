@@ -1,12 +1,14 @@
-"""协议契约的运行时校验（与 `protocol/contract.json` 对账）。
+"""Runtime validation of the protocol contract (reconciled with `protocol/contract.json`).
 
-为什么需要：`src/protocol.ts` 的接口是 TypeScript 类型，编译后就消失了，
-Python 侧完全看不到；反过来 TS 也看不到 Python。两侧的「方法名/参数名」
-只能靠一份**共同真相**——就是 `protocol/contract.json`。
+Why this is needed: the interfaces in `src/protocol.ts` are TypeScript types that vanish
+after compilation, so the Python side cannot see them at all; conversely TS cannot see
+Python either. The "method names / parameter names" on both sides can only rely on one
+**shared source of truth** — `protocol/contract.json`.
 
-校验点：
-  - 每次发 RPC 前：方法名必须在契约里、必填参数齐全、不允许拼错的多余参数
-  - 启动时（可选）：契约版本必须等于 `ipc.PROTOCOL_VERSION`
+Validation points:
+  - Before every RPC: the method name must exist in the contract, all required parameters
+    must be present, and misspelled extra parameters are rejected
+  - At startup (optional): the contract version must equal `ipc.PROTOCOL_VERSION`
 """
 
 from __future__ import annotations
@@ -22,12 +24,12 @@ CONTRACT_RELATIVE = Path("protocol") / "contract.json"
 
 
 class ContractError(RuntimeError):
-    """契约被违反（拼错方法名/参数名、缺必填项、版本不一致）"""
+    """The contract was violated (misspelled method/parameter name, missing required field, version mismatch)"""
 
 
 @lru_cache(maxsize=1)
 def contract() -> dict[str, Any]:
-    """加载契约（进程内缓存）。找不到文件时抛 ContractError —— 拿不到契约就不能保证协议正确。"""
+    """Load the contract (cached in-process). Raises ContractError if the file is missing — without the contract, protocol correctness cannot be guaranteed."""
     searched: list[str] = []
     for root in _roots():
         candidate = root / CONTRACT_RELATIVE
@@ -53,7 +55,7 @@ def notifications() -> list[str]:
 
 
 def check_shell_call(method: str, params: dict[str, Any]) -> None:
-    """发请求前的自检：方法名、必填参数、多余参数。"""
+    """Self-check before sending a request: method name, required parameters, extra parameters."""
     spec = shell_methods().get(method)
     if spec is None:
         raise ContractError(f"未知的 shell 方法：{method}（契约里没有）")
@@ -74,14 +76,14 @@ def check_shell_call(method: str, params: dict[str, Any]) -> None:
 
 
 def result_keys(method: str) -> set[str]:
-    """声明该方法的返回字段（供内核侧做完整性断言/测试用）。"""
+    """Declare the result fields of this method (used by the kernel side for completeness assertions/tests)."""
     spec = shell_methods().get(method) or {}
     return set(spec.get("result", []))
 
 
 def _roots() -> list[Path]:
     here = Path(__file__).resolve()
-    # beecode/contract.py → 上两级即扩展根（安装模式）或仓库根（开发模式）
+    # beecode/contract.py → two levels up is the extension root (installed mode) or the repo root (dev mode)
     roots = [here.parent.parent]
     cwd = Path.cwd()
     if cwd not in roots:
