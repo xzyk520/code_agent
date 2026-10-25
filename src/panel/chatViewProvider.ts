@@ -80,6 +80,7 @@ export interface TurnView {
 
 export interface PanelState {
   locale: Locale;
+  fontSize: number;
   mode: Mode;
   busy: boolean;
   proposals: ProposalDto[];
@@ -112,6 +113,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private viewDisposables: vscode.Disposable[] = [];
   private state: PanelState = {
     locale: "en",
+    fontSize: 14,
     mode: "chat",
     busy: false,
     proposals: [],
@@ -124,8 +126,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly handlers: PanelHandlers,
     private readonly attachmentLimits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
     locale: Locale = "en",
+    fontSize = 14,
   ) {
     this.state.locale = locale;
+    this.state.fontSize = fontSize;
+  }
+
+  /** Change the chat panel base font size without rebuilding the view. */
+  setFontSize(fontSize: number): void {
+    if (this.state.fontSize === fontSize) return;
+    this.state.fontSize = fontSize;
+    this.post({ type: "fontSize", fontSize });
   }
 
   /** Switch the user-visible language; model prompts are unaffected */
@@ -144,7 +155,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [mediaRoot],
     };
-    view.webview.html = buildHtml(view.webview, mediaRoot, this.state.locale);
+    view.webview.html = buildHtml(view.webview, mediaRoot, this.state.locale, this.state.fontSize);
     this.viewDisposables.push(view.webview.onDidReceiveMessage((raw) => this.onMessage(raw)));
     this.viewDisposables.push(
       view.onDidChangeVisibility(() => {
@@ -463,7 +474,7 @@ function toIds(raw: unknown): string[] {
   return raw.filter((x): x is string => typeof x === "string").slice(0, 500);
 }
 
-function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Locale = "en"): string {
+function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Locale = "en", fontSize = 14): string {
   const nonce = makeNonce();
   const script = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.js"));
   const style = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, "panel.css"));
@@ -483,6 +494,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="stylesheet" href="${style}" />
+<style>:root { --bee-font-size: ${fontSize}px; }</style>
 <title>Bee Code</title>
 </head>
 <body data-mermaid-uri="${mermaid}">

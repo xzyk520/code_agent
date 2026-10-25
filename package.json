@@ -261,6 +261,13 @@
     "configuration": {
       "title": "Bee Code",
       "properties": {
+        "beeCode.ui.fontSize": {
+          "type": "number",
+          "default": 14,
+          "minimum": 10,
+          "maximum": 24,
+          "markdownDescription": "Base font size for the chat panel, in CSS pixels. Default 14; increase it if the conversation text feels too small."
+        },
         "beeCode.ui.language": {
           "type": "string",
           "enum": [

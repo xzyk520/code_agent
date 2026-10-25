@@ -21,11 +21,13 @@ import asyncio
 import contextlib
 import difflib
 import sys
+import traceback
 import uuid
 from typing import Any
 
 from . import __version__
 from .ipc import (
+    INTERNAL_ERROR,
     INVALID_PARAMS,
     PROTOCOL_VERSION,
     SHELL_ERROR,
@@ -221,6 +223,9 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
         raise RpcError(SHELL_ERROR, "This turn was cancelled") from None
     except ModelError as exc:
         raise RpcError(SHELL_ERROR, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - report instead of killing the core
+        _log(f"chat.send crashed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+        raise RpcError(INTERNAL_ERROR, f"{type(exc).__name__}: {exc}") from exc
     finally:
         _tasks.pop(session_id, None)
     return {}

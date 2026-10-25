@@ -234,7 +234,7 @@ class Shell {
       onRestoreCommand: (id) => void this.restoreCommandCheckpoint(id),
       onRetryTurn: () => void this.retryLastTurn(),
       onAttachmentNotice: (message) => this.queueAttachmentNotice(message),
-    }, this.config.attachments, this.config.language);
+    }, this.config.attachments, this.config.language, this.config.fontSize);
 
     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
     this.status.command = "beeCode.chat.ask";
@@ -328,6 +328,7 @@ class Shell {
         const read = readConfig();
         this.config = read.config;
         this.panel.setLocale(this.config.language);
+        this.panel.setFontSize(this.config.fontSize);
         for (const problem of read.problems) this.log.warn(`Configuration problem: ${problem}`);
         this.log.info(`Configuration updated: ${describeConfig(this.config)}`);
         if (event.affectsConfiguration("beeCode.ui.language")) {

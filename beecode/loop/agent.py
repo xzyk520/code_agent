@@ -409,9 +409,13 @@ class AgentLoop:
             )
         for stale in getattr(self, "_mcp_tool_names", set()):
             self._tools.pop(stale, None)
-        mcp_manager = await load_mcp_manager(self._log)
-        self._mcp_tool_names = set(mcp_manager.tools)
-        if mcp_manager.tools:
+        mcp_manager = None
+        try:
+            mcp_manager = await load_mcp_manager(self._log)
+        except Exception as exc:  # MCP must never take down a chat turn
+            self._log(f"MCP initialization failed: {exc}")
+        self._mcp_tool_names = set(mcp_manager.tools) if mcp_manager else set()
+        if mcp_manager and mcp_manager.tools:
             self._tools.update(mcp_manager.tools)
         self._schemas = tool_schemas(self._tools)
 
@@ -601,7 +605,11 @@ class AgentLoop:
                     answer, _calls, _usage, _reasoning = streamed
                 final_text = answer
         finally:
-            await mcp_manager.close()
+            if mcp_manager is not None:
+                try:
+                    await mcp_manager.close()
+                except Exception:
+                    pass
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
 
         session.add_user(text, attachments)

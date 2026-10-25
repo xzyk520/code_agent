@@ -31,6 +31,8 @@ export const SUMMARY_API_KEY_ENV = "BEE_CODE_SUMMARY_API_KEY";
 export interface ShellConfig {
   /** Language for user-visible UI / logs; model prompts and tool descriptions stay English */
   language: Locale;
+  /** Base font size for the chat panel in CSS pixels */
+  fontSize: number;
   coreMode: "python" | "mock";
   pythonPath: string;
   /** Directory containing the beecode/ package; empty string = auto-detect (workspace -> extension dir) */
@@ -124,6 +126,7 @@ export function readConfig(): ConfigReadResult {
 
   const config: ShellConfig = {
     language: normalizeLocale(reader.str("ui.language", "en")),
+    fontSize: reader.num("ui.fontSize", 14, 10, 24),
     coreMode: reader.oneOf("core.mode", "python", ["python", "mock"] as const),
     pythonPath: reader.str("core.pythonPath", "python"),
     coreRoot: resolvePlaceholders(reader.str("core.coreRoot", ""), firstRoot),

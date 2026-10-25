@@ -908,3 +908,20 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 }
 #retry:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.3)); }
 #retry:disabled { opacity: 0.55; }
+
+
+/* User-adjustable conversation text size */
+body,
+textarea,
+.msg {
+  font-size: var(--bee-font-size, 14px);
+}
+
+.msg {
+  line-height: 1.55;
+}
+
+.msg.system,
+.msg .hint {
+  font-size: max(10px, calc(var(--bee-font-size, 14px) - 2px));
+}
