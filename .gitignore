@@ -15,6 +15,7 @@ coverage/
 .env.*
 *.pem
 *.key
+.beecode/mcp.json
 .beecode/backup/
 .beecode/cache/
 .vscode/settings.json

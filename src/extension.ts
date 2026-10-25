@@ -19,6 +19,7 @@ import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
+import { LibraryViewProvider, type LibraryState } from "./panel/libraryViewProvider";
 import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
 import { FocusHighlighter } from "./focusDecoration";
@@ -176,6 +177,7 @@ class Shell {
   private trusted = false;
   private dockerAvailable = false;
   private readonly sessions: SessionStore;
+  private libraryView?: LibraryViewProvider;
   /** Where the previous turn stopped (persisted to disk so a reload can tell whether it can continue) */
   private turn: TurnStatus = "idle";
   private turnDetail: string | undefined;
@@ -253,6 +255,21 @@ class Shell {
     this.context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, this.panel, {
         webviewOptions: { retainContextWhenHidden: false },
+      }),
+    );
+
+    this.libraryView = new LibraryViewProvider(this.context.extensionUri, {
+      addSkillFolder: () => this.addSkillFolder(),
+      addSkillFiles: (files) => this.addSkillFiles(files),
+      addMcpFile: (files) => this.addMcpFile(files),
+      addUris: (uris) => this.addLibraryUris(uris),
+      removeSkill: (name) => this.removeSkill(name),
+      removeMcp: (name) => this.removeMcp(name),
+      refresh: async () => this.refreshLibrary(),
+    });
+    this.context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(LibraryViewProvider.viewId, this.libraryView, {
+        webviewOptions: { retainContextWhenHidden: true },
       }),
     );
 
@@ -2586,6 +2603,173 @@ class Shell {
    * Destination: `<globalStorage>/diagnostics/` — an extension-private directory that won't be committed to git by mistake,
    * and doesn't create files in the user's workspace. Users can "Save as…" to the desktop/documents when filing an issue.
    */
+  // ── Skills & MCP library ─────────────────────────────────────────────────
+
+  private libraryRoot(): string | undefined {
+    const roots = workspaceRoots();
+    return roots.length ? nodePath.join(roots[0]!, ".beecode") : undefined;
+  }
+
+  private async refreshLibrary(): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base) {
+      this.libraryView?.postState({ skills: [], mcp: [] });
+      return;
+    }
+    const state: LibraryState = { skills: [], mcp: [] };
+    const skillsDir = vscode.Uri.file(nodePath.join(base, "skills"));
+    try {
+      for (const [name, type] of await vscode.workspace.fs.readDirectory(skillsDir)) {
+        if (type !== vscode.FileType.Directory) continue;
+        const file = vscode.Uri.file(nodePath.join(base, "skills", name, "SKILL.md"));
+        let text = "";
+        try { text = Buffer.from(await vscode.workspace.fs.readFile(file)).toString("utf8"); } catch { continue; }
+        const descMatch = text.match(/^description:\s*(.+)$/im);
+        const firstLine = text.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean) ?? name;
+        state.skills.push({ name, description: (descMatch?.[1] ?? firstLine).slice(0, 160), path: file.fsPath });
+      }
+    } catch { /* no skills directory yet */ }
+    try {
+      const raw = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(nodePath.join(base, "mcp.json")))).toString("utf8");
+      const parsed = JSON.parse(raw) as { mcpServers?: Record<string, { command?: string; args?: string[] }>; servers?: Record<string, { command?: string; args?: string[] }> };
+      for (const [name, spec] of Object.entries(parsed.mcpServers ?? parsed.servers ?? {})) {
+        state.mcp.push({ name, command: String(spec.command ?? ""), args: Array.isArray(spec.args) ? spec.args.map(String) : [] });
+      }
+    } catch { /* no mcp config yet */ }
+    this.libraryView?.postState(state);
+  }
+
+  private async addLibraryUris(uris: string[]): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base) return;
+    for (const raw of uris) {
+      let uri: vscode.Uri;
+      try { uri = vscode.Uri.parse(raw); } catch { continue; }
+      if (uri.scheme !== "file") continue;
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.type === vscode.FileType.Directory) {
+          const target = vscode.Uri.file(nodePath.join(base, "skills", this.skillSlug(nodePath.basename(uri.fsPath))));
+          await vscode.workspace.fs.createDirectory(target);
+          await this.copyDirectory(uri, target);
+        } else if (nodePath.basename(uri.fsPath).toLowerCase() === "mcp.json") {
+          await this.addMcpFile([{ name: uri.fsPath, text: Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8") }]);
+        } else if (nodePath.basename(uri.fsPath).toLowerCase() === "skill.md") {
+          const parent = vscode.Uri.file(nodePath.dirname(uri.fsPath));
+          const target = vscode.Uri.file(nodePath.join(base, "skills", this.skillSlug(nodePath.basename(parent.fsPath))));
+          await vscode.workspace.fs.createDirectory(target);
+          await this.copyDirectory(parent, target);
+        }
+      } catch { /* ignore unreadable drops */ }
+    }
+    await this.refreshLibrary();
+  }
+
+  private async addSkillFolder(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: "Add skill" });
+    if (!picked?.length) return;
+    const source = picked[0]!;
+    const base = this.libraryRoot();
+    if (!base) { void vscode.window.showWarningMessage("Bee Code: open a workspace first."); return; }
+    const target = vscode.Uri.file(nodePath.join(base, "skills", this.skillSlug(nodePath.basename(source.fsPath))));
+    await vscode.workspace.fs.createDirectory(target);
+    await this.copyDirectory(source, target);
+    if (!(await this.exists(vscode.Uri.joinPath(target, "SKILL.md")))) {
+      void vscode.window.showWarningMessage("Bee Code: the selected folder has no SKILL.md.");
+      return;
+    }
+    await this.refreshLibrary();
+  }
+
+  private async addSkillFiles(files: Array<{ path: string; data: string }>): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base || !files.length) return;
+    const normalized = files.map((f) => ({ path: f.path.replace(/\\/g, "/").replace(/^\/+/, ""), data: f.data }));
+    const first = normalized[0]!.path.split("/")[0]!;
+    const sameRoot = normalized.every((f) => f.path.split("/")[0] === first);
+    const rootName = sameRoot && normalized.length > 1 ? first : this.skillSlug(first.replace(/\.md$/i, ""));
+    const targetDir = vscode.Uri.file(nodePath.join(base, "skills", this.skillSlug(rootName)));
+    await vscode.workspace.fs.createDirectory(targetDir);
+    for (const file of normalized) {
+      const rel = sameRoot && normalized.length > 1 ? file.path.slice(first.length + 1) : file.path;
+      if (!rel || rel.includes("..")) continue;
+      const target = vscode.Uri.joinPath(targetDir, ...rel.split("/"));
+      await vscode.workspace.fs.writeFile(target, Buffer.from(file.data, "base64"));
+    }
+    if (!(await this.exists(vscode.Uri.joinPath(targetDir, "SKILL.md")))) {
+      void vscode.window.showWarningMessage("Bee Code: dropped files must include SKILL.md.");
+      return;
+    }
+    await this.refreshLibrary();
+  }
+
+  private async addMcpFile(files: Array<{ name: string; text: string }>): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base) { void vscode.window.showWarningMessage("Bee Code: open a workspace first."); return; }
+    let configs = files.filter((f) => f.name.toLowerCase().endsWith(".json"));
+    if (!configs.length) {
+      const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectMany: false, filters: { JSON: ["json"] }, openLabel: "Add MCP config" });
+      if (!picked?.length) return;
+      configs = [{ name: picked[0]!.fsPath, text: Buffer.from(await vscode.workspace.fs.readFile(picked[0]!)).toString("utf8") }];
+    }
+    const configPath = vscode.Uri.file(nodePath.join(base, "mcp.json"));
+    let existing: Record<string, unknown> = {};
+    try { existing = JSON.parse(Buffer.from(await vscode.workspace.fs.readFile(configPath)).toString("utf8")) as Record<string, unknown>; } catch { /* new file */ }
+    const servers = { ...((existing.mcpServers as Record<string, unknown> | undefined) ?? {}), ...((existing.servers as Record<string, unknown> | undefined) ?? {}) };
+    for (const file of configs) {
+      try {
+        const parsed = JSON.parse(file.text) as { mcpServers?: Record<string, unknown>; servers?: Record<string, unknown> };
+        Object.assign(servers, parsed.mcpServers ?? parsed.servers ?? {});
+      } catch {
+        void vscode.window.showWarningMessage(`Bee Code: invalid MCP JSON: ${file.name}`);
+      }
+    }
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(base));
+    await vscode.workspace.fs.writeFile(configPath, Buffer.from(JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "utf8"));
+    await this.refreshLibrary();
+  }
+
+  private async removeSkill(name: string): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base || !/^[A-Za-z0-9._-]+$/.test(name)) return;
+    await vscode.workspace.fs.delete(vscode.Uri.file(nodePath.join(base, "skills", name)), { recursive: true, useTrash: true });
+    await this.refreshLibrary();
+  }
+
+  private async removeMcp(name: string): Promise<void> {
+    const base = this.libraryRoot();
+    if (!base) return;
+    const configPath = vscode.Uri.file(nodePath.join(base, "mcp.json"));
+    try {
+      const parsed = JSON.parse(Buffer.from(await vscode.workspace.fs.readFile(configPath)).toString("utf8")) as { mcpServers?: Record<string, unknown>; servers?: Record<string, unknown> };
+      const servers = { ...(parsed.mcpServers ?? parsed.servers ?? {}) };
+      delete servers[name];
+      await vscode.workspace.fs.writeFile(configPath, Buffer.from(JSON.stringify({ mcpServers: servers }, null, 2) + "\n", "utf8"));
+      await this.refreshLibrary();
+    } catch { /* nothing to remove */ }
+  }
+
+  private skillSlug(name: string): string {
+    return (name || "skill").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "skill";
+  }
+
+  private async exists(uri: vscode.Uri): Promise<boolean> {
+    try { await vscode.workspace.fs.stat(uri); return true; } catch { return false; }
+  }
+
+  private async copyDirectory(source: vscode.Uri, target: vscode.Uri): Promise<void> {
+    for (const [name, type] of await vscode.workspace.fs.readDirectory(source)) {
+      const from = vscode.Uri.joinPath(source, name);
+      const to = vscode.Uri.joinPath(target, name);
+      if (type === vscode.FileType.Directory) {
+        await vscode.workspace.fs.createDirectory(to);
+        await this.copyDirectory(from, to);
+      } else {
+        await vscode.workspace.fs.writeFile(to, await vscode.workspace.fs.readFile(from));
+      }
+    }
+  }
+
   /** Command palette: choose the user-visible UI language. */
   private async switchLanguage(): Promise<void> {
     const current = this.config.language;

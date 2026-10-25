@@ -41,6 +41,8 @@ from ..llm import (
     resolve_vision,
 )
 from ..prompts import system_prompt
+from ..skills import load_skills, skill_index
+from ..mcp import load_mcp_manager
 from ..router import Intent, classify
 from ..session import Session, has_image_parts, strip_image_parts
 from ..shell import ShellClient
@@ -271,7 +273,7 @@ class AgentLoop:
                 except Exception as exc:  # noqa: BLE001 - a failed snapshot must not block the task
                     self._log(f"Automatic checkpoint failed: {exc}")
         messages = session.build_request_messages(
-            system_override or system_prompt(effective_mode),
+            system_override or system_prompt(effective_mode, skill_index(load_skills())),
             history=history,
             summary=summary,
             user_text=text,
@@ -405,6 +407,14 @@ class AgentLoop:
                     ),
                 }
             )
+        for stale in getattr(self, "_mcp_tool_names", set()):
+            self._tools.pop(stale, None)
+        mcp_manager = await load_mcp_manager(self._log)
+        self._mcp_tool_names = set(mcp_manager.tools)
+        if mcp_manager.tools:
+            self._tools.update(mcp_manager.tools)
+        self._schemas = tool_schemas(self._tools)
+
         final_text = ""
         interruptions = 0
 
@@ -591,6 +601,7 @@ class AgentLoop:
                     answer, _calls, _usage, _reasoning = streamed
                 final_text = answer
         finally:
+            await mcp_manager.close()
             self._emit("ui.tool", {"sessionId": session.id, "name": "model", "status": "end"})
 
         session.add_user(text, attachments)

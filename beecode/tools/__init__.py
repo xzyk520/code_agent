@@ -72,12 +72,14 @@ def _bool(description: str) -> dict[str, Any]:
 #: Read-only tools available to subagents (no propose_edit / spawn_subagent / update_plan)
 READ_ONLY_TOOLS = (
     "read_file",
+    "read_skill",
     "list_files",
     "search_code",
     "file_outline",
     "find_symbol",
     "find_references",
     "get_diagnostics",
+    "read_skill",
     "run_command",
     "command_wait",
     "command_terminate",
@@ -105,6 +107,11 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
                 },
                 ["path"],
             ),
+        ),
+        ToolSpec(
+            "read_skill",
+            "Read one installed user skill by name. Skills are discovered from `.beecode/skills/<name>/SKILL.md`; use this when a skill index in the system prompt matches the task.",
+            _obj({"name": _str("Skill name from the system-prompt index")}, ["name"]),
         ),
         ToolSpec(
             "list_files",
@@ -276,6 +283,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
 
     handlers: dict[str, ToolFn] = {
         "read_file": builtin.read_file,
+        "read_skill": builtin.read_skill,
         "list_files": builtin.list_files,
         "search_code": builtin.search_code,
         "file_outline": builtin.file_outline,

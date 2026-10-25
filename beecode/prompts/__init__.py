@@ -44,5 +44,6 @@ Separate root cause from trigger conditions. Do not hide errors with try/catch."
 }
 
 
-def system_prompt(mode: str) -> str:
-    return f"{_BASE}\n\n{_MODE.get(mode, _MODE['chat'])}"
+def system_prompt(mode: str, skill_index: str = "") -> str:
+    suffix = f"\n\n{skill_index}" if skill_index else ""
+    return f"{_BASE}\n\n{_MODE.get(mode, _MODE['chat'])}{suffix}"

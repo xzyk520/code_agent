@@ -1,0 +1,12 @@
+body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); padding: 10px; }
+header { display: flex; align-items: center; justify-content: space-between; }
+h1 { font-size: 15px; margin: 0 0 8px; }
+h2 { font-size: 13px; margin: 16px 0 6px; }
+.hint { font-size: 11px; opacity: .75; }
+.drop { border: 1px dashed var(--vscode-panel-border); border-radius: 6px; padding: 18px; text-align: center; margin: 6px 0; opacity: .85; }
+.drop.over { border-color: var(--vscode-focusBorder); background: var(--vscode-list-hoverBackground); }
+button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; border-radius: 3px; padding: 4px 8px; cursor: pointer; }
+ul { list-style: none; padding: 0; }
+li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+li span { flex: 1; font-size: 11px; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }

@@ -38,6 +38,28 @@ Use `beeCode.ui.language` (`en` by default, or `zh`) to switch the panel, hints,
 
 The shell only does "VS Code world" work; the core never imports `vscode` — so the agent logic can be unit-tested without the editor, and can drive a CLI as well. Full design: [docs/architecture.en.md](docs/architecture.en.md).
 
+## Skills & MCP
+
+The **Skills & MCP** view in the sidebar accepts dropped or selected files:
+
+- Skill folders containing `SKILL.md` are installed under `.beecode/skills/`.
+- `mcp.json` is installed as `.beecode/mcp.json`.
+
+Skill metadata is added to the system-prompt index; the model loads a skill with `read_skill`. MCP stdio servers start per turn and their tools are exposed as `mcp__<server>__<tool>`.
+
+Example `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
 ## Quick start
 
 ```bash

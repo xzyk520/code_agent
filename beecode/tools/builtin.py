@@ -57,6 +57,18 @@ def _line_count(text: str) -> int:
     return text.count("\n") + 1 if text else 0
 
 
+async def read_skill(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """Read one installed skill's full SKILL.md body."""
+    from ..skills import read_skill as load_one
+    name = str(params.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    skill = load_one(name)
+    if skill is None:
+        raise ValueError(f"Skill not found: {name}")
+    return {"name": skill.name, "description": skill.description, "path": skill.path, "body": skill.body[:20000]}
+
+
 async def read_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
     result = await ctx.shell.read_file(
         str(params["path"]),

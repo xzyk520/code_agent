@@ -41,7 +41,10 @@
       "description": "Requires a real filesystem and git (shadow checkpoints); virtual workspaces are not supported."
     }
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:beeCode.chatView",
+    "onView:beeCode.libraryView"
+  ],
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
@@ -246,6 +249,11 @@
         {
           "id": "beeCode.chatView",
           "name": "Agent",
+          "type": "webview"
+        },
+        {
+          "id": "beeCode.libraryView",
+          "name": "Skills & MCP",
           "type": "webview"
         }
       ]

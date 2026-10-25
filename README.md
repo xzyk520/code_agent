@@ -38,6 +38,28 @@
 
 壳只做「VS Code 世界的事」，内核不 `import vscode`——所以 agent 逻辑能脱离编辑器单测，也能接到 CLI。完整设计见 [docs/architecture.md](https://github.com/xzyk520/code_agent/blob/main/docs/architecture.md)。
 
+## Skills 与 MCP
+
+侧边栏的 **Skills & MCP** 视图支持拖入或选择：
+
+- Skill 文件夹（包含 `SKILL.md`）：安装到 `.beecode/skills/`
+- `mcp.json`：安装到 `.beecode/mcp.json`
+
+Skill 会在系统提示词中显示索引，模型按需调用 `read_skill` 读取全文。MCP 服务器在每轮对话时启动，工具自动注册为 `mcp__<server>__<tool>`。
+
+`mcp.json` 示例：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
 ## 快速开始
 
 ```bash
