@@ -7,7 +7,7 @@ English | [中文](architecture.md)
 
 ## 0. Document notes
 
-- This document describes the overall architecture of the **v0.0.x design phase**; it is revised continuously alongside the implementation. Interfaces are defined by the code; this document is defined by "why it is designed this way".
+- This document describes the architecture of **v1.0.0**; interfaces are defined by the code, and this document explains why they are designed this way.
 - Markers: 🧭 decided ｜ 🔬 to be validated during implementation (PoC) ｜ 🧪 experimental / optional.
 - This document is also a **research-conclusions document**: wherever possible, every key design point cites the corresponding industry practice and its source (see [§14](#14-industry-reference) and [§20 References](./reference.en.md#20-references)).
 - Project naming: repository `bee-code`, extension ID `<publisher>.bee-code`, display name `Bee Code`, command prefix `beeCode.`, settings namespace `beeCode.*`, in-project data directory `.beecode/`, virtual document scheme `beecode-xzyk520-base:` (publisher-prefixed to avoid clashing with other extensions).

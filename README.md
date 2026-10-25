@@ -6,7 +6,7 @@
 
 > **自带模型的代码智能体 VS Code 扩展。** Chat / Builder / Debugger 三模式，统一 OpenAI 兼容协议，改动先以**虚拟文件提案**逐文件预览，接受才落盘，随时整轮 Restore。
 
-**状态**：`v0.0.1` · 壳可用、内核开发中 · MIT
+**状态**：`v1.0.0` · 正式发布 · Windows / macOS / Linux · MIT
 
 ---
 
@@ -87,9 +87,9 @@ npm run package:linux
 输出：
 
 ```text
-dist-vsix/bee-code-0.1.0-win32-x64.vsix
-dist-vsix/bee-code-0.1.0-darwin-arm64.vsix
-dist-vsix/bee-code-0.1.0-linux-x64.vsix
+dist-vsix/bee-code-1.0.0-win32-x64.vsix
+dist-vsix/bee-code-1.0.0-darwin-arm64.vsix
+dist-vsix/bee-code-1.0.0-linux-x64.vsix
 ```
 
 每个 VSIX 只包含对应平台的 runtime。GitHub Actions 的 `release-vsix.yml` 会自动在三个平台分别构建。`runtime/` 和 `dist-vsix/` 不提交 Git，但会被打进 VSIX。
@@ -149,10 +149,34 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 | 部分 | 状态 |
 | --- | --- |
-| 扩展壳（命令/面板/密钥/写入/检查点/RPC） | ✅ 可构建、可调试、`tsc` 零错 |
-| 协议骨架（`beecode/ipc.py` + `shell.py`） | ✅ 双向 RPC 已通 |
-| Agent 循环、提示词、检索、工具、补丁 | ⬜ 待实现（`beecode/__main__.py` 里的 TODO） |
-| 打包分发（sidecar / bootstrap） | ⬜ 见 [docs/development.md](https://github.com/xzyk520/code_agent/blob/main/docs/development.md) |
+| 扩展壳（命令/面板/密钥/写入/检查点/RPC） | ✅ 正式可用 |
+| Python 内核（Agent 循环、提示词、工具、压缩、守卫） | ✅ 正式可用 |
+| 提案审批 / diff 预览 / 自动保存 / checkpoint Restore | ✅ 正式可用 |
+| Skills / MCP 导入与运行 | ✅ 正式可用 |
+| Windows / macOS / Linux 分平台 VSIX | ✅ 已接入发布流程 |
+| Marketplace 发布 | ⚠️ 需要 Publisher + PAT（见文档） |
+
+## 支持平台
+
+| 平台 | 安装包 | 内置 Python |
+| --- | --- | --- |
+| Windows x64 | `bee-code-1.0.0-win32-x64.vsix` | ✅ 官方 embeddable |
+| macOS ARM64 | `bee-code-1.0.0-darwin-arm64.vsix` | ✅ python-build-standalone |
+| Linux x64 | `bee-code-1.0.0-linux-x64.vsix` | ✅ python-build-standalone |
+| macOS Intel | 使用系统 Python 或 `Set up Python core` | ⚠️ 暂未单独内置 |
+
+安装后默认 `beeCode.core.pythonPath = "auto"`，优先使用包内 runtime。用户不需要单独安装 Python、pip 或 httpx。
+
+## GitHub 项目说明
+
+建议仓库 About 使用：
+
+```text
+Description: BYO-model coding agent for VS Code. Three modes, per-file proposal approval, bundled Python, Skills and MCP.
+Topics: vscode-extension, coding-agent, ai, agents, mcp, skills, deepseek, openai-compatible, typescript, python
+```
+
+仓库主页应优先展示本 README；Marketplace 详情页也直接使用 `README.md`。
 
 ## 文档
 
@@ -164,11 +188,24 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 ## 打包
 
+### 按平台构建（推荐）
+
 ```bash
-npm run package        # → bee-code-0.0.1.vsix（14 个文件，约 80 KB）
+npm run bundle:python     # 首次构建会下载对应平台的 Python
+npm run package:win       # → dist-vsix/bee-code-1.0.0-win32-x64.vsix
+npm run package:mac       # → dist-vsix/bee-code-1.0.0-darwin-arm64.vsix
+npm run package:linux     # → dist-vsix/bee-code-1.0.0-linux-x64.vsix
 ```
 
-`.vscodeignore` 已排除 `src/`、`docs/`、`node_modules/`、`__pycache__`；`vscode:prepublish` 走 `--production`（压缩 + 去 sourcemap），开发版与发布版体积差 7 倍。
+Windows 包约 19 MB（含内置 Python）；macOS/Linux 包由对应平台构建，约 20–25 MB。
+
+通用包（若本地存在 `runtime/` 会一并打包）：
+
+```bash
+npm run package
+```
+
+`.vscodeignore` 已排除 `src/`、`docs/`、`node_modules/`、`scripts/`、`tools/`、`__pycache__`；`runtime/` 会包含在平台包中。`vscode:prepublish` 走 `--production`（压缩 + 去 sourcemap）。
 
 ## 许可证
 

@@ -3,6 +3,33 @@
 本文件记录所有值得注意的变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.0.0] - 2026-10-25
+
+### Added
+
+- **正式版发布**：Chat / Builder / Debugger 三模式、提案审批、diff 预览、自动保存、checkpoint Restore
+- **Skills & MCP 视图**：拖入或选择 `SKILL.md` 文件夹 / `mcp.json`；Skill 索引与 `read_skill`；stdio MCP 工具自动注册
+- **内置 Python 运行时**：Windows 官方 embeddable；macOS/Linux 使用 python-build-standalone；平台包优先使用包内 runtime
+- **三平台发布流程**：`win32-x64` / `darwin-arm64` / `linux-x64` 分别打包，GitHub Actions 原生构建
+- **面板体验**：会话切换、模型配置、语言切换、实时思考/工具卡片、可选字号、智能滚动
+- **命令审批在聊天面板内完成**：完整命令可滚动查看；文件与命令审批串行；写命令后旧提案自动失效
+- **重试与续写**、后台长命令、`command_list`、`edit_file`、MCP/Skill 工具
+- **文档**：英文 README / architecture / development / reference；中文文档保留
+
+### Changed
+
+- 默认界面语言改为 English；`beeCode.ui.language` 可切换中文
+- 内置 Python 由 `beeCode.core.pythonPath = "auto"` 自动选择
+- 提案 diff 自动打开并可在接受/拒绝后自动关闭
+
+### Fixed
+
+- 重载后轨迹消失：turn 记录与用户消息 ID 稳定绑定
+- 重载后右侧轨迹被清空：轨迹进入面板持久状态
+- 命令审批与文件审批并发导致的旧文件执行风险
+- MCP 配置 BOM 解析、MCP 初始化异常导致内核退出
+- 命令退出提示、模型配置步骤编号
+
 ## [0.1.0] - 2026-10-19
 
 ### Added
@@ -405,5 +432,6 @@
 - `search.grep` 依赖 proposed API（改为公 API 实现）
 - vsix 里混入 `__pycache__` 与多余 tsconfig；`vscode:prepublish` 未走 production（310 KB → 44 KB）
 
-[Unreleased]: https://github.com/xzyk520/code_agent/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/xzyk520/code_agent/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/xzyk520/code_agent/releases/tag/v1.0.0
 [0.0.1]: https://github.com/xzyk520/code_agent/releases/tag/v0.0.1

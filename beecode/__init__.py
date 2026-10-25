@@ -5,4 +5,4 @@ This package does **not** depend on vscode: every editor capability is requested
 the shell through the RPCs in `ipc`.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

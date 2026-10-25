@@ -6,11 +6,11 @@
 > 依赖版本策略见 README「技术栈」一节。
 ## 15. 目录结构
 
-✅ = 已实现（v0.0.1 壳骨架）　⬜ = 待实现
+✅ = 已实现（v1.0.0 正式版）
 
 ```
 bee-code/
-├─ package.json                  # ✅ 扩展清单：12 个命令 / 3 个快捷键 / 菜单 / 视图 / 16 项配置
+├─ package.json                  # ✅ 扩展清单：命令 / 快捷键 / 菜单 / 视图 / 配置
 ├─ tsconfig.json                 # ✅ 扩展侧：lib 无 DOM、strict、verbatimModuleSyntax、module=preserve
 ├─ tsconfig.webview.json         # ✅ 前端侧：lib 含 DOM、allowJs+checkJs、不含 node/vscode 类型
 ├─ esbuild.mjs                   # ✅ 打包 → dist/extension.js（cjs，vscode 保持 external）
@@ -64,7 +64,7 @@ bee-code/
 │  ├─ panel.js / panel.css       #    panel.js 由 tsconfig.webview.json 做 JSDoc 类型检查
 │  ├─ vscode-webview.d.ts        #    acquireVsCodeApi 声明（DOM lib 里没有）
 │  └─ icon.svg
-├─ beecode/                      # ★ Python 内核（骨架已就位，业务待实现）
+├─ beecode/                      # ★ Python 内核（Agent loop / 工具 / 上下文 / 压缩 / MCP）
 │  ├─ __main__.py                # ✅ 入口 + 方法注册 + chat.send（M1 单轮）+ abort + proposal.read/decide
 │  ├─ session.py                 # ✅ 会话内存态：消息、模式、模型配置、附件格式化
 │  ├─ llm/openai.py              # ✅ OpenAI 兼容流式客户端（SSE、错误翻译、token 估算）
@@ -106,8 +106,7 @@ bee-code/
 | **M4 扩展生态** | Skill 加载、MCP 客户端、压缩与记忆、成本面板 | 挂 3 个 MCP server + 10 个 skill，会话稳定不爆 token |
 | **M5 发布** | vsce 打包、CI、Marketplace 上架、GitHub Release | `code --install-extension bee-code-x.y.z.vsix` 可用 |
 
-> **当前进度（v0.0.1）**：M0 的**壳侧已完成**（`tsc --noEmit` 通过、`dist/extension.js` 构建成功、11 个 RPC 方法注册完毕、面板/命令/检查点/QuickDiff 预埋都在）。
-> 内核侧只有协议骨架：`initialize` / `shutdown` / `model.reload` 可用，`chat.send` 待实现 —— 也就是接下来 AI 逻辑的入口。
+> **当前进度（v1.0.0）**：M0–M5 全部完成。扩展、Python 内核、提案/检查点、Skills/MCP、三平台内置 Python 和发布流程均已可用；Marketplace 上架只差 Publisher + PAT。
 
 ---
 
@@ -167,9 +166,9 @@ npx @vscode/vsce package                   # 生成 .vsix
 | 方案 | 优点 | 缺点 | 建议 |
 | --- | --- | --- | --- |
 | **要求用户自带 Python** | 零打包成本 | 用户认知负担最大，「AI 插件为什么要 Python」 | ❌ 不单独用 |
-| **PyInstaller 单文件 sidecar** | 用户零依赖；启动 ~200ms | 每平台 15–40MB；杀毒误报；需签名；`--target` 发多个 vsix | ✅ 发布主路径 |
-| **首次运行 `uv` 自举 venv** | 体积小、依赖可更新 | 需要网络；企业代理/离线环境会卡 | ✅ 作为 fallback（sidecar 启动失败时） |
-| **随包发 Python 运行时** | 完全可控 | 体积 + 许可合规成本最高 | 🧪 不推荐 |
+| **随包发 Python 运行时** | 用户零依赖；可直接使用 | 体积增加（Windows 约 19MB VSIX）；需按平台构建 | ✅ 当前发布方案 |
+| **PyInstaller 单文件 sidecar** | 用户零依赖；启动快 | 每平台 15–40MB；杀毒误报；需签名 | 🧪 备选 |
+| **首次运行 venv 自举** | 体积小、依赖可更新 | 需要系统 Python + 网络 | ✅ 无内置 runtime 时的 fallback |
 
 落地建议：**sidecar 优先，失败回落 `bootstrap.py`（uv → venv → pip 三级降级），再失败给一条可复制的安装命令**。manifest 里 `extensionKind: ["workspace"]`，保证 Remote-SSH / 容器 / Codespaces 时内核跑在文件所在那一侧。
 
@@ -187,9 +186,9 @@ npx @vscode/vsce package                   # 生成 .vsix
   "name": "bee-code",
   "displayName": "Bee Code",
   "publisher": "<publisher>",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "license": "MIT",
-  "engines": { "vscode": "^1.104.0" },
+  "engines": { "vscode": "^1.90.0" },
   "extensionKind": ["workspace"],                // 内核要在文件所在那一侧启动
   "categories": ["Programming Languages", "Machine Learning", "Other"],
   "main": "./dist/extension.js",
@@ -256,10 +255,29 @@ git push -u origin main
 - 提交信息遵循 **Conventional Commits**：`feat(loop): 支持并行 tool_calls`、`fix(pending): 修正 hunk 偏移`、`docs(readme): 补充 Keep/Undo 流程`。
 - 一次提交只做一件事；提示词改动单独提交（`docs(prompts): 收紧 builder 输出契约`），便于回溯「哪次改提示词导致了效果退化」。
 
+### 18.3 平台支持
+
+| 平台 | VSIX target | 内置 Python |
+| --- | --- | --- |
+| Windows x64 | `win32-x64` | 官方 embeddable |
+| macOS ARM64 | `darwin-arm64` | python-build-standalone |
+| Linux x64 | `linux-x64` | python-build-standalone |
+| macOS Intel | 暂无独立包 | 系统 Python / `Set up Python core` |
+
+发布时按平台构建：
+
+```bash
+npm run package:win
+npm run package:mac
+npm run package:linux
+```
+
+每个 VSIX 只包含对应平台的 runtime；不要把所有平台塞进一个包。
+
 ### 18.3 版本与发布
 
-- SemVer：`0.x` 阶段允许破坏性变更，但必须在 `CHANGELOG.md` 标注 **BREAKING**。
-- 发布链路：`git tag v0.1.0` → CI 构建 `.vsix` → GitHub Release 附 `.vsix` → `vsce publish`。
+- SemVer：`1.x` 阶段如需破坏性变更，必须在 `CHANGELOG.md` 标注 **BREAKING**。
+- 发布链路：`git tag v1.0.0` → CI 构建 `.vsix` → GitHub Release 附 `.vsix` → `vsce publish`。
 - Marketplace 发布需要一个 Azure DevOps PAT（`Marketplace > Manage` 权限）与在 `publisher` 下注册的扩展名；`README.md` 会作为详情页正文渲染，因此**本文件同时就是商店页**。
 
 ### 18.4 开源协作常规件

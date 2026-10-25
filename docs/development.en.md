@@ -45,6 +45,25 @@ python -m beecode
 - Shell lifecycle smoke tests are run against the built `dist/extension.js` with a VS Code API mock.
 - No network or real model is required for protocol/tool tests.
 
+## Platform support
+
+| Platform | VSIX target | Bundled Python |
+| --- | --- | --- |
+| Windows x64 | `win32-x64` | official embeddable |
+| macOS ARM64 | `darwin-arm64` | python-build-standalone |
+| Linux x64 | `linux-x64` | python-build-standalone |
+| macOS Intel | no dedicated package | system Python / `Set up Python core` |
+
+Build one package per platform:
+
+```bash
+npm run package:win
+npm run package:mac
+npm run package:linux
+```
+
+Do not put every runtime into one universal VSIX.
+
 ## Packaging
 
 ```bash

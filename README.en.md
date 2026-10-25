@@ -6,7 +6,7 @@ English | [中文](README.md)
 
 > **A code agent VS Code extension that brings its own model.** Three modes — Chat / Builder / Debugger — on one OpenAI-compatible protocol. Every change is first previewed as a **virtual-file proposal**, file by file; nothing hits disk until you accept it, and an entire turn can always be restored.
 
-**Status**: `v0.1.0` · shell and core usable end to end; Python-side distribution still in progress · MIT
+**Status**: `v1.0.0` · production release · Windows / macOS / Linux · MIT
 
 ---
 
@@ -87,9 +87,9 @@ npm run package:linux
 Outputs:
 
 ```text
-dist-vsix/bee-code-0.1.0-win32-x64.vsix
-dist-vsix/bee-code-0.1.0-darwin-arm64.vsix
-dist-vsix/bee-code-0.1.0-linux-x64.vsix
+dist-vsix/bee-code-1.0.0-win32-x64.vsix
+dist-vsix/bee-code-1.0.0-darwin-arm64.vsix
+dist-vsix/bee-code-1.0.0-linux-x64.vsix
 ```
 
 Each VSIX contains only its platform runtime. The `release-vsix.yml` GitHub Actions workflow builds all three on their native runners. `runtime/` and `dist-vsix/` are gitignored but included in the VSIX.
@@ -147,13 +147,36 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 ## Project status
 
-| Part | Status |
+| Area | Status |
 | --- | --- |
-| Extension shell (commands/panel/secrets/writes/checkpoints/RPC) | ✅ Builds, debuggable, `tsc` clean |
-| Protocol and contract (`beecode/ipc.py` + `shell.py` + `protocol/contract.json`) | ✅ Bidirectional RPC works; both sides reconcile the contract at startup |
-| Agent loop, prompts, retrieval, tools, patches, guards | ✅ Implemented (read/search/symbols/diagnostics, proposals, checkpoints, permission engine and sandbox tiers, subagents, sessions) |
-| Packaging and distribution (sidecar / bootstrap) | ⬜ See [docs/development.en.md](docs/development.en.md) |
-| CI (typecheck + build + vsix) | ✅ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Extension shell (commands / panel / secrets / writes / checkpoints / RPC) | ✅ Production ready |
+| Python core (agent loop, prompts, tools, compaction, guards) | ✅ Production ready |
+| Proposal approval / diff preview / auto-save / checkpoint Restore | ✅ Production ready |
+| Skills / MCP import and execution | ✅ Production ready |
+| Windows / macOS / Linux platform VSIX | ✅ Release pipeline configured |
+| Marketplace publishing | ⚠️ Requires Publisher + PAT (see docs) |
+
+## Supported platforms
+
+| Platform | Package | Bundled Python |
+| --- | --- | --- |
+| Windows x64 | `bee-code-1.0.0-win32-x64.vsix` | ✅ official embeddable |
+| macOS ARM64 | `bee-code-1.0.0-darwin-arm64.vsix` | ✅ python-build-standalone |
+| Linux x64 | `bee-code-1.0.0-linux-x64.vsix` | ✅ python-build-standalone |
+| macOS Intel | system Python or `Set up Python core` | ⚠️ no dedicated runtime yet |
+
+After installation the default is `beeCode.core.pythonPath = "auto"`; the packaged runtime is preferred. End users do not need Python, pip, or httpx.
+
+## GitHub repository
+
+Suggested About text:
+
+```text
+Description: BYO-model coding agent for VS Code. Three modes, per-file proposal approval, bundled Python, Skills and MCP.
+Topics: vscode-extension, coding-agent, ai, agents, mcp, skills, deepseek, openai-compatible, typescript, python
+```
+
+The README is also the Marketplace listing body.
 
 ## Docs
 
@@ -165,11 +188,24 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 ## Packaging
 
+### Build per platform (recommended)
+
 ```bash
-npm run package        # → bee-code-<version>.vsix
+npm run bundle:python     # first build downloads the platform runtime
+npm run package:win       # → dist-vsix/bee-code-1.0.0-win32-x64.vsix
+npm run package:mac       # → dist-vsix/bee-code-1.0.0-darwin-arm64.vsix
+npm run package:linux     # → dist-vsix/bee-code-1.0.0-linux-x64.vsix
 ```
 
-`.vscodeignore` already excludes `src/`, `docs/`, `node_modules/`, `tools/`, `scripts/`, and `__pycache__`; `vscode:prepublish` runs `--production` (minified, no sourcemaps).
+Windows is about 19 MB with bundled Python; macOS/Linux are about 20–25 MB and must be built on their native runner.
+
+Universal package (includes `runtime/` if present locally):
+
+```bash
+npm run package
+```
+
+`.vscodeignore` excludes `src/`, `docs/`, `node_modules/`, `scripts/`, `tools/`, and `__pycache__`; `runtime/` is included in platform packages. `vscode:prepublish` runs `--production` (minified, no sourcemaps).
 
 ## License
 

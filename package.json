@@ -1,8 +1,8 @@
 {
   "name": "bee-code",
   "displayName": "Bee Code",
-  "description": "BYO-model coding agent: Chat / Builder / Debugger, diff preview with per-file accept.",
-  "version": "0.1.0",
+  "description": "BYO-model coding agent for VS Code: three modes, per-file proposal approval, bundled Python, Skills and MCP.",
+  "version": "1.0.0",
   "publisher": "xzyk520",
   "license": "MIT",
   "icon": "media/icon-128.png",
