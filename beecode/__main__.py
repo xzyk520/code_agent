@@ -159,6 +159,14 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
 
     mode = str(params.get("mode") or "chat")
     session = _sessions.get(session_id)
+    if session is None:
+        session = Session.create(session_id, mode, _state["model_config"], _state["api_key"])  # type: ignore[arg-type]
+        _sessions[session_id] = session
+    else:
+        session.mode = mode  # type: ignore[assignment]
+        session.model_config = dict(_state["model_config"])
+        session.api_key = _state["api_key"]
+
     raw_last_intent = params.get("lastIntent")
     if isinstance(raw_last_intent, dict):
         session.last_intent = {
@@ -168,13 +176,6 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
             "intent": str(raw_last_intent.get("intent") or ""),
             "reason": str(raw_last_intent.get("reason") or ""),
         }
-    if session is None:
-        session = Session.create(session_id, mode, _state["model_config"], _state["api_key"])  # type: ignore[arg-type]
-        _sessions[session_id] = session
-    else:
-        session.mode = mode  # type: ignore[assignment]
-        session.model_config = dict(_state["model_config"])
-        session.api_key = _state["api_key"]
 
     text = str(params.get("text") or "")
     attachments = list(params.get("attachments") or [])
