@@ -1,10 +1,10 @@
-"""工具定义与分发。
+"""Tool definitions and dispatch.
 
-工具是 loop 的"手"：模型只能通过它们改变世界。
-每个工具必须满足：
-  1. 有清晰的 JSON Schema（模型看得到）
-  2. 返回**紧凑的 dict**（会被塞回上下文，不能太大）
-  3. 出错时抛异常，由 loop 统一转成 tool 消息（不要把异常抛给壳）
+Tools are the loop's "hands": the model can only change the world through them.
+Every tool must satisfy:
+  1. Have a clear JSON Schema (visible to the model)
+  2. Return a **compact dict** (it is fed back into the context and must not be too large)
+  3. Raise on error and let the loop convert it into a tool message (never throw the exception back to the shell)
 """
 
 from __future__ import annotations
@@ -25,22 +25,22 @@ class ToolSpec:
 
 @dataclass(slots=True)
 class ToolContext:
-    """执行工具时需要的一切外部能力（由 loop 注入）。"""
+    """All external capabilities a tool needs at execution time (injected by the loop)."""
 
     shell: ShellClient
-    #: 生成提案：path, content, summary, expected_version → proposal id
+    #: Create a proposal: path, content, summary, expected_version → proposal id
     propose: Callable[..., Awaitable[str]]
-    #: 写内核日志（stderr）
+    #: Write a kernel log (stderr)
     log: Callable[[str], None]
-    #: 派生子代理：task, max_steps → 结论（None = 当前 agent 不允许派生子代理）
+    #: Spawn a subagent: task, max_steps → conclusion (None = this agent may not spawn subagents)
     spawn: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None
-    #: 更新计划（渲染到面板）
+    #: Update the plan (rendered in the panel)
     plan: Callable[[list[dict[str, str]]], None] | None = None
-    #: 生成一张图（渲染到面板，并挂到本轮助手消息上）
+    #: Generate a diagram (rendered in the panel and attached to this turn's assistant message)
     diagram: Callable[[dict[str, Any]], None] | None = None
-    #: 命令执行等长工具的外层时限（秒），供 run_command 设置 RPC 超时
+    #: Outer time limit for long tools such as command execution (seconds), used by run_command to set the RPC timeout
     long_tool_timeout_s: float = 600.0
-    #: 本轮已读文件 → 读取时 version；edit_file 用它做 read-before-edit / 冲突检测
+    #: Files read this turn → version at read time; edit_file uses this for read-before-edit / conflict detection
     observed: dict[str, int | None] = field(default_factory=dict)
 
 
@@ -69,7 +69,7 @@ def _bool(description: str) -> dict[str, Any]:
     return {"type": "boolean", "description": description}
 
 
-#: 子代理只能用的只读工具（没有 propose_edit / spawn_subagent / update_plan）
+#: Read-only tools available to subagents (no propose_edit / spawn_subagent / update_plan)
 READ_ONLY_TOOLS = (
     "read_file",
     "list_files",
@@ -86,10 +86,10 @@ READ_ONLY_TOOLS = (
 
 
 def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, Tool]:
-    """按角色注册工具。
+    """Register tools by role.
 
-    - main：全部 10 个（含 `spawn_subagent`）
-    - subagent：只读 8 个（`run_command` 由壳侧策略限制为只读命令）
+    - main: all 10 (including `spawn_subagent`)
+    - subagent: only the 8 read-only ones (`run_command` is restricted to read-only commands by the shell-side policy)
     """
     from . import builtin
 

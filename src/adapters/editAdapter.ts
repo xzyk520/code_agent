@@ -32,7 +32,7 @@ export function createEditAdapter(logger: Logger) {
         if (bytes > MAX_TEXT_BYTES) {
           return {
             applied: false,
-            message: `内容过大（${Math.round(bytes / 1024)} KB，上限 ${MAX_TEXT_BYTES / 1024 / 1024} MB）`,
+            message: `Content too large (${Math.round(bytes / 1024)} KB, limit ${MAX_TEXT_BYTES / 1024 / 1024} MB)`,
           };
         }
       }
@@ -41,30 +41,30 @@ export function createEditAdapter(logger: Logger) {
       const doc = await openIfExists(uri);
 
       if (doc && typeof params.expectedVersion === "number" && params.expectedVersion !== doc.version) {
-        logger.warn(`edit.apply 版本冲突: ${params.path} 期望 v${params.expectedVersion} 实际 v${doc.version}`);
+        logger.warn(`edit.apply version conflict: ${params.path} expected v${params.expectedVersion} actual v${doc.version}`);
         return {
           applied: false,
           conflict: true,
           version: doc.version,
-          message: `文件已被修改（期望 v${params.expectedVersion}，实际 v${doc.version}），请重新读取后再改`,
+          message: `File has changed (expected v${params.expectedVersion}, actual v${doc.version}); re-read it before editing again`,
         };
       }
 
       if (!doc && (op === "delete" || typeof params.expectedVersion === "number")) {
         // Deleting a file that does not exist, or expecting a version yet finding no file — both mean stale caller state
-        return { applied: false, message: `文件不存在：${params.path}` };
+        return { applied: false, message: `File not found: ${params.path}` };
       }
 
       const edit = new vscode.WorkspaceEdit();
 
       if (op === "delete") {
         if (doc?.isDirty) {
-          return { applied: false, version: doc.version, message: "文件有未保存的修改，已拒绝删除（请先保存或撤销）" };
+          return { applied: false, version: doc.version, message: "File has unsaved changes; refusing to delete (save or revert first)" };
         }
         edit.deleteFile(uri, { ignoreIfNotExists: false, recursive: false });
         const deleted = await vscode.workspace.applyEdit(edit);
         if (!deleted) {
-          return { applied: false, message: "WorkspaceEdit 被拒绝（文件可能被锁定）" };
+          return { applied: false, message: "WorkspaceEdit was rejected (the file may be locked)" };
         }
         logger.info(`edit.apply delete ${params.path}${params.reason ? ` (${params.reason})` : ""}`);
         // The file is gone, so a version is meaningless — do not return a stale value
@@ -86,7 +86,7 @@ export function createEditAdapter(logger: Logger) {
         return {
           applied: false,
           version: doc?.version,
-          message: "WorkspaceEdit 被拒绝（文件可能被锁定或已被外部修改）",
+          message: "WorkspaceEdit was rejected (the file may be locked or modified externally)",
         };
       }
 

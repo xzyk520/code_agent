@@ -41,39 +41,39 @@ export function decide(input: PolicyInput): PolicyDecision {
   // ① Untrusted: read-only, and only inside the workspace
   if (!input.trusted) {
     if (input.action === "read" && input.insideWorkspace) {
-      return { decision: "allow", reason: "工作区未受信任：允许读取工作区内文件" };
+      return { decision: "allow", reason: "Untrusted workspace: reading files inside the workspace is allowed" };
     }
-    return { decision: "deny", reason: "工作区未受信任：只读（禁止写入、执行与工作区外访问）" };
+    return { decision: "deny", reason: "Untrusted workspace: read-only (no writes, execution, or access outside the workspace)" };
   }
 
   // ② Outside the workspace: always deny for subagents; always require approval for the main agent (docker or not)
   if (!input.insideWorkspace) {
     if (input.role === "subagent") {
-      return { decision: "deny", reason: "子代理不允许操作工作区外的路径" };
+      return { decision: "deny", reason: "Subagents may not access paths outside the workspace" };
     }
-    return { decision: "ask", reason: "目标是工作区外的路径，需要你确认" };
+    return { decision: "ask", reason: "The target is outside the workspace and requires your confirmation" };
   }
 
   // ③ Subagent
   if (input.role === "subagent") {
     if (input.action === "write") {
       if (!input.dockerAvailable) {
-        return { decision: "deny", reason: "没有 docker 沙箱时，子代理不允许写文件" };
+        return { decision: "deny", reason: "Without a Docker sandbox, subagents may not write files" };
       }
       return input.fullAccess
-        ? { decision: "allow", reason: "已开放完整权限：子代理可写" }
-        : { decision: "ask", reason: "子代理要写文件，需要你确认" };
+        ? { decision: "allow", reason: "Full access granted: subagents may write" }
+        : { decision: "ask", reason: "A subagent wants to write files and requires your confirmation" };
     }
     if (input.action === "run") {
       if (input.dockerAvailable) {
-        return { decision: "allow", reason: "子代理命令将在 docker 沙箱内执行" };
+        return { decision: "allow", reason: "Subagent commands will run inside the Docker sandbox" };
       }
       if (input.readOnlyCommand) {
-        return { decision: "allow", reason: "没有 docker 时，子代理只允许执行只读命令" };
+        return { decision: "allow", reason: "Without Docker, subagents may only run read-only commands" };
       }
-      return { decision: "deny", reason: "没有 docker 沙箱时，子代理不允许执行会修改系统的命令" };
+      return { decision: "deny", reason: "Without a Docker sandbox, subagents may not run commands that modify the system" };
     }
-    return { decision: "allow", reason: "子代理读取工作区文件" };
+    return { decision: "allow", reason: "Subagent is reading workspace files" };
   }
 
   // ④ Main agent
@@ -81,24 +81,24 @@ export function decide(input: PolicyInput): PolicyDecision {
     if (input.fullAccess) {
       return {
         decision: "allow",
-        reason: input.dockerAvailable ? "已开放完整权限：命令在 docker 沙箱内执行" : "已开放完整权限：命令直接执行",
+        reason: input.dockerAvailable ? "Full access granted: commands run inside the Docker sandbox" : "Full access granted: commands run directly",
       };
     }
     return {
       decision: "ask",
-      reason: input.dockerAvailable ? "命令将在 docker 沙箱内执行，需要你确认" : "没有 docker 沙箱：每条命令都需要你确认",
+      reason: input.dockerAvailable ? "Commands will run inside the Docker sandbox and require your confirmation" : "No Docker sandbox: every command requires your confirmation",
     };
   }
 
   if (input.action === "write") {
     if (input.fullAccess) {
-      return { decision: "allow", reason: "已开放完整权限：允许写文件" };
+      return { decision: "allow", reason: "Full access granted: file writes are allowed" };
     }
     // Left to the rule engine (deny/ask/allow + mode)
-    return { decision: "ask", reason: "写文件需要按权限规则判定" };
+    return { decision: "ask", reason: "File writes are evaluated against permission rules" };
   }
 
-  return { decision: "allow", reason: "读取工作区内文件" };
+  return { decision: "allow", reason: "Reading files inside the workspace" };
 }
 
 /**

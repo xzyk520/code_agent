@@ -121,7 +121,7 @@ export class SessionStore {
       await fs.promises.mkdir(this.dir, { recursive: true });
       await fs.promises.appendFile(this.fileOf(id), `${JSON.stringify(message)}\n`, "utf8");
     } catch (err) {
-      this.logger.warn(`会话写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write session: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
     this.ensureIndex();
@@ -129,8 +129,8 @@ export class SessionStore {
     if (entry) {
       entry.messageCount += 1;
       entry.updatedAt = Date.now();
-      if (message.role === "user" && entry.title === "新会话") {
-        entry.title = message.text.replace(/\s+/g, " ").trim().slice(0, 40) || "新会话";
+      if (message.role === "user" && entry.title === "New session") {
+        entry.title = message.text.replace(/\s+/g, " ").trim().slice(0, 40) || "New session";
       }
       this.scheduleIndexWrite();
     }
@@ -152,7 +152,7 @@ export class SessionStore {
       await fs.promises.writeFile(tmp, body, "utf8");
       await fs.promises.rename(tmp, file);
     } catch (err) {
-      this.logger.warn(`会话截断失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to truncate session: ${err instanceof Error ? err.message : String(err)}`);
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
       throw err;
     }
@@ -163,7 +163,7 @@ export class SessionStore {
       entry.updatedAt = Date.now();
       this.scheduleIndexWrite();
     }
-    this.logger.info(`会话已截断到 ${kept.length} 条（${id}）`);
+    this.logger.info(`Session truncated to ${kept.length} messages (${id})`);
     return kept;
   }
 
@@ -260,7 +260,7 @@ export class SessionStore {
       await fs.promises.writeFile(temp, JSON.stringify({ version: INDEX_VERSION, sessions: this.index }), "utf8");
       await fs.promises.rename(temp, target);
     } catch (err) {
-      this.logger.warn(`会话索引写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write session index: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

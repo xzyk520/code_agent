@@ -52,7 +52,7 @@ export class ChildTransport {
   start(handlers: TransportHandlers): void {
     if (this.child) return;
     const { pythonPath, args, cwd, logger } = this.opts;
-    logger.info(`启动内核: ${pythonPath} ${args.join(" ")} (cwd=${cwd})`);
+    logger.info(`Starting core: ${pythonPath} ${args.join(" ")} (cwd=${cwd})`);
 
     const child = spawn(pythonPath, args, {
       cwd,
@@ -71,15 +71,15 @@ export class ChildTransport {
     child.stderr.on("data", (chunk: string) => logger.coreStderr(chunk));
 
     child.on("error", (err) => {
-      logger.error(`内核进程启动失败: ${err.message}`);
+      logger.error(`Failed to start core process: ${err.message}`);
       handlers.onError(err instanceof Error ? err : new Error(String(err)));
-      handlers.onExit(null, `启动失败：${err.message}`);
+      handlers.onExit(null, `Start failed: ${err.message}`);
     });
 
     child.on("exit", (code, signal) => {
       reader.flush();
       const reason = signal ? `signal ${signal}` : `exit ${code ?? "?"}`;
-      logger.warn(`内核进程退出（${reason}）`);
+      logger.warn(`Core process exited (${reason})`);
       this.child = undefined;
       handlers.onExit(code, reason);
     });

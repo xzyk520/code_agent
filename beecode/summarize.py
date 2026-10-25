@@ -45,20 +45,20 @@ SUMMARY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_SYSTEM = """你是对话历史压缩器。输入是一组"轮次"，每轮包含：用户意图（intent）、AI 的回答、
-调用过的工具（tools）、改动的文件（files）、工具观察（observations）、
-生成的图（diagrams：kind/title/source）。
+_SYSTEM = """You are a conversation history compressor. The input is a set of "turns"; each turn includes the user's intent, the AI's answer,
+the tools that were called (tools), the files that were changed (files), tool observations (observations),
+and generated diagrams (diagrams: kind/title/source).
 
-请为**每一轮**写一句中文总结，句子必须包含三部分信息：
-1. 调用了什么工具（没调用就写"未调用工具"）
-2. 改动了哪些文件（没改动就写"未改动文件"）
-3. 实现了什么需求（对应用户意图）
-如果这轮画了图，在总结末尾补一句"并画了示意图：<主题>"。
+Write a one-sentence summary for **each turn**. The sentence must include three pieces of information:
+1. Which tools were called (write "no tools called" if none)
+2. Which files were changed (write "no files changed" if none)
+3. Which requirement was implemented (matching the user's intent)
+If a diagram was drawn in that turn, append "and drew a diagram: <topic>" to the end of the summary.
 
-示例：
-{"pairs":[{"intent":"修复配置读取崩溃","summary":"调用了 read_file、propose_edit，改动了 src/config.ts，修复了空配置导致的崩溃"}]}
+Example:
+{"pairs":[{"intent":"Fix a crash when loading config","summary":"Called read_file and propose_edit, changed src/config.ts, and fixed a crash caused by an empty config"}]}
 
-只输出 JSON，不要解释。pairs 的数量和顺序必须与输入轮次一致，intent 原样返回。
+Output only JSON, with no explanation. The number and order of pairs must match the input turns, and intent must be returned unchanged.
 """
 
 
@@ -88,7 +88,7 @@ def _prepare(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for turn in turns[:40]:
         prepared.append(
             {
-                "intent": _truncate(str(turn.get("intent") or "（未记录意图）"), 200),
+                "intent": _truncate(str(turn.get("intent") or "(intent not recorded)"), 200),
                 "assistant": _truncate(str(turn.get("assistant") or ""), 1200),
                 "tools": [str(t) for t in (turn.get("tools") or [])][:10],
                 "files": [str(f) for f in (turn.get("files") or [])][:10],
@@ -110,15 +110,15 @@ def _prepare(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _validate(data: dict[str, Any], expected: int) -> list[dict[str, str]]:
     pairs = data.get("pairs")
     if not isinstance(pairs, list) or len(pairs) != expected:
-        raise ValueError(f"pairs 数量不匹配（期望 {expected}，得到 {len(pairs) if isinstance(pairs, list) else '非数组'}）")
+        raise ValueError(f"pairs count mismatch (expected {expected}, got {len(pairs) if isinstance(pairs, list) else 'not an array'})")
     out: list[dict[str, str]] = []
     for item in pairs:
         if not isinstance(item, dict):
-            raise ValueError("pairs 元素不是对象")
+            raise ValueError("pairs element is not an object")
         intent = str(item.get("intent") or "").strip()
         summary = str(item.get("summary") or "").strip()
         if not intent or not summary:
-            raise ValueError("pairs 元素缺少 intent 或 summary")
+            raise ValueError("pairs element is missing intent or summary")
         out.append({"intent": intent[:200], "summary": summary[:400]})
     return out
 
@@ -165,20 +165,20 @@ async def summarize_turns(
 
         data = _extract_json(content)
         if data is None:
-            last_error = "输出不是 JSON"
+            last_error = "Output is not JSON"
         else:
             try:
                 pairs = _validate(data, len(prepared))
             except ValueError as exc:
                 last_error = str(exc)
             else:
-                summary = "\n".join(f"- {pair['intent']}：{pair['summary']}" for pair in pairs)
-                return {"summary": f"[早前对话摘要 · 模型生成]\n{summary}", "pairs": pairs, "usage": usage}
+                summary = "\n".join(f"- {pair['intent']}: {pair['summary']}" for pair in pairs)
+                return {"summary": f"[Earlier conversation summary · model-generated]\n{summary}", "pairs": pairs, "usage": usage}
 
         say(f"Summary: invalid output ({last_error}), retrying (attempt {attempt + 1})")
         messages = messages[:2] + [
             {"role": "assistant", "content": content[:1000]},
-            {"role": "user", "content": f"输出不合法：{last_error}。请严格按 schema 输出 JSON。"},
+            {"role": "user", "content": f"Your output is invalid: {last_error}. Output JSON strictly following the schema."},
         ]
 
-    raise ModelError(f"摘要生成失败：{last_error or '未知原因'}")
+    raise ModelError(f"Summary generation failed: {last_error or 'unknown reason'}")

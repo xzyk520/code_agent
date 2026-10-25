@@ -31,13 +31,13 @@ export class CheckpointChatIndex {
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (err) {
-      this.logger.warn(`聊天快照目录创建失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to create chat snapshot directory: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   private fileOf(id: string): string {
     const safe = /^[0-9a-f]{4,64}$/i.test(id) ? id : "";
-    if (!safe) throw new Error(`非法的检查点 id：${id}`);
+    if (!safe) throw new Error(`Invalid checkpoint id: ${id}`);
     return path.join(this.dir, `${safe}.json`);
   }
 
@@ -55,7 +55,7 @@ export class CheckpointChatIndex {
       await fs.promises.writeFile(tmp, JSON.stringify(meta), "utf8");
       await fs.promises.rename(tmp, target);
     } catch (err) {
-      this.logger.warn(`聊天快照保存失败（${id.slice(0, 8)}）: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to save chat snapshot (${id.slice(0, 8)}): ${err instanceof Error ? err.message : String(err)}`);
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
   }
@@ -92,7 +92,7 @@ export class CheckpointChatIndex {
         try {
           await fs.promises.rm(this.fileOf(id), { force: true });
         } catch (err) {
-          this.logger.warn(`聊天快照删除失败（${id.slice(0, 8)}）: ${err instanceof Error ? err.message : String(err)}`);
+          this.logger.warn(`Failed to delete chat snapshot (${id.slice(0, 8)}): ${err instanceof Error ? err.message : String(err)}`);
         }
       }),
     );

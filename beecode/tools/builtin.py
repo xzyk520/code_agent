@@ -1,9 +1,9 @@
-"""内置工具实现：薄封装 ShellClient，只做"参数整形 + 结果压缩"。
+"""Built-in tool implementations: thin wrappers over ShellClient that only "shape parameters + compress results".
 
-原则：
-  - 返回的 dict 必须**紧凑**（会被塞回模型上下文）
-  - 出错直接抛异常，由 loop 转成 tool 消息（模型看得见、能改策略）
-  - 不做权限判断（壳侧统一判定）
+Principles:
+  - Returned dicts must be **compact** (they are fed back into the model context)
+  - Raise errors directly and let the loop turn them into tool messages (the model sees them and can adjust strategy)
+  - Do not make permission decisions (the shell decides uniformly)
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 
 from . import ToolContext
 
-#: 单个工具结果最多这么多字符（约 4k token），超出截断并标记
+#: Maximum characters in a single tool result (about 4k tokens); longer results are truncated and marked
 MAX_RESULT_CHARS = 16_000
 
 
@@ -31,14 +31,14 @@ def _clip(value: Any) -> dict[str, Any]:
     }
 
 
-#: 读取大段文本时的"头 + 尾"策略（模型需要的是定位，不是全文）
+#: "Head + tail" strategy for reading long text (the model needs a location, not the full text)
 HEAD_LINES = 120
 TAIL_LINES = 30
 MAX_LINES = HEAD_LINES + TAIL_LINES + 20
 
 
 def _shape_text(text: str, *, head: int = HEAD_LINES, tail: int = TAIL_LINES) -> tuple[str, int]:
-    """把长文本压成"头 + 省略提示 + 尾"，返回 (文本, 省略行数)。"""
+    """Compress long text into "head + omission notice + tail"; returns (text, omitted line count)."""
     lines = text.splitlines()
     if len(lines) <= head + tail + 10:
         return text, 0
@@ -181,7 +181,7 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
 
 
 async def edit_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """局部替换：只把 old_string/new_string 交给模型，完整内容由内核读盘后生成提案。"""
+    """Targeted replacement: give the model only old_string/new_string; the kernel reads the file and creates the proposal."""
     path = str(params["path"])
     old_string = str(params.get("old_string") or "")
     new_string = str(params.get("new_string") or "")
@@ -226,7 +226,7 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
         raise ValueError(f"sandbox={sandbox} requires justification explaining why the extra permission is needed")
     yield_ms = _int_or_none(params.get("yield_ms"))
     if yield_ms is None:
-        # 兼容旧参数名；它不是杀进程的超时，只是本次等待多久就返回运行中
+        # Accept the legacy parameter name; it is not a process-killing timeout, just how long this call waits before returning "running"
         yield_ms = _int_or_none(params.get("timeout_ms"))
     if yield_ms is None:
         yield_ms = 120_000
@@ -242,7 +242,7 @@ async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
 
 
 async def command_wait(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """继续等待一个长命令；返回新输出、已运行时间和下一步建议。"""
+    """Keep waiting on a long command; returns new output, elapsed time, and next-step suggestions."""
     job_id = str(params.get("job_id") or "").strip()
     if not job_id:
         raise ValueError("job_id must not be empty")
@@ -252,13 +252,13 @@ async def command_wait(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
 
 
 async def command_list(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """列出当前会话仍在管理中的后台任务。"""
+    """List background jobs still managed by the current session."""
     jobs = await ctx.shell.list_jobs()
     return {"jobs": jobs, "count": len(jobs)}
 
 
 async def command_terminate(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """终止一个长命令并返回已收集的输出。"""
+    """Terminate a long command and return the output collected so far."""
     job_id = str(params.get("job_id") or "").strip()
     if not job_id:
         raise ValueError("job_id must not be empty")
@@ -309,14 +309,14 @@ def _run_payload(result: Any) -> dict[str, Any]:
 
 
 async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """把 Mermaid 源码交给壳渲染，并挂到本轮助手消息上。"""
+    """Hand Mermaid source to the shell for rendering and attach it to this turn's assistant message."""
     if ctx.diagram is None:
         raise RuntimeError("This agent does not support diagrams")
     kind = str(params.get("kind") or "").strip().lower()
     if kind not in {"flowchart", "sequence", "class", "state", "er"}:
         raise ValueError("kind must be flowchart / sequence / class / state / er")
     source = str(params.get("source") or "").strip()
-    # 容忍模型把围栏也传进来
+    # Tolerate the model including the fence as well
     source = re.sub(r"^```[a-zA-Z]*\s*\n?", "", source)
     source = re.sub(r"\n?```\s*$", "", source).strip()
     if not source:
@@ -347,7 +347,7 @@ async def diagram(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """把计划推给面板（模型每次传全量步骤，覆盖上一次的状态）。"""
+    """Push the plan to the panel (the model sends the full step list each time, replacing the previous state)."""
     if ctx.plan is None:
         raise RuntimeError("This agent does not support plans")
     raw = params.get("steps")
@@ -367,7 +367,7 @@ async def update_plan(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any
 
 
 async def spawn_subagent(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
-    """派一个只读子代理。结果只回传结论，不回传它的上下文。"""
+    """Spawn a read-only subagent. Only its conclusion is returned, not its context."""
     if ctx.spawn is None:
         raise RuntimeError("This agent cannot spawn subagents")
     task = str(params.get("task") or "").strip()

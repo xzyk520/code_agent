@@ -103,7 +103,7 @@ class JsonRpcPeer:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError as exc:
             self._cancel_outbound(req_id)
-            raise RpcError(SHELL_ERROR, f"RPC 超时：{method}（{timeout}s）") from exc
+            raise RpcError(SHELL_ERROR, f"RPC timed out: {method} ({timeout}s)") from exc
         except asyncio.CancelledError:
             # When the parent task is cancelled we must tell the shell to abort the matching
             # inbound request, otherwise the run_command process/container keeps running
@@ -132,7 +132,7 @@ class JsonRpcPeer:
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
-                self._write_error(None, PARSE_ERROR, "无法解析 JSON")
+                self._write_error(None, PARSE_ERROR, "Unable to parse JSON")
                 continue
             self._dispatch(message)
 
@@ -189,7 +189,7 @@ class JsonRpcPeer:
     async def _run_handler(self, req_id: int | str, method: str, params: dict[str, Any]) -> None:
         handler = self._handlers.get(method)
         if handler is None:
-            self._write_error(req_id, METHOD_NOT_FOUND, f"未知方法：{method}")
+            self._write_error(req_id, METHOD_NOT_FOUND, f"Unknown method: {method}")
             return
 
         ctx = RequestContext(id=req_id, method=method)
@@ -201,7 +201,7 @@ class JsonRpcPeer:
                 result = await result
             self._write({"jsonrpc": "2.0", "id": req_id, "result": result if result is not None else {}})
         except asyncio.CancelledError:
-            self._write_error(req_id, SHELL_ERROR, "请求已取消")
+            self._write_error(req_id, SHELL_ERROR, "Request cancelled")
         except RpcError as exc:
             self._write_error(req_id, exc.code, exc.message, exc.data)
         except Exception as exc:  # noqa: BLE001
@@ -219,7 +219,7 @@ class JsonRpcPeer:
             return
         error = message.get("error")
         if isinstance(error, dict):
-            future.set_exception(RpcError(int(error.get("code", SHELL_ERROR)), str(error.get("message", "未知错误"))))
+            future.set_exception(RpcError(int(error.get("code", SHELL_ERROR)), str(error.get("message", "Unknown error"))))
         else:
             future.set_result(message.get("result"))
 

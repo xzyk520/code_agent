@@ -43,7 +43,7 @@ export function createFsAdapter(logger: Logger) {
       const openDoc = vscode.workspace.textDocuments?.find((d) => d.uri.fsPath === uri.fsPath);
       if (openDoc) {
         const result = readFromDocument(openDoc, params);
-        logger.debug(`fs.read ${rel} L${result.startLine}-L${result.endLine}（编辑器文档）`);
+        logger.debug(`fs.read ${rel} L${result.startLine}-L${result.endLine} (editor document)`);
         return result;
       }
 
@@ -64,7 +64,7 @@ export function createFsAdapter(logger: Logger) {
 
       const result = await readByStreaming(uri, params);
       logger.debug(
-        `fs.read ${rel} L${result.startLine}-L${result.endLine}（流式，${result.text.length} 字符${result.truncated ? "，已截断" : ""}）`,
+        `fs.read ${rel} L${result.startLine}-L${result.endLine} (streamed, ${result.text.length} chars${result.truncated ? ", truncated" : ""})`,
       );
       return result;
     },
@@ -89,7 +89,7 @@ export function createFsAdapter(logger: Logger) {
 
       // Reaching the fetch cap means there may be more
       const truncated = found.length >= fetch || paths.length >= limit;
-      logger.debug(`fs.list ${glob} → ${paths.length} 个文件${truncated ? "（可能被截断）" : ""}`);
+      logger.debug(`fs.list ${glob} → ${paths.length} files${truncated ? " (possibly truncated)" : ""}`);
       return { paths, truncated };
     },
   };
@@ -165,10 +165,10 @@ async function assertNotBinary(uri: vscode.Uri, rel: string): Promise<void> {
     const buffer = Buffer.alloc(SNIFF_BYTES);
     const { bytesRead } = await fd.read(buffer, 0, SNIFF_BYTES, 0);
     if (buffer.subarray(0, bytesRead).includes(0)) {
-      throw new Error(`看起来是二进制文件，拒绝读取：${rel}`);
+      throw new Error(`Refusing to read binary file: ${rel}`);
     }
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("看起来是二进制文件")) throw err;
+    if (err instanceof Error && err.message.startsWith("Refusing to read binary file")) throw err;
     // If it cannot be opened, let the read logic below report the error
   } finally {
     await fd?.close().catch(() => undefined);

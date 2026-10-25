@@ -62,7 +62,7 @@ export class TurnStore {
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (err) {
-      this.logger.warn(`轮次目录创建失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to create turns directory: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -75,7 +75,7 @@ export class TurnStore {
     try {
       await fs.promises.appendFile(this.fileOf(sessionId), `${JSON.stringify(record)}\n`, "utf8");
     } catch (err) {
-      this.logger.warn(`轮次记录写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write turn record: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -111,9 +111,9 @@ export class TurnStore {
     try {
       await fs.promises.writeFile(tmp, body, "utf8");
       await fs.promises.rename(tmp, file);
-      this.logger.info(`轮次记录截断：${turns.length} → ${kept.length}`);
+      this.logger.info(`Turn records truncated: ${turns.length} -> ${kept.length}`);
     } catch (err) {
-      this.logger.warn(`轮次记录截断失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to truncate turn records: ${err instanceof Error ? err.message : String(err)}`);
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
   }

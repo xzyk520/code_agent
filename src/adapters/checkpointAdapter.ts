@@ -68,9 +68,9 @@ export class CheckpointAdapter implements vscode.Disposable {
   async restore(params: CheckpointRestoreParams): Promise<CheckpointRestoreResult> {
     return this.serialize(async () => {
       if (!this.available) {
-        throw new Error("检查点未启用（beeCode.checkpoint.enabled=false 或没有工作区）");
+        throw new Error("Checkpoints are disabled (beeCode.checkpoint.enabled=false or no workspace open)");
       }
-      if (!params.id) throw new Error("缺少检查点 id");
+      if (!params.id) throw new Error("Missing checkpoint id");
       await this.ensureRepo();
 
       // First work out which files "are about to be overwritten" (= the diff between the current workspace and the target snapshot), then overwrite
@@ -78,7 +78,7 @@ export class CheckpointAdapter implements vscode.Disposable {
       const restored = dirty.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
 
       await this.git(["checkout", params.id, "--", "."]);
-      this.logger.info(`checkpoint 恢复 ${params.id.slice(0, 8)}：${restored.length} 个文件`);
+      this.logger.info(`checkpoint restore ${params.id.slice(0, 8)}: ${restored.length} files`);
       return { restored };
     });
   }
@@ -116,8 +116,8 @@ export class CheckpointAdapter implements vscode.Disposable {
    */
   async restorePaths(id: string, paths: string[]): Promise<string[]> {
     return this.serialize(async () => {
-      if (!this.available) throw new Error("检查点未启用（beeCode.checkpoint.enabled=false 或没有工作区）");
-      if (!id) throw new Error("缺少检查点 id");
+      if (!this.available) throw new Error("Checkpoints are disabled (beeCode.checkpoint.enabled=false or no workspace open)");
+      if (!id) throw new Error("Missing checkpoint id");
       const wanted = paths
         .map((p) => p.trim())
         .filter((p) => p.length > 0)
@@ -157,7 +157,7 @@ export class CheckpointAdapter implements vscode.Disposable {
         await this.git(["checkout", id, "--", ...checkout]);
         restored.push(...checkout);
       }
-      this.logger.info(`命令级恢复 ${id.slice(0, 8)}：${restored.length} 个文件`);
+      this.logger.info(`command-level restore ${id.slice(0, 8)}: ${restored.length} files`);
       return [...new Set(restored)];
     });
   }
@@ -199,14 +199,14 @@ export class CheckpointAdapter implements vscode.Disposable {
    */
   async rewind(id: string): Promise<{ voided: string[] }> {
     return this.serialize(async () => {
-      if (!this.available) throw new Error("检查点未启用");
+      if (!this.available) throw new Error("Checkpoints are disabled");
       const records = await this.listInner();
       const index = records.findIndex((record) => record.id === id);
-      if (index < 0) throw new Error("检查点不存在（可能已被历史压缩）");
+      if (index < 0) throw new Error("Checkpoint not found (it may have been pruned by history compaction)");
       const voided = records.slice(0, index).map((record) => record.id);
       if (voided.length > 0) {
         await this.git(["update-ref", "HEAD", id]);
-        this.logger.info(`检查点回退：作废 ${voided.length} 个后续快照（目标 ${id.slice(0, 8)}）`);
+        this.logger.info(`checkpoint rewind: voided ${voided.length} newer snapshots (target ${id.slice(0, 8)})`);
       }
       return { voided };
     });
@@ -220,12 +220,12 @@ export class CheckpointAdapter implements vscode.Disposable {
 
   private async createInner(params: CheckpointCreateParams): Promise<CheckpointCreateResult> {
     if (!this.enabled) {
-      this.logger.debug("checkpoint 跳过：设置里关闭了检查点");
+      this.logger.debug("checkpoint skipped: checkpoints are disabled in settings");
       return { id: "", files: 0, skipped: true, reason: "beeCode.checkpoint.enabled=false" };
     }
     if (!this.workTree) {
-      this.logger.warn("checkpoint 跳过：没有打开工作区");
-      return { id: "", files: 0, skipped: true, reason: "没有打开工作区" };
+      this.logger.warn("checkpoint skipped: no workspace open");
+      return { id: "", files: 0, skipped: true, reason: "no workspace open" };
     }
 
     await this.ensureRepo();
@@ -244,7 +244,7 @@ export class CheckpointAdapter implements vscode.Disposable {
 
     await this.compactIfNeeded();
 
-    this.logger.debug(`checkpoint ${id.slice(0, 8)} (${files} 个文件${paths.length > 0 ? `，指定 ${paths.length} 个路径` : ""})`);
+    this.logger.debug(`checkpoint ${id.slice(0, 8)} (${files} files${paths.length > 0 ? `, ${paths.length} paths specified` : ""})`);
     return { id, files };
   }
 
@@ -291,7 +291,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     await this.git(["update-ref", `refs/heads/${headRef}`, parent]);
     await this.git(["reflog", "expire", "--expire=now", "--all"]);
     await this.git(["gc", "--prune=now", "--quiet"]);
-    this.logger.debug(`checkpoint 历史压缩：${lines.length} → ${keep.length}`);
+    this.logger.debug(`checkpoint history compaction: ${lines.length} → ${keep.length}`);
   }
 
   private async ensureRepo(): Promise<void> {

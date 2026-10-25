@@ -55,20 +55,20 @@ export function createRunAdapter(deps: RunAdapterDeps) {
     async run(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
       ctx.throwIfCancelled();
       const command = (params.command ?? "").trim();
-      if (!command) throw new Error("command 不能为空");
+      if (!command) throw new Error("command must not be empty");
       if (command.length > MAX_COMMAND_LENGTH) {
-        throw new Error(`命令过长（${command.length} > ${MAX_COMMAND_LENGTH} 字符）：请写成脚本文件再执行`);
+        throw new Error(`Command too long (${command.length} > ${MAX_COMMAND_LENGTH} chars): write it to a script file and run that instead`);
       }
 
       const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (!root) throw new Error("未打开工作区：命令必须在工作区内执行");
+      if (!root) throw new Error("No workspace open: commands must run inside the workspace");
 
       const cwd = resolveCwd(root, params.cwd);
       const timeoutMs = clamp(params.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000, MAX_TIMEOUT_MS);
       const policy = deps.policy();
       const requested = params.sandbox ?? "auto";
       if ((requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network") && !deps.dockerAvailable()) {
-        throw new Error("请求在 Docker 沙箱内执行，但当前环境找不到 docker；如确需真实环境执行，请用 sandbox=host 并说明理由。");
+        throw new Error("Docker sandbox execution was requested but docker is not available in this environment; to run on the host instead, use sandbox=host and explain why.");
       }
       const useDocker =
         requested === "host"
@@ -78,7 +78,7 @@ export function createRunAdapter(deps: RunAdapterDeps) {
             : policy.sandbox === "docker" || (policy.sandbox === "auto" && deps.dockerAvailable());
 
       if (policy.sandbox === "docker" && !deps.dockerAvailable() && requested !== "host") {
-        throw new Error("沙箱模式为 docker，但当前环境找不到 docker（请安装/启动 docker，或把 beeCode.permissions.sandbox 改为 auto/off）");
+        throw new Error("Sandbox mode is docker but docker is not available in this environment (install/start docker, or set beeCode.permissions.sandbox to auto/off)");
       }
 
       const startedAt = Date.now();
@@ -98,7 +98,7 @@ export function createRunAdapter(deps: RunAdapterDeps) {
 
       const durationMs = Date.now() - startedAt;
       deps.logger.info(
-        `run（${useDocker ? "docker" : "direct"}）exit=${result.exitCode} ${durationMs}ms: ${command.slice(0, 120)}`,
+        `run (${useDocker ? "docker" : "direct"}) exit=${result.exitCode} ${durationMs}ms: ${command.slice(0, 120)}`,
       );
 
       return {
@@ -141,7 +141,7 @@ function runDirect(
   signal?: AbortSignal,
 ): Promise<RawResult> {
   if (signal?.aborted) {
-    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "已取消", truncated: false, killed: true });
+    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "Cancelled", truncated: false, killed: true });
   }
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
@@ -177,7 +177,7 @@ function runDirect(
 
     child.on("error", (err) => {
       cleanup();
-      reject(new Error(`启动命令失败：${err.message}`));
+      reject(new Error(`Failed to start command: ${err.message}`));
     });
 
     child.on("close", (code) => {
@@ -216,7 +216,7 @@ function runInDocker(
   const relative = path.relative(root, cwd).split(path.sep).join("/");
   if (relative.startsWith("..")) {
     // docker only mounts the workspace; a cwd outside it cannot be covered by the sandbox, so don't pretend it is isolated
-    throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
+    throw new Error("Directories outside the workspace cannot run in the docker sandbox: run inside the workspace, or switch to off mode (at your own risk)");
   }
   const workdir = relative ? `/workspace/${relative}` : "/workspace";
   const container = `bee-code-${randomUUID().slice(0, 8)}`;
@@ -261,7 +261,7 @@ function runProcess(
   containerName?: string,
 ): Promise<RawResult> {
   if (signal?.aborted) {
-    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "已取消", truncated: false, killed: true });
+    return Promise.resolve({ exitCode: 130, stdout: "", stderr: "Cancelled", truncated: false, killed: true });
   }
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
@@ -294,7 +294,7 @@ function runProcess(
 
     child.on("error", (err) => {
       cleanup();
-      reject(new Error(`启动 ${file} 失败：${err.message}`));
+      reject(new Error(`Failed to start ${file}: ${err.message}`));
     });
     child.on("close", (code) => {
       cleanup();
@@ -352,12 +352,12 @@ interface JobSpec {
 async function startJob(deps: RunAdapterDeps, params: RunParams, ctx: InboundRequestContext): Promise<CommandJob> {
   ctx.throwIfCancelled();
   const command = (params.command ?? "").trim();
-  if (!command) throw new Error("command 不能为空");
+  if (!command) throw new Error("command must not be empty");
   if (command.length > MAX_COMMAND_LENGTH) {
-    throw new Error(`命令过长（${command.length} > ${MAX_COMMAND_LENGTH} 字符）：请写成脚本文件再执行`);
+    throw new Error(`Command too long (${command.length} > ${MAX_COMMAND_LENGTH} chars): write it to a script file and run that instead`);
   }
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!root) throw new Error("未打开工作区：命令必须在工作区内执行");
+  if (!root) throw new Error("No workspace open: commands must run inside the workspace");
   const cwd = resolveCwd(root, params.cwd);
   const policy = deps.policy();
   const requested = params.sandbox ?? "auto";
@@ -371,17 +371,17 @@ async function startJob(deps: RunAdapterDeps, params: RunParams, ctx: InboundReq
     (requested === "sandbox-readonly" || requested === "sandbox" || requested === "sandbox-network") &&
     !deps.dockerAvailable()
   ) {
-    throw new Error("请求在 Docker 沙箱内执行，但当前环境找不到 docker；如确需真实环境执行，请用 sandbox=host 并说明理由。");
+    throw new Error("Docker sandbox execution was requested but docker is not available in this environment; to run on the host instead, use sandbox=host and explain why.");
   }
   if (policy.sandbox === "docker" && !deps.dockerAvailable() && requested !== "host") {
-    throw new Error("沙箱模式为 docker，但当前环境找不到 docker（请安装/启动 docker，或把 beeCode.permissions.sandbox 改为 auto/off）");
+    throw new Error("Sandbox mode is docker but docker is not available in this environment (install/start docker, or set beeCode.permissions.sandbox to auto/off)");
   }
 
   let spec: JobSpec;
   if (useDocker) {
     const relative = path.relative(root, cwd).split(path.sep).join("/");
     if (relative.startsWith("..")) {
-      throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
+      throw new Error("Directories outside the workspace cannot run in the docker sandbox: run inside the workspace, or switch to off mode (at your own risk)");
     }
     const workdir = relative ? `/workspace/${relative}` : "/workspace";
     const container = `bee-code-${randomUUID().slice(0, 8)}`;
@@ -453,7 +453,7 @@ function createJob(
   child.on("error", (err) => {
     state.finished = true;
     state.exitCode = -1;
-    if (!state.stderr) state.stderr = `启动命令失败：${err.message}`;
+    if (!state.stderr) state.stderr = `Failed to start command: ${err.message}`;
     signal?.removeEventListener("abort", onAbort);
     notify();
     if (!finishNotified) {
@@ -566,7 +566,7 @@ function killTree(child: ReturnType<typeof spawn>, logger: Logger): void {
       process.kill(-pid, "SIGKILL");
     }
   } catch (err) {
-    logger.warn(`终止进程失败: ${err instanceof Error ? err.message : String(err)}`);
+    logger.warn(`Failed to kill process: ${err instanceof Error ? err.message : String(err)}`);
     try {
       child.kill("SIGKILL");
     } catch {
@@ -599,7 +599,7 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
 function resolveCwd(root: string, requested: string | undefined): string {
   const candidate = requested && requested.trim().length > 0 ? path.resolve(root, requested) : root;
   if (!isInside(root, candidate)) {
-    throw new Error(`cwd 越界：${requested}（必须位于工作区内）`);
+    throw new Error(`cwd out of bounds: ${requested} (must be inside the workspace)`);
   }
   return candidate;
 }

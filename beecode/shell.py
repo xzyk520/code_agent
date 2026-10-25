@@ -1,9 +1,10 @@
-"""壳能力的内核侧封装（内核 → 壳）。
+"""Kernel-side wrapper for shell capabilities (kernel → shell).
 
-内核**不能**直接读写文件、拿符号、落 diff —— 那些都在 TS 壳里。
-这里把每个 RPC 包成一个方法，agent 逻辑只跟这个类打交道。
+The kernel **cannot** read or write files, look up symbols, or apply diffs directly — all of
+that lives in the TS shell. This module wraps each RPC as a method, and the agent logic only
+talks to this class.
 
-用法：
+Usage:
     shell = ShellClient(peer, workspace_root=Path("."))
     doc = await shell.read_file("src/config/parse.ts")
     await shell.apply_edit("src/config/parse.ts", new_text=doc.text.replace("a", "b"), expected_version=doc.version)
@@ -57,7 +58,7 @@ class Symbol:
     start_line: int
     end_line: int
     container: str | None = None
-    #: 标识符本身的位置（1-based）；`references` 要用它，range 起始行可能落在注释里
+    #: Position of the identifier itself (1-based); `references` should use this, since the range start line may fall inside a comment
     selection_line: int | None = None
     selection_column: int | None = None
 
@@ -106,31 +107,33 @@ def _int_or_none(mapping: object, key: str) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 def turn_label(turn: int, note: str = "") -> str:
-    """统一的检查点标签格式：`turn-3` / `turn-3: 应用 parseConfig 改动`。
+    """Uniform checkpoint label format: `turn-3` / `turn-3: apply parseConfig changes`.
 
-    为什么需要：影子仓库超过 retention 会压缩历史（重写父链），压缩保留 commit message，
-    所以只要标签本身可读，压缩后 `list()` 里依然是 `turn-3` 而不是一串哈希。
+    Why this is needed: once the shadow repository exceeds retention it compacts history
+    (rewriting the parent chain), and compaction preserves commit messages. As long as the
+    label itself is readable, `list()` still shows `turn-3` instead of a string of hashes.
 
-    用法：
-        await shell.checkpoint(turn_label(turn=3, note="应用 parseConfig 改动"))
+    Usage:
+        await shell.checkpoint(turn_label(turn=3, note="apply parseConfig changes"))
     """
     return f"turn-{turn}: {note}" if note else f"turn-{turn}"
 
 
 class ShellClient:
-    """壳侧方法封装。
+    """Shell-side method wrapper.
 
-    `role` 会随 `run` / `edit.apply` 一起发给壳——子代理自动获得更严的策略，
-    不需要在工具层重复判断。
+    `role` is sent with `run` / `edit.apply` — subagents automatically get a stricter policy,
+    so the tool layer does not need to check it again.
     """
-    """所有 `shell.*` RPC 的薄封装。方法名与 README §4.5.1 一一对应。
+    """Thin wrapper around every `shell.*` RPC. Method names correspond one-to-one with README §4.5.1.
 
-    每个请求都过 `contract.check_shell_call()`：方法名拼错、必填参数漏了、
-    多传了契约没声明的字段，都会在**发出去之前**抛 `ContractError`，
-    而不是等壳回一个 `METHOD_NOT_FOUND` 或静默忽略参数。
+    Every request goes through `contract.check_shell_call()`: a misspelled method name, a
+    missing required parameter, or an extra field not declared in the contract raises
+    `ContractError` **before the request is sent**, instead of waiting for a
+    `METHOD_NOT_FOUND` response or silently ignoring a parameter.
     """
 
-    #: 本类会发出的全部线缆方法名（供 `tests/python/test_contract.py` 与契约对账）
+    #: All wire method names this class can send (checked against the contract by `tests/python/test_contract.py`)
     SHELL_METHODS: frozenset[str] = frozenset(
         {
             "fs.read",
@@ -155,7 +158,7 @@ class ShellClient:
         self._role = role
 
     def with_role(self, role: str) -> "ShellClient":
-        """返回一个使用指定角色的客户端（共享同一个 peer）。"""
+        """Return a client using the given role (sharing the same peer)."""
         return ShellClient(self._peer, role=role)
 
     async def _call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 30.0) -> Any:
@@ -163,7 +166,7 @@ class ShellClient:
         check_shell_call(method, payload)
         return await self._peer.request(method, payload, timeout=timeout)
 
-    # ───────────────────────── 读 ─────────────────────────
+    # ───────────────────────── Read ─────────────────────────
 
     async def read_file(self, path: str, start_line: int | None = None, end_line: int | None = None) -> ReadResult:
         payload: dict[str, Any] = {"path": path, "role": self._role}
@@ -184,30 +187,30 @@ class ShellClient:
         )
 
     async def list_files(self, glob: str = "**/*", exclude: str | None = None, max_results: int = 5000) -> list[str]:
-        """只返回路径列表（需要知道是否被截断时用 `list_files_result`）。"""
+        """Return only the path list (use `list_files_result` when you need to know whether it was truncated)."""
         result = await self.list_files_result(glob, exclude=exclude, max_results=max_results)
         return list(result.get("paths", []))
 
     async def read_symbol(self, path: str, symbol: str) -> ReadResult:
-        """在（可能很大的）文件里读**一个函数/类**：先 outline 定位，再按行范围读。
+        """Read **one function/class** from a (possibly large) file: locate it with outline, then read the line range.
 
-        推荐姿势，避免让模型猜行号：
-            symbols.outline(path) → 找到 name 匹配（或 `Container.name` 后缀匹配）的符号
+        Recommended approach, so the model does not have to guess line numbers:
+            symbols.outline(path) → find a symbol whose name matches (or a `Container.name` suffix match)
             fs.read(path, start_line, end_line)
 
-        匹配规则：完全相等优先；否则按 `.` 后缀匹配（`ConfigParser.parse` 可简写 `parse`）。
+        Matching rules: exact equality wins; otherwise match by `.` suffix (`ConfigParser.parse` can be shortened to `parse`).
         """
         symbols = await self.outline(path)
         wanted = symbol.strip()
         if not wanted:
-            raise ValueError("symbol 不能为空")
+            raise ValueError("symbol cannot be empty")
 
         exact = [s for s in symbols if s.name == wanted]
         suffix = [s for s in symbols if s.name != wanted and wanted.endswith("." + s.name)]
         candidates = exact or suffix
         if not candidates:
-            names = ", ".join(sorted({s.name for s in symbols})[:20]) or "（该文件没有符号信息）"
-            raise ValueError(f"在 {path} 里找不到符号 {symbol}；候选：{names}")
+            names = ", ".join(sorted({s.name for s in symbols})[:20]) or "(this file has no symbol information)"
+            raise ValueError(f"Cannot find symbol in {path}: {symbol}; candidates: {names}")
 
         target = candidates[0]
         return await self.read_file(path, target.start_line, target.end_line)
@@ -254,9 +257,10 @@ class ShellClient:
         case_sensitive: bool = False,
         exclude: str | None = None,
     ) -> dict[str, Any]:
-        """召回模式：只返回「哪些文件命中、各几次」`{files, truncated}`。
+        """Recall mode: return only "which files matched and how many times each" as `{files, truncated}`.
 
-        用在"先找候选文件、再精读"的两步流程里——比 `grep()` 省一个数量级的 token。
+        Use it in the two-step "find candidate files first, then read closely" flow — it saves
+        an order of magnitude of tokens compared with `grep()`.
         """
         payload: dict[str, Any] = {
             "query": query,
@@ -290,41 +294,42 @@ class ShellClient:
         return symbols
 
     async def symbols_search(self, query: str, *, max_results: int = 100) -> dict[str, Any]:
-        """全工作区按名字找定义：`{symbols, source, truncated}`。
+        """Find definitions by name across the workspace: `{symbols, source, truncated}`.
 
-        `source` 三种取值：
-          - `"lsp"`：语言服务的 workspace/symbol 索引（最准、最快）
-          - `"fallback"`：没有 provider 时用「grep 找文件 + 逐个 outline」兜底，**可能不全**
-          - `"none"`：什么都没找到
+        `source` can be one of three values:
+          - `"lsp"`: the language server's workspace/symbol index (most accurate and fastest)
+          - `"fallback"`: without a provider, fall back to "grep for files + outline each one"; **may be incomplete**
+          - `"none"`: nothing was found
 
-        每个符号带 `path` 与 `range`，可以直接喂给 `read_symbol` 精确阅读。
+        Each symbol has `path` and `range`, which can be passed directly to `read_symbol` for precise reading.
         """
         return dict(await self._call("symbols.search", {"query": query, "maxResults": max_results}))
 
     async def symbols_references(
         self, path: str, line: int, *, column: int = 1, max_results: int = 200
     ) -> dict[str, Any]:
-        """某个位置（通常是符号名那一行）的所有引用：`{locations, truncated}`。
+        """All references at a position (usually the line containing the symbol name): `{locations, truncated}`.
 
-        `line` 用 `outline()` 拿到的 `start_line` 即可。
+        `line` can be the `start_line` returned by `outline()`.
         """
         payload = {"path": path, "line": line, "column": column, "maxResults": max_results}
         return dict(await self._call("symbols.references", payload))
     async def references_of_symbol(self, path: str, symbol: str, *, max_results: int = 200) -> dict[str, Any]:
-        """先 outline 找到符号，再用**标识符位置**（selection）查引用。
+        """Find a symbol with outline first, then query references using the **identifier position** (selection).
 
-        不要用 `range.start_line`：它包含前导注释/docstring，落在注释里的位置
-        参考提供者常常解析不到符号，会返回空结果。
+        Do not use `range.start_line`: it includes leading comments/docstrings, and positions
+        that fall inside comments often cannot be resolved by reference providers, producing
+        empty results.
         """
         wanted = symbol.strip()
         if not wanted:
-            raise ValueError("symbol 不能为空")
+            raise ValueError("symbol cannot be empty")
         symbols = await self.outline(path)
         exact = [s for s in symbols if s.name == wanted]
         suffix = [s for s in symbols if s.name != wanted and wanted.endswith("." + s.name)]
         candidates = exact or suffix
         if not candidates:
-            raise ValueError(f"在 {path} 里找不到符号 {symbol}")
+            raise ValueError(f"Cannot find symbol in {path}: {symbol}")
         target = candidates[0]
         line = target.selection_line or target.start_line
         column = target.selection_column or 1
@@ -337,16 +342,17 @@ class ShellClient:
         max_items: int | None = None,
         include_ignored: bool = False,
     ) -> list[Diagnostic]:
-        """读取 LSP 诊断（error 优先排序、默认最多 200 条）。
+        """Read LSP diagnostics (errors sorted first, at most 200 by default).
 
-        ⚠️ **诊断为空 ≠ 代码没问题**：壳只能返回「已被语言服务分析过」的文件的诊断，
-        刚打开窗口时可能只有少数文件有值。写 Debugger 提示词时要说明这一点。
+        ⚠️ **Empty diagnostics ≠ no problems**: the shell can only return diagnostics for files
+        that the language server has analyzed, so just after a window opens only a few files
+        may have values. Debugger prompts must state this.
 
-        参数：
-            path: 只看这个文件；省略 = 全量
-            min_severity: `"error"` / `"warning"` / `"info"` / `"hint"`，低于它的被过滤
-            max_items: 最多返回多少条（默认 200，硬上限 2000）
-            include_ignored: 是否包含 node_modules/.git/.gitignore 里的文件
+        Parameters:
+            path: only look at this file; omit for everything
+            min_severity: `"error"` / `"warning"` / `"info"` / `"hint"`; items below it are filtered out
+            max_items: maximum number of items to return (default 200, hard cap 2000)
+            include_ignored: whether to include files in node_modules/.git/.gitignore
         """
         result = await self.diagnostics_result(
             path, min_severity=min_severity, max_items=max_items, include_ignored=include_ignored
@@ -377,7 +383,7 @@ class ShellClient:
         max_items: int | None = None,
         include_ignored: bool = False,
     ) -> dict[str, Any]:
-        """同上，但返回 `{items, total, truncated}` —— 需要知道「是否被截断」时用。"""
+        """Same as above, but returns `{items, total, truncated}` — use when you need to know whether it was truncated."""
         payload: dict[str, Any] = {"includeIgnored": include_ignored}
         if path:
             payload["path"] = path
@@ -387,7 +393,7 @@ class ShellClient:
             payload["maxItems"] = max_items
         return dict(await self._call("diagnostics.get", payload))
 
-    # ───────────────────────── 写 ─────────────────────────
+    # ───────────────────────── Write ─────────────────────────
 
     async def apply_edit(
         self,
@@ -412,18 +418,22 @@ class ShellClient:
         )
 
     async def checkpoint(self, label: str | None = None, paths: list[str] | None = None) -> str:
-        """建一个检查点，返回 commit id；`skipped=True` 时返回空串（见 `checkpoint_result`）。
+        """Create a checkpoint and return its commit id; returns an empty string when `skipped=True` (see `checkpoint_result`).
 
-        轻量模式：传 `paths` 只快照这些文件，大仓库不必全树快照。
+        Lightweight mode: pass `paths` to snapshot only those files, so large repositories do
+        not need a whole-tree snapshot.
 
-        ⚠️ **id 不是永久标识**：影子仓库超过 `retention + 10` 个快照时会压缩历史
-        （用 `commit-tree` 重写父链），届时**所有 commit 的哈希都会变**，连刚返回的
-        这个也可能失效。所以：
+        ⚠️ **An id is not a permanent identifier**: once the shadow repository exceeds
+        `retention + 10` snapshots it compacts history (rewriting the parent chain with
+        `commit-tree`), at which point **every commit hash changes**, including the one just
+        returned. Therefore:
 
-        - 只在「同一批 create 之间」使用返回的 id（典型：本轮开始时快照，本轮结束时恢复）；
-        - **不要跨会话/跨多轮记住它**；需要长期引用请用 `label`（如 `turn-3`），
-          用之前先让壳重新列出检查点解析成当前 id；
-        - 拿到失效 id 时 `restore` 会以 `unknown revision` 失败，这是预期行为。
+        - Use the returned id only "within the same batch of creates" (typically: snapshot at
+          the start of the turn, restore at the end of the turn);
+        - **Do not remember it across sessions or turns**; for a long-lived reference use
+          `label` (such as `turn-3`) and have the shell list checkpoints again to resolve it
+          into the current id before use;
+        - Passing an expired id to `restore` fails with `unknown revision`; that is expected.
         """
         payload: dict[str, Any] = {"label": label or ""}
         if paths:
@@ -432,10 +442,11 @@ class ShellClient:
         return str(result.get("id", ""))
 
     async def checkpoint_result(self, label: str | None = None, paths: list[str] | None = None) -> dict[str, Any]:
-        """同上，但返回完整结果（含 `skipped` / `reason`）——需要区分「没做」和「做了」时用。
+        """Same as above, but returns the full result (including `skipped` / `reason`) — use when you need to distinguish "not done" from "done".
 
-        返回字段：`{id, files, skipped?, reason?}`。`skipped=True` 表示这次没建检查点
-        （设置关闭 / 没有工作区），此时 `id` 为空串，**不要**把它当成有效 id 传给 restore。
+        Returned fields: `{id, files, skipped?, reason?}`. `skipped=True` means no checkpoint
+        was created this time (the setting is off / there is no workspace); in that case `id`
+        is an empty string, and **do not** pass it to restore as a valid id.
         """
         payload: dict[str, Any] = {"label": label or ""}
         if paths:
@@ -443,11 +454,12 @@ class ShellClient:
         return dict(await self._call("checkpoint.create", payload))
 
     async def restore_checkpoint(self, checkpoint_id: str) -> list[str]:
-        """只恢复文件；任务/会话状态由内核自己重置。
+        """Restore files only; task/session state is reset by the kernel itself.
 
-        ⚠️ 传进来的 `checkpoint_id` 必须是**当前仍存在**的哈希：历史压缩后旧 id 全部失效
-        （`unknown revision`）。需要「恢复到某个历史点」时，应先用 label/时间戳定位、
-        再通过壳重新列出检查点拿到当前 id，而不是缓存上次的哈希。
+        ⚠️ The incoming `checkpoint_id` must be a hash that **still exists right now**: after
+        history compaction all old ids become invalid (`unknown revision`). To "restore to a
+        historical point", first locate it by label/timestamp, then ask the shell to list
+        checkpoints again and obtain the current id; do not cache the previous hash.
         """
         result = await self._call("checkpoint.restore", {"id": checkpoint_id}, timeout=120.0)
         return list(result.get("restored", []))
@@ -468,14 +480,16 @@ class ShellClient:
         sandbox: str = "sandbox-readonly",
         justification: str = "",
     ) -> RunResult:
-        """在工作区内执行命令。
+        """Run a command inside the workspace.
 
-        权限从低到高：`sandbox-readonly`（默认，Docker 只读）→
-        `sandbox`（Docker 工作区可写）→ `sandbox-network`（Docker + 网络）→
-        `host`（真实系统）。每一级升级都需要用户审批；非默认级必须 `justification`。
+        Privilege levels from lowest to highest: `sandbox-readonly` (default, Docker read-only) →
+        `sandbox` (Docker with a writable workspace) → `sandbox-network` (Docker + network) →
+        `host` (the real system). Every elevation requires user approval; non-default levels
+        require a `justification`.
 
-        ⚠️ 这是**有副作用**的操作：壳会先做权限判定（模式 + 规则 + 工作区信任），
-        需要确认时会弹窗。不要用它做只读探测——读文件用 `read_file`。
+        ⚠️ This is an operation **with side effects**: the shell first makes a permission
+        decision (mode + rules + workspace trust), and prompts for confirmation when needed.
+        Do not use it for read-only probing — use `read_file` to read files.
         """
         payload: dict[str, Any] = {
             "command": command,
@@ -490,7 +504,7 @@ class ShellClient:
         return _run_result(result)
 
     async def wait(self, job_id: str, *, yield_ms: int | None = None) -> RunResult:
-        """继续等待一个仍在运行的命令；不会重复返回之前已读过的输出。"""
+        """Keep waiting on a command that is still running; previously read output is not returned again."""
         wait_ms = 60_000 if yield_ms is None else max(1000, min(int(yield_ms), 300_000))
         payload: dict[str, Any] = {"jobId": job_id}
         if yield_ms is not None:

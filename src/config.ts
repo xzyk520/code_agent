@@ -206,16 +206,16 @@ class Reader {
   str(key: string, fallback: string): string {
     const raw = this.cfg.get<unknown>(key);
     if (raw === undefined || raw === null) return fallback;
-    if (typeof raw !== "string") return this.bad(key, "字符串", raw, fallback);
+    if (typeof raw !== "string") return this.bad(key, "a string", raw, fallback);
     return raw;
   }
 
   num(key: string, fallback: number, min: number, max: number): number {
     const raw = this.cfg.get<unknown>(key);
     if (raw === undefined || raw === null) return fallback;
-    if (typeof raw !== "number" || !Number.isFinite(raw)) return this.bad(key, "数字", raw, fallback);
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return this.bad(key, "a number", raw, fallback);
     if (raw < min || raw > max) {
-      this.problems.push(`beeCode.${key} 超出范围 [${min}, ${max}]（实际 ${raw}），已使用默认值 ${fallback}`);
+      this.problems.push(`beeCode.${key} is out of range [${min}, ${max}] (actual ${raw}); using the default ${fallback}`);
       return fallback;
     }
     return raw;
@@ -224,7 +224,7 @@ class Reader {
   bool(key: string, fallback: boolean): boolean {
     const raw = this.cfg.get<unknown>(key);
     if (raw === undefined || raw === null) return fallback;
-    if (typeof raw !== "boolean") return this.bad(key, "布尔值", raw, fallback);
+    if (typeof raw !== "boolean") return this.bad(key, "a boolean", raw, fallback);
     return raw;
   }
 
@@ -234,7 +234,7 @@ class Reader {
     if (typeof raw !== "string" || !allowed.includes(raw as T)) {
       const expected = allowed.map((a) => `"${a}"`).join(" / ");
       this.problems.push(
-        `beeCode.${key} 只能是 ${expected}，实际是 ${safeJson(raw)}，已使用默认值 "${fallback}"`,
+        `beeCode.${key} must be one of ${expected}; actual value is ${safeJson(raw)}; using the default "${fallback}"`,
       );
       return fallback;
     }
@@ -245,14 +245,14 @@ class Reader {
     const raw = this.cfg.get<unknown>(key);
     if (raw === undefined || raw === null) return [...fallback];
     if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string")) {
-      return this.bad(key, "字符串数组", raw, fallback);
+      return this.bad(key, "a string array", raw, fallback);
     }
     return [...(raw as string[])];
   }
 
   private bad<T>(key: string, expect: string, raw: unknown, fallback: T): T {
     this.problems.push(
-      `beeCode.${key} 应为${expect}，实际是 ${typeOf(raw)}（${safeJson(raw)}），已使用默认值 ${safeJson(fallback)}`,
+      `beeCode.${key} must be ${expect}; actual type is ${typeOf(raw)} (${safeJson(raw)}); using the default ${safeJson(fallback)}`,
     );
     return fallback;
   }
@@ -283,12 +283,12 @@ export function newSessionId(): string {
 export function defaultInstruction(mode: Mode): string {
   switch (mode) {
     case "builder":
-      return "请按选中代码生成改动。";
+      return "Please generate changes based on the selected code.";
     case "debugger":
-      return "请排查这段代码的问题。";
+      return "Please investigate the problem in this code.";
     case "chat":
     default:
-      return "请解释这段代码。";
+      return "Please explain this code.";
   }
 }
 
@@ -304,9 +304,9 @@ export function isWorkspaceEmpty(): boolean {
 
 /** For the footer/log (contains no secrets; baseUrl is redacted centrally by Logger) */
 export function describeConfig(cfg: ShellConfig): string {
-  const model = cfg.model.model || "<未配置>";
-  const base = cfg.model.baseUrl || "<未配置>";
-  const cwd = cfg.cwd || "<无工作区>";
+  const model = cfg.model.model || "<not configured>";
+  const base = cfg.model.baseUrl || "<not configured>";
+  const cwd = cfg.cwd || "<no workspace>";
   return `mode=${cfg.coreMode} python=${path.basename(cfg.pythonPath)} model=${model} base=${base} cwd=${cwd}`;
 }
 

@@ -25,7 +25,7 @@ export class ShellServer {
   register<K extends ShellMethod>(method: K, handler: ShellHandler<K>): void {
     if (this.handlers.has(method)) {
       // Duplicate registration is a startup programming error: silently overwriting would make "the new handler never took effect" very hard to diagnose
-      throw new Error(`重复注册 RPC 方法: ${method}`);
+      throw new Error(`Duplicate RPC method registration: ${method}`);
     }
     // A single covariant assertion: strong types outward, one uniform signature in the internal table
     this.handlers.set(method, handler as unknown as ShellHandler<ShellMethod>);
@@ -38,7 +38,7 @@ export class ShellServer {
   ): Promise<unknown> => {
     const handler = this.handlers.get(method as ShellMethod);
     if (!handler) {
-      const err = new Error(`未知 RPC 方法: ${method}`);
+      const err = new Error(`Unknown RPC method: ${method}`);
       err.name = "MethodNotFound";
       throw err;
     }
@@ -48,12 +48,12 @@ export class ShellServer {
       const result = await handler(params as never, ctx);
       const elapsed = Date.now() - startedAt;
       if (elapsed > 2_000) {
-        this.logger.debug(`${method} 耗时 ${elapsed}ms`);
+        this.logger.debug(`${method} took ${elapsed}ms`);
       }
       return result;
     } catch (err) {
       const elapsed = Date.now() - startedAt;
-      this.logger.warn(`${method} 失败（${elapsed}ms）: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`${method} failed (${elapsed}ms): ${err instanceof Error ? err.message : String(err)}`);
       throw err;
     }
   };

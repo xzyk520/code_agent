@@ -127,24 +127,24 @@ export function evaluate(input: PermissionInput): Evaluation {
     return {
       decision: "deny",
       source: "trust",
-      reason: "当前工作区未受信任：只允许读取。可在命令面板运行「Bee Code: 信任此工作区」",
+      reason: "The current workspace is untrusted: read-only access is allowed. Run \"Bee Code: Trust This Workspace\" from the Command Palette",
     };
   }
 
   // ② deny -> ask -> allow
   for (const rule of input.rules.deny) {
     if (matches(rule, input.action, input.target)) {
-      return { decision: "deny", source: "rule", reason: `被规则拒绝：${rule.raw}`, rule: rule.raw };
+      return { decision: "deny", source: "rule", reason: `Denied by rule: ${rule.raw}`, rule: rule.raw };
     }
   }
   for (const rule of input.rules.ask) {
     if (matches(rule, input.action, input.target)) {
-      return { decision: "ask", source: "rule", reason: `规则要求确认：${rule.raw}`, rule: rule.raw };
+      return { decision: "ask", source: "rule", reason: `Confirmation required by rule: ${rule.raw}`, rule: rule.raw };
     }
   }
   for (const rule of input.rules.allow) {
     if (matches(rule, input.action, input.target)) {
-      return { decision: "allow", source: "rule", reason: `被规则允许：${rule.raw}`, rule: rule.raw };
+      return { decision: "allow", source: "rule", reason: `Allowed by rule: ${rule.raw}`, rule: rule.raw };
     }
   }
 
@@ -155,10 +155,10 @@ export function evaluate(input: PermissionInput): Evaluation {
     source: "mode",
     reason:
       decision === "deny"
-        ? `当前模式（${input.mode}）不允许该操作`
+        ? `The current mode (${input.mode}) does not allow this action`
         : decision === "ask"
-          ? `当前模式（${input.mode}）要求确认`
-          : `当前模式（${input.mode}）允许该操作`,
+          ? `The current mode (${input.mode}) requires confirmation`
+          : `The current mode (${input.mode}) allows this action`,
   };
 }
 

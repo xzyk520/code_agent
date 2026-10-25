@@ -73,7 +73,7 @@ export class Logger implements vscode.Disposable {
   constructor(name = "Bee Code") {
     // `{ log: true }` -> LogOutputChannel: automatic persistence + adjustable level + uniform format
     this.channel = vscode.window.createOutputChannel(name, { log: true });
-    this.stderrChannel = vscode.window.createOutputChannel(`${name} · 内核 stderr`, { log: true });
+    this.stderrChannel = vscode.window.createOutputChannel(`${name} · Core stderr`, { log: true });
   }
 
   debug(msg: string, fields?: unknown): void { this.write("debug", msg, fields); }

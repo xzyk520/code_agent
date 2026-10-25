@@ -31,8 +31,8 @@ export interface CoreLaunchSpec {
 export class CoreNotFoundError extends Error {
   constructor(searched: string[]) {
     super(
-      `找不到内核（beecode 包）。已查找：\n  ${searched.join("\n  ")}\n` +
-        `请在工作区开发内核，或设置 beeCode.core.coreRoot 指向包含 beecode/ 的目录。`,
+      `Core not found (beecode package). Searched:\n  ${searched.join("\n  ")}\n` +
+        `Develop the core in the workspace, or set beeCode.core.coreRoot to a directory containing beecode/.`,
     );
     this.name = "CoreNotFoundError";
   }

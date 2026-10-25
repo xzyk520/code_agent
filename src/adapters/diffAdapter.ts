@@ -49,7 +49,7 @@ export class DiffAdapter implements vscode.Disposable {
       // Consistent with the other adapters: out-of-bounds/sensitive files are rejected right here (a diff preview must not read outside the workspace)
       target = resolveTarget(params.path);
     } catch (err) {
-      this.logger.warn(`diff.open 拒绝 ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`diff.open rejected ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
       return { opened: false };
     }
 
@@ -69,7 +69,7 @@ export class DiffAdapter implements vscode.Disposable {
       this.onDidChangeEmitter.fire(base);
     }
 
-    const title = params.title ?? `${path.basename(target.fsPath)} — 改动预览`;
+    const title = params.title ?? `${path.basename(target.fsPath)} — Changes Preview`;
     try {
       await vscode.commands.executeCommand("vscode.diff", base, target, title, {
         preview: true,
@@ -77,7 +77,7 @@ export class DiffAdapter implements vscode.Disposable {
       } as vscode.TextDocumentShowOptions);
       return { opened: true };
     } catch (err) {
-      this.logger.warn(`打开 diff 失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to open diff: ${err instanceof Error ? err.message : String(err)}`);
       return { opened: false };
     }
   }
@@ -93,7 +93,7 @@ export class DiffAdapter implements vscode.Disposable {
     try {
       target = resolveTarget(params.path);
     } catch (err) {
-      this.logger.warn(`diff.openProposal 拒绝 ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`diff.openProposal rejected ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
       return { opened: false };
     }
 
@@ -109,7 +109,7 @@ export class DiffAdapter implements vscode.Disposable {
     const proposed = this.virtualUri(target, id);
     if (reusing) this.onDidChangeEmitter.fire(proposed);
 
-    const title = params.title ?? `${path.basename(target.fsPath)} — 提案预览`;
+    const title = params.title ?? `${path.basename(target.fsPath)} — Proposal Preview`;
     try {
       await vscode.commands.executeCommand("vscode.diff", target, proposed, title, {
         preview: true,
@@ -117,7 +117,7 @@ export class DiffAdapter implements vscode.Disposable {
       } as vscode.TextDocumentShowOptions);
       return { opened: true };
     } catch (err) {
-      this.logger.warn(`打开提案 diff 失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to open proposal diff: ${err instanceof Error ? err.message : String(err)}`);
       return { opened: false };
     }
   }
@@ -136,7 +136,7 @@ export class DiffAdapter implements vscode.Disposable {
       try {
         modified = resolveTarget(entry.path);
       } catch (err) {
-        this.logger.warn(`openChanges 跳过 ${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(`openChanges skipping ${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
       const id = randomUUID();
@@ -148,10 +148,10 @@ export class DiffAdapter implements vscode.Disposable {
     if (resources.length === 0) return { opened: false };
 
     try {
-      await vscode.commands.executeCommand("vscode.changes", "Bee Code 改动", resources);
+      await vscode.commands.executeCommand("vscode.changes", "Bee Code Changes", resources);
       return { opened: true };
     } catch (err) {
-      this.logger.warn(`打开多文件 diff 失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to open multi-file diff: ${err instanceof Error ? err.message : String(err)}`);
       return { opened: false };
     }
   }
@@ -218,7 +218,7 @@ export class DiffAdapter implements vscode.Disposable {
     }
 
     if (this.store.size > MAX_ENTRIES || this.totalBytes > MAX_BYTES) {
-      this.logger.debug(`diff 预览缓存超出上限（${this.store.size} 条）且都还开着，暂时保留`);
+      this.logger.debug(`diff preview cache exceeds the limit (${this.store.size} entries) and all are still open; keeping them for now`);
     }
   }
 }

@@ -43,29 +43,29 @@ export async function ensureWorkspaceTrust(
   if (!root) return false;
 
   if (!vscode.workspace.isTrusted) {
-    logger.warn("VS Code 判定当前工作区不受信任：禁写、禁命令");
+    logger.warn("VS Code reports the current workspace as untrusted: writes and commands are disabled");
     return false;
   }
 
   const map = context.globalState.get<TrustMap>(TRUST_KEY) ?? {};
   if (map[root] === true) return true;
   if (map[root] === false) {
-    logger.info("工作区曾被标记为不信任：禁写、禁命令");
+    logger.info("The workspace was previously marked untrusted: writes and commands are disabled");
     return false;
   }
 
   const choice = await vscode.window.showWarningMessage(
-    "Bee Code: 是否信任此工作区？\n\n" +
-      "信任后允许 agent 修改文件（仍需你逐文件接受）与执行命令（按权限规则）。\n" +
-      "不信任时只能读取与对话。",
+    "Bee Code: Do you trust this workspace?\n\n" +
+      "Trusting it allows the agent to modify files (you still accept each file) and run commands (subject to permission rules).\n" +
+      "When untrusted, only reading and chat are available.",
     { modal: true },
-    "信任",
-    "只读",
+    "Trust",
+    "Read-only",
   );
 
-  const trusted = choice === "信任";
+  const trusted = choice === "Trust";
   await setTrust(context, root, trusted);
-  logger.info(`工作区信任：${trusted ? "已信任" : "只读"}`);
+  logger.info(`Workspace trust: ${trusted ? "trusted" : "read-only"}`);
   return trusted;
 }
 
@@ -86,13 +86,13 @@ export async function toggleWorkspaceTrust(
 ): Promise<void> {
   const root = workspaceRoot();
   if (!root) {
-    void vscode.window.showInformationMessage("Bee Code: 请先打开一个工作区。");
+    void vscode.window.showInformationMessage("Bee Code: Please open a workspace first.");
     return;
   }
   const current = isTrusted(context);
   await setTrust(context, root, !current);
-  logger.info(`工作区信任切换为：${current ? "只读" : "已信任"}`);
+  logger.info(`Workspace trust changed to: ${current ? "read-only" : "trusted"}`);
   void vscode.window.showInformationMessage(
-    current ? "Bee Code: 已取消信任（禁写、禁命令）。" : "Bee Code: 已信任此工作区。",
+    current ? "Bee Code: Trust revoked (writes and commands disabled)." : "Bee Code: This workspace is now trusted.",
   );
 }

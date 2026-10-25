@@ -1,4 +1,4 @@
-/* Bee Code 面板样式：只用 VS Code 主题变量，跟随用户主题 */
+/* Bee Code panel styles: VS Code theme variables only; follows the user's theme */
 :root {
   color-scheme: light dark;
 }
@@ -156,17 +156,17 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 
 .hint { font-size: 10px; opacity: 0.65; }
 
-/* ── 提案卡片（逐文件审批） ── */
+/* ── Proposal cards (per-file review) ── */
 .proposal { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; margin-bottom: 8px; }
 .proposal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .proposal-head .path { font-weight: 600; word-break: break-all; }
 .proposal-note { font-size: 0.9em; opacity: 0.8; }
 .proposal-actions { display: flex; gap: 6px; }
 .proposal-actions button.primary { font-weight: 600; }
-/* 失效提案：内容已不对应当前文件，只能查看或丢弃 */
+/* Stale proposal: content no longer matches the current file; it can only be viewed or discarded */
 .proposal.stale { opacity: 0.6; border-style: dashed; }
 .proposal.stale .stat { color: var(--vscode-errorForeground); }
-/* 视觉隐藏但不影响辅助技术（display:none 会让屏幕阅读器也读不到） */
+/* Visually hidden but still available to assistive technology (display:none would hide it from screen readers too) */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -178,9 +178,10 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   overflow: hidden;
   white-space: nowrap;
 }
-/* ───────────── 子代理卡片 ─────────────
- * 形态参考工业级 code agent：可折叠块，标题是任务，正文是工具调用流水，
- * 结束补一行统计与结论。用主题变量，避免在浅色/深色下失真。 */
+/* ───────────── Subagent card ─────────────
+ * Shaped after production code agents: a collapsible block whose title is the task,
+ * whose body is the stream of tool calls, and a stats/conclusion line at the end.
+ * Uses theme variables so it holds up in light and dark themes. */
 .subagent {
   padding: 0;
   background: transparent;
@@ -309,7 +310,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.1));
   border-radius: 4px;
 }
-/* ───────────── Auto 模式角标 ───────────── */
+/* ───────────── Auto mode badge ───────────── */
 .mode-badge {
   align-self: center;
   margin-left: 6px;
@@ -321,7 +322,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   white-space: nowrap;
 }
 
-/* ───────────── 计划清单 ───────────── */
+/* ───────────── Plan checklist ───────────── */
 .plan {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
   border-radius: 6px;
@@ -366,7 +367,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   flex: none;
   width: 1em;
 }
-/* ───────────── agent 读取的文件 chips ───────────── */
+/* ───────────── Files read by the agent (chips) ───────────── */
 .reads {
   display: flex;
   flex-wrap: wrap;
@@ -404,7 +405,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   border-color: var(--vscode-focusBorder, rgba(128, 128, 128, 0.6));
 }
 
-/* ───────────── 会话轨迹（右侧） ───────────── */
+/* ───────────── Session trace (right side) ───────────── */
 .conversation {
   display: flex;
   flex: 1;
@@ -478,7 +479,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   color: var(--vscode-textLink-foreground);
 }
 
-/* 三种模式用不同颜色：Chat 蓝 / Builder 绿 / Debugger 红 */
+/* Different colors for the three modes: Chat blue / Builder green / Debugger red */
 .trajectory-item.mode-chat .trajectory-dot {
   color: var(--vscode-charts-blue, var(--vscode-terminal-ansiBlue, #3794ff));
 }
@@ -520,7 +521,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   100% { background: transparent; }
 }
 
-/* 任务级成本 */
+/* Per-task cost */
 .cost {
   margin-left: auto;
   font-size: 0.72em;
@@ -529,7 +530,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   padding: 0 4px;
 }
 
-/* ───────────── 思考过程（默认展开，回答开始后自动收起） ───────────── */
+/* ───────────── Reasoning (expanded by default, auto-collapses when the answer starts) ───────────── */
 .reasoning {
   border-left: 2px solid var(--vscode-descriptionForeground);
   padding: 2px 8px;
@@ -567,7 +568,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   white-space: nowrap;
 }
 
-/* ───────────── 图（Mermaid，懒加载） ───────────── */
+/* ───────────── Diagrams (Mermaid, lazy-loaded) ───────────── */
 .diagram-card {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
   border-radius: 6px;
@@ -618,7 +619,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   background: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.2));
 }
 
-/* ───────────── 单轮轨迹（用户消息下，默认折叠） ───────────── */
+/* ───────────── Per-turn trace (below the user message, collapsed by default) ───────────── */
 .trace-card {
   margin: 2px 0 6px 0;
   border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
@@ -709,7 +710,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 }
 
 
-/* ── Markdown 正文 ───────────────────────────────────────────── */
+/* ── Markdown content ────────────────────────────────────────── */
 .msg.markdown {
   white-space: normal;
 }
@@ -768,7 +769,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   background: var(--vscode-keybindingTable-headerBackground, rgba(128, 128, 128, 0.12));
 }
 
-/* ── 代码块 ─────────────────────────────────────────────────── */
+/* ── Code blocks ────────────────────────────────────────────── */
 .msg.markdown .code-block {
   margin: 0.55em 0 0.75em;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
@@ -817,7 +818,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
   line-height: 1.5;
 }
 
-/* highlight.js tokens：跟随 VS Code 主题变量 */
+/* highlight.js tokens: follow VS Code theme variables */
 .hljs-comment,
 .hljs-quote { color: var(--vscode-descriptionForeground, #6a9955); font-style: italic; }
 .hljs-keyword,
@@ -847,7 +848,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 .hljs-strong { font-weight: 700; }
 
 
-/* ── 命令级 checkpoint ─────────────────────────────────────── */
+/* ── Command-level checkpoint ────────────────────────────────── */
 .command-checkpoint {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
   border-left: 3px solid var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
@@ -885,7 +886,7 @@ textarea:focus { outline: 1px solid var(--vscode-focusBorder); }
 .command-checkpoint.restored { opacity: 0.65; }
 
 
-/* ── 模型重试提示 / 手动重试 ───────────────────────────────── */
+/* ── Model retry notice / manual retry ──────────────────────── */
 .retry.hidden,
 .retry-banner.hidden { display: none; }
 .retry-banner {

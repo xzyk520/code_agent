@@ -1,18 +1,19 @@
-"""Agent loop（M2）：工具调用循环。
+"""Agent loop (M2): the tool-calling loop.
 
-流程：
-    用户输入 → 模型（流式）→ 有 tool_calls？
-        有  → 逐个执行（超时/异常都变成 tool 消息回灌）→ 继续
-        没有 → 结束
+Flow:
+    user input → model (streaming) → tool_calls?
+        yes → execute each one (timeouts/errors become tool messages fed back) → continue
+        no  → finish
 
-四类守卫（这是"别提前收工 / 别死循环"的关键）：
-  1. **空响应**：没有任何文本和工具调用 → 催一次，仍空则报错
-  2. **只说不做**：builder/debugger 模式下模型只输出"我将…"却不调工具 → 催一次
-  3. **重复调用**：同一工具 + 同一参数连续出现 → 拦截并警告，超过阈值终止
-  4. **步数/预算**：max_steps 与输出 token 预算
+Four guards (the key to "do not finish early / do not loop forever"):
+  1. **Empty response**: no text and no tool calls → nudge once, error if still empty
+  2. **All talk, no action**: in builder/debugger mode the model only says "I will..." without calling tools → nudge once
+  3. **Repeated calls**: the same tool + same arguments repeated consecutively → block and warn; abort past the threshold
+  4. **Steps/budget**: max_steps and the output token budget
 
-工具失败的语义：**失败不是崩溃，而是 observation**。错误会作为 tool 消息回灌给模型，
-同时用 `ui.tool(error)` 展示给用户——双方都看得见，模型据此改策略。
+Tool-failure semantics: **a failure is not a crash, it is an observation**. The error is fed
+back to the model as a tool message and also shown to the user via `ui.tool(error)` — both
+sides see it, and the model adjusts its strategy accordingly.
 """
 
 from __future__ import annotations
@@ -48,8 +49,8 @@ from ..tools import Tool, ToolContext, build_tools, tool_schemas
 Notify = Callable[[str, dict[str, Any]], None]
 Propose = Callable[[str, str, str], Awaitable[str]]
 
-#: 子代理的固定前缀：只读、给结论与引用、不复述代码
-#: 模型请求在"还没产生任何输出"时的安全重试策略
+#: Fixed prefix for subagents: read-only, conclusions and references, no code restatement
+#: Safe retry strategy for model requests when no output has been produced yet
 MODEL_RETRY_MAX_ATTEMPTS = 6
 MODEL_RETRY_INITIAL_S = 0.5
 MODEL_RETRY_MAX_S = 10.0
@@ -57,7 +58,7 @@ RETRYABLE_MODEL_CODES = frozenset({"RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT
 
 
 class StreamInterrupted(Exception):
-    """模型流在已经产生部分输出后断开；保留部分内容，由上层决定是否续写。"""
+    """The model stream dropped after partial output; keep the partial content and let the caller decide whether to continue."""
 
     def __init__(self, message: str, text: str, reasoning: str, calls: list[ToolCall]) -> None:
         super().__init__(message)
@@ -89,30 +90,30 @@ _SUBAGENT_PREFIX = (
 class TurnConfig:
     max_steps: int = 12
     tool_timeout_s: float = 60.0
-    #: 命令执行 / 派生子代理这类长工具的超时（秒）
+    #: Timeout for long tools such as command execution / subagent spawn (seconds)
     long_tool_timeout_s: float = 600.0
-    #: 同一工具+参数最多执行几次（超过就拦截）
+    #: Maximum executions of the same tool + arguments (further calls are blocked)
     repeat_limit: int = 3
-    #: 允许的"催促"次数（空响应 / 只说不做 / 提前收工）
+    #: Number of allowed "nudges" (empty response / all talk no action / finishing early)
     nudge_limit: int = 2
-    #: 模型上下文窗口（token）；轮内压缩按它的 ratio 触发
+    #: Model context window (tokens); in-turn compaction is triggered by its ratio
     context_window_tokens: int = 32_768
-    #: 超过"窗口 × ratio"就开始压缩
+    #: Start compacting once "window × ratio" is exceeded
     compact_ratio: float = 0.7
-    #: 最近几条工具结果保留原文（更旧的替换成摘要）
+    #: Keep the most recent tool results verbatim (older ones are replaced by digests)
     keep_raw_tool_results: int = 3
-    #: 大任务放宽后的步数上限
+    #: Relaxed step limit for large tasks
     large_task_steps: int = 24
-    #: 单轮 token 预算
+    #: Token budget for a single turn
     max_turn_tokens: int = 200_000
-    #: 主 agent 单次模型响应超时（秒）：工具执行时间不计入
+    #: Time budget for a single main-agent model response (seconds); tool execution does not count
     max_turn_seconds: float = 600.0
-    #: 大任务的主 agent 单次模型响应超时（按意图 scale 切换）
+    #: Time budget for a single main-agent model response on large tasks (switched by intent scale)
     large_task_seconds: float = 1_800.0
-    #: 首 token 超时 / 流式空闲超时
+    #: First-token timeout / streaming idle timeout
     first_token_seconds: float = 60.0
     idle_seconds: float = 45.0
-    #: 一次 assistant 消息里最多执行多少个工具调用
+    #: Maximum number of tool calls executed from one assistant message
     max_tool_calls_per_batch: int = 8
 
 
@@ -154,28 +155,28 @@ class AgentLoop:
         self._spawn_config = dict(spawn_config or {})
         self._spawn_api_key = spawn_api_key
         self._spawn_max_steps = max(1, min(int(spawn_max_steps or 8), 12))
-        # 子代理没有 propose_edit，也没有 spawn_subagent（不允许无限嵌套）
+        # Subagents have no propose_edit and no spawn_subagent (unbounded nesting is not allowed)
         self._tools: dict[str, Tool] = build_tools(role, allow_spawn=self._spawn_enabled)
         self._schemas = tool_schemas(self._tools)
-        #: token 估算校准系数（用服务端 usage 反推，EMA 平滑）
+        #: Token-estimate calibration factor (derived from server usage with EMA smoothing)
         self._calibration = 1.0
-        #: 本轮已做过"观察摘要"的消息（按对象 id 记，避免往协议消息里加字段）
+        #: Messages already given an "observation digest" this turn (tracked by object id to avoid adding fields to protocol messages)
         self._digested: set[int] = set()
         self._compact_notice_added = False
         self._l3_used = False
-        #: 本轮的当前计划（只由模型 update_plan 修改；内核不推断完成度）
+        #: Current plan for this turn (modified only by the model's update_plan; the kernel does not infer completion)
         self._plan: list[dict[str, str]] | None = None
-        #: 本轮生成的图（挂到 assistant 消息上，参与摘要/历史）
+        #: Diagrams generated this turn (attached to the assistant message and included in summaries/history)
         self._diagrams: list[dict[str, Any]] = []
-        #: 是否把思考内容回传给服务端（auto 模式下被"缺 reasoning_content"拒绝时自动打开）
+        #: Whether to replay reasoning content to the server (auto mode enables it when rejected for a missing reasoning_content)
         self._replay_reasoning = False
-        #: 主 agent 单次模型响应预算（按 scale 动态设置；工具执行不计入）
+        #: Time budget for a single main-agent model response (set dynamically by scale; tool execution does not count)
         self._turn_time_budget = self._config.max_turn_seconds
-        #: 80% 预算预警是否已经发过
+        #: Whether the 80% budget warning has already been sent
         self._budget_warned = False
-        #: 本轮是否已经因"计划未完成"催过一次（避免死循环）
+        #: Whether this turn has already been nudged for "plan incomplete" (avoids infinite loops)
         self._plan_nudged = False
-        #: assistant 消息 → 思考内容（按对象 id 记，便于稍后补上 replay 字段）
+        #: Assistant message → reasoning content (tracked by object id so the replay field can be added later)
         self._reasoning_by_msg: dict[int, str] = {}
 
     async def run_turn(
@@ -191,19 +192,19 @@ class AgentLoop:
         plan: list[dict[str, str]] | None = None,
     ) -> TurnStats:
         started_at = asyncio.get_running_loop().time()
-        # —— 视觉能力：显式设置 > 服务端反馈（缓存） > 乐观尝试 ——
+        # -- Vision capability: explicit setting > server feedback (cache) > optimistic attempt --
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
         resolved = resolve_vision(model_name, session.model_config.get("supportsVision"), base_url)  # type: ignore[arg-type]
         vision = True if resolved is None else resolved
         self._log(
-            f"视觉输入：{'开' if vision else '关'}"
-            f"（{model_name}；来源：{session.model_config.get('supportsVision') or 'auto'}"
-            f"{'，已缓存' if resolved is not None else '，未知→先试'}）"
+            f"Vision input: {'on' if vision else 'off'}"
+            f" ({model_name}; source: {session.model_config.get('supportsVision') or 'auto'}"
+            f"{', cached' if resolved is not None else ', unknown; trying first'})"
         )
 
-        # 统一会话记忆：模式只影响"这轮怎么干"，不影响历史。
-        # 每一轮都先做意图分析（用 chat 模式的结构化调用），再据此选模式与守卫策略。
+        # Shared conversation memory: the mode only affects "how this turn is done", not the history.
+        # Every turn starts with intent analysis (a structured call in chat mode), which then selects the mode and guard strategy.
         client = self._client_factory(session)
         intent: Intent | None = None
         effective_mode = str(session.mode)
@@ -212,27 +213,27 @@ class AgentLoop:
             previous = session.last_intent
             try:
                 intent = await classify(client, text, history, log=self._log, previous=previous)
-            except Exception as exc:  # noqa: BLE001 - 分类器不该拖垮整轮
-                self._log(f"意图识别异常：{exc}")
-                intent = Intent("chat", "small", False, f"意图识别异常，按 Chat 处理（{exc}）", "", degraded=True)
+            except Exception as exc:  # noqa: BLE001 - the classifier must not take down the whole turn
+                self._log(f"Intent classification error: {exc}")
+                intent = Intent("chat", "small", False, f"Intent classification error; falling back to chat ({exc})", "", degraded=True)
 
-            # 是否"同一意图"完全交给模型判断，不用正则猜"继续/好/ok"
+            # Whether it is "the same intent" is left entirely to the model; no regex guessing of "continue/ok"
             if previous and intent.continues_previous:
                 saved = previous
                 intent = Intent(
                     mode=str(saved.get("mode") or "chat"),
                     scale=str(saved.get("scale") or "small"),
                     needs_proposal=bool(saved.get("needs_proposal")),
-                    reason=f"延续上一轮意图（模型判定）",
+                    reason=f"Continuing the previous turn's intent (model decision)",
                     intent=str(saved.get("intent") or intent.intent),
                     usage=intent.usage,
                     degraded=intent.degraded,
                     continues_previous=True,
                 )
                 reused = True
-                self._log("意图沿用上一轮（模型判定为同一意图）")
+                self._log("Intent reused from the previous turn (the model judged it the same intent)")
             else:
-                self._log("意图已更新（模型判定为新意图）")
+                self._log("Intent updated (the model judged it a new intent)")
 
             session.last_intent = {
                 "mode": intent.mode,
@@ -257,8 +258,8 @@ class AgentLoop:
                 },
             )
             self._log(
-                f"意图：{effective_mode}（{intent.reason}，规模 {intent.scale}，"
-                f"需要提案 {intent.needs_proposal}{'，降级' if intent.degraded else ''}）"
+                f"Intent: {effective_mode} ({intent.reason}, scale {intent.scale}, "
+                f"needs proposal {intent.needs_proposal}{', degraded' if intent.degraded else ''})"
             )
             if intent.needs_proposal:
                 try:
@@ -266,9 +267,9 @@ class AgentLoop:
                         label=f"turn: {(intent.intent or text)[:40]}"
                     )
                     if checkpoint:
-                        self._log(f"自动检查点：{checkpoint[:8]}")
-                except Exception as exc:  # noqa: BLE001 - 快照失败不该阻断任务
-                    self._log(f"自动检查点失败：{exc}")
+                        self._log(f"Automatic checkpoint: {checkpoint[:8]}")
+                except Exception as exc:  # noqa: BLE001 - a failed snapshot must not block the task
+                    self._log(f"Automatic checkpoint failed: {exc}")
         messages = session.build_request_messages(
             system_override or system_prompt(effective_mode),
             history=history,
@@ -277,7 +278,7 @@ class AgentLoop:
             attachments=attachments,
             vision=vision,
         )
-        # 光标位置作为一条 system 提示：告诉模型"先看这里，不够再搜"
+        # Cursor position as a system hint: tell the model "look here first, search only if needed"
         if focus:
             path = str(focus.get("path") or "")
             line = focus.get("line")
@@ -286,8 +287,8 @@ class AgentLoop:
             symbol = focus.get("symbol")
             note = f"The user cursor is at {path}:{line}"
             if start and end:
-                note += f"（已附上第 {start}-{end} 行"
-                note += f"，函数 {symbol}）" if symbol else "）"
+                note += f" (lines {start}-{end} attached"
+                note += f", function {symbol})" if symbol else ")"
             messages.append(
                 {
                     "role": "system",
@@ -325,7 +326,7 @@ class AgentLoop:
         budget_hit: str | None = None
         forced_end = False
 
-        # 跨轮延续：把上一轮未完成的计划作为 system 注入
+        # Cross-turn continuation: inject the previous turn's unfinished plan as a system message
         if plan:
             lines = []
             for index, step in enumerate(plan[:12], start=1):
@@ -344,7 +345,7 @@ class AgentLoop:
                     }
                 )
 
-        # 延续上一轮时，把完整意图（目标/规模/模式/是否提案）也告诉主模型
+        # When continuing the previous turn, also tell the main model the full intent (goal/scale/mode/needs proposal)
         if reused and intent is not None:
             messages.append(
                 {
@@ -359,7 +360,7 @@ class AgentLoop:
                 }
             )
 
-        # 大任务且需要产出：预置一份计划骨架，模型可以直接沿用/改写
+        # Large task that needs output: seed a plan skeleton that the model can adopt or rewrite
         if (
             intent is not None
             and intent.needs_proposal
@@ -389,10 +390,10 @@ class AgentLoop:
         repeat: Counter[str] = Counter()
         recent_results: deque[str] = deque(maxlen=3)
         nudges = 0
-        # builder/debugger 默认要产出提案；auto 模式下完全由分类器决定
+        # builder/debugger must produce a proposal by default; in auto mode the classifier decides entirely
         wants_edit = intent.needs_proposal if intent is not None else effective_mode in ("builder", "debugger")
 
-        # 大任务：在用户消息后追加"先制定计划"的指令（模型仍可自行判断要不要用）
+        # Large task: append a "make a plan first" instruction after the user message (the model may still decide whether to use it)
         if intent is not None and intent.should_plan and effective_mode != "chat":
             messages.append(
                 {
@@ -408,7 +409,7 @@ class AgentLoop:
         interruptions = 0
 
         async def stream_model(**kwargs: Any):
-            """调用模型；中途断流时保留部分输出并让模型续写一次。"""
+            """Call the model; if the stream drops mid-output, keep the partial output and let the model continue once."""
             nonlocal interruptions
             try:
                 return await self._stream_with_deadline(
@@ -420,19 +421,19 @@ class AgentLoop:
                         "The model connection was interrupted twice mid-output; partial content was kept. Check the network and retry."
                     ) from exc
                 interruptions += 1
-                self._log(f"模型输出中断，保留部分内容：{exc}")
+                self._log(f"Model output interrupted; partial content kept: {exc}")
                 self._emit(
                     "ui.tool",
                     {
                         "sessionId": session.id,
                         "name": "guard",
                         "status": "error",
-                        "summary": "模型输出中断，已保留部分内容",
+                        "summary": "Model output interrupted; partial content kept",
                     },
                 )
                 self._notify(
                     "log",
-                    {"level": "warn", "msg": "模型连接在输出中途中断；已保留部分内容，正在尝试续写。"},
+                    {"level": "warn", "msg": "The model connection dropped mid-output; partial content was kept and a continuation is being attempted."},
                 )
                 if exc.text.strip():
                     messages.append({"role": "assistant", "content": exc.text})
@@ -557,7 +558,7 @@ class AgentLoop:
                     f"The turn budget is exhausted ({budget_hit}). Do not call more tools; summarize what is done, what remains, and the recommended next step.",
                 )
 
-            # 提前收工检测：用户要求改代码，但整轮没有产出任何提案
+            # Early-finish detection: the user asked for a code change, but the turn produced no proposal at all
             if wants_edit and stats.proposals == 0 and nudges < self._config.nudge_limit and not forced_end:
                 nudges += 1
                 self._emit("ui.tool", {
@@ -607,9 +608,9 @@ class AgentLoop:
         )
         return stats
 
-    # ───────────────────────── 模型调用 ─────────────────────────
+    # ───────────────────────── Model calls ─────────────────────────
 
-    # ───────────────────────── 轮内压缩 ─────────────────────────
+    # ───────────────────────── In-turn compaction ─────────────────────────
 
     def _estimate_messages_tokens(self, messages: list[dict[str, Any]], *, calibrate: bool = True) -> int:
         raw = 0
@@ -631,15 +632,15 @@ class AgentLoop:
         *,
         force: bool = False,
     ) -> None:
-        """轮内压缩：工具结果摘要 → 丢更早的交换 → 模型摘要（兜底）。"""
+        """In-turn compaction: digest tool results → drop older exchanges → model summary (last resort)."""
         budget = max(2_000, int(self._config.context_window_tokens * self._config.compact_ratio))
         if force:
-            # 服务端已明确报 context overflow：按半预算强制压缩，不再相信估算值
+            # The server explicitly reported context overflow: force compaction at half budget and stop trusting estimates
             budget = max(2_000, int(budget * 0.5))
         if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
-        # ① 旧工具结果 → 观察摘要（保留最近 keep_raw_tool_results 条原文）
+        # 1. Old tool results → observation digests (keep the most recent keep_raw_tool_results verbatim)
         keep = max(0, self._config.keep_raw_tool_results)
         positions = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         candidates = positions[:-keep] if keep and len(positions) > keep else ([] if keep else positions)
@@ -655,9 +656,9 @@ class AgentLoop:
             self._digested.add(id(message))
             replaced += 1
         if replaced:
-            self._compact_log(session, f"把 {replaced} 条早期工具结果折叠为摘要")
+            self._compact_log(session, f"Folded {replaced} earlier tool results into digests")
 
-        # ①b 仍超预算：连"最近几条"也折叠（原文可随时重新读取）
+        # 1b. Still over budget: fold even the "most recent few" (the original content can always be read again)
         if self._estimate_messages_tokens(messages) > budget:
             extra = 0
             for index in positions:
@@ -670,20 +671,20 @@ class AgentLoop:
                 self._digested.add(id(message))
                 extra += 1
             if extra:
-                self._compact_log(session, f"又折叠了 {extra} 条工具结果")
+                self._compact_log(session, f"Folded {extra} more tool results")
 
         if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
-        # ② 丢掉更早的 assistant+tool 交换（保留当前用户消息及之后）
+        # 2. Drop older assistant+tool exchanges (keep the current user message and everything after it)
         dropped = _drop_oldest_exchanges(messages)
         if dropped:
-            self._compact_log(session, f"移除了 {dropped} 条更早的对话片段")
+            self._compact_log(session, f"Removed {dropped} earlier conversation fragments")
 
         if not force and self._estimate_messages_tokens(messages) <= budget:
             return
 
-        # ③ 兜底：让模型把最早的一半过程压成一段（一轮最多一次）
+        # 3. Last resort: ask the model to compress the earliest half of the process into one passage (at most once per turn)
         if force:
             self._l3_used = False
         if not self._l3_used:
@@ -723,11 +724,11 @@ class AgentLoop:
             except ModelError as exc:
                 retryable = getattr(exc, "code", "UNKNOWN") in RETRYABLE_MODEL_CODES
                 if retryable and attempt == 0:
-                    self._log(f"轮内摘要失败，1s 后重试：{exc}")
+                    self._log(f"In-turn summary failed; retrying in 1s: {exc}")
                     await asyncio.sleep(1.0)
                     continue
-                # 自动压缩失败不拖垮主任务：保留现有历史继续
-                self._log(f"轮内摘要失败：{exc}")
+                # Automatic compaction failure must not block the main task: keep the existing history and continue
+                self._log(f"In-turn summary failed: {exc}")
                 return
         if not summary.strip():
             return
@@ -735,11 +736,11 @@ class AgentLoop:
         job_note = ("\n[Running background jobs]\n" + "\n".join(job_lines)) if job_lines else ""
         note = {"role": "system", "content": f"[In-turn summary] {summary.strip()[:600]}{job_note}"}
         messages[1:last_user] = [note]
-        self._compact_log(session, f"模型摘要替代了 {len(chunk)} 条早期消息")
+        self._compact_log(session, f"Model summary replaced {len(chunk)} earlier messages")
 
     def _compact_log(self, session: Session, detail: str) -> None:
-        self._log(f"轮内压缩：{detail}")
-        self._notify("log", {"level": "warn", "msg": f"上下文接近上限，已压缩：{detail}"})
+        self._log(f"In-turn compaction: {detail}")
+        self._notify("log", {"level": "warn", "msg": f"Context is approaching the limit and was compacted: {detail}"})
 
     async def _stream(
         self,
@@ -751,11 +752,12 @@ class AgentLoop:
         allow_tools: bool = True,
         round_index: int = 1,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
-        """一次模型调用。
+        """One model call.
 
-        视觉能力不靠模型名猜：服务端如果明确拒绝图片，就剥掉图片重试一次，
-        并把"该模型不支持图片"记进缓存（后续轮次直接不带图）。
-        思考内容默认不回传；只有服务端明确要求（或配置 always）才补上。
+        Vision capability is not guessed from the model name: if the server explicitly rejects
+        images, strip them and retry once, and cache "this model does not support images"
+        (later turns send no images at all). Reasoning content is not replayed by default; it
+        is added only when the server explicitly requires it (or the config is "always").
         """
         base_url = str(session.model_config.get("baseUrl") or "")
         model_name = str(session.model_config.get("model") or "")
@@ -779,21 +781,21 @@ class AgentLoop:
                 raise
             strip_image_parts(messages)
             remember(model_name, base_url, False)
-            self._log(f"模型拒绝图片，省略后重试：{exc}")
+            self._log(f"The model rejected images; retrying without them: {exc}")
             self._emit(
                 "ui.tool",
                 {
                     "sessionId": session.id,
                     "name": "guard",
                     "status": "error",
-                    "summary": "模型不接受图片，已省略图片重试",
+                    "summary": "The model does not accept images; retrying with images omitted",
                 },
             )
             self._notify(
                 "log",
                 {
                     "level": "warn",
-                    "msg": "当前模型不接受图片：本轮已改为文字描述，后续不再发送图片。",
+                    "msg": "The current model does not accept images: this turn was converted to a text description, and images will not be sent again.",
                 },
             )
             return await self._stream_once(
@@ -810,7 +812,7 @@ class AgentLoop:
                 raise
             self._replay_reasoning = True
             self._enable_replay(messages)
-            self._log(f"服务端要求回传思考内容，已补上并重试：{exc}")
+            self._log(f"The server requires reasoning content to be replayed; added it and retrying: {exc}")
             return await self._stream_once(
                 client,
                 messages,
@@ -867,7 +869,7 @@ class AgentLoop:
                         now = asyncio.get_running_loop().time()
                         if model_bound or now - started >= self._turn_time_budget:
                             raise timeout_error("response") from exc
-                        # 已经产生部分输出：不重放，交给上层保留/续写
+                        # Partial output already exists: do not replay; let the upper layer keep it / continue it
                         if parts or reasoning_parts or calls:
                             raise StreamInterrupted(
                                 "Model stream timed out mid-output",
@@ -896,21 +898,21 @@ class AgentLoop:
                         )
             except ModelError as exc:
                 if parts or reasoning_parts or calls:
-                    # 已经吐出的内容不能丢弃，也不能自动重跑（否则工具可能重复执行）
+                    # Already-emitted content cannot be discarded or automatically rerun (tools might execute twice)
                     raise StreamInterrupted(
                         str(exc), "".join(parts), "".join(reasoning_parts), calls
                     ) from exc
                 code = getattr(exc, "code", "UNKNOWN")
                 if code == "CONTEXT_OVERFLOW" and context_compactions < 1:
                     context_compactions += 1
-                    self._log("服务端报告上下文溢出，强制压缩后重试")
+                    self._log("The server reported context overflow; compacting forcibly and retrying")
                     self._l3_used = False
                     try:
                         await self._compact(client, messages, session, force=True)
                     except asyncio.CancelledError:
                         raise
-                    except Exception as compact_exc:  # noqa: BLE001 - 压缩失败仍原样重试一次
-                        self._log(f"强制压缩失败：{compact_exc}")
+                    except Exception as compact_exc:  # noqa: BLE001 - forced compaction failed; still retry as-is once
+                        self._log(f"Forced compaction failed: {compact_exc}")
                     retry_reason = "Context overflow; forced compaction"
                     retry_after = None
                 else:
@@ -944,7 +946,7 @@ class AgentLoop:
             if delay >= remaining:
                 raise timeout_error("response")
             retry_msg = (
-                f"模型请求失败（{retry_reason}），{delay:.1f}s 后重试 "
+                f"Model request failed ({retry_reason}); retrying in {delay:.1f}s "
                 f"({attempt + 1}/{MODEL_RETRY_MAX_ATTEMPTS})"
             )
             self._log(retry_msg)
@@ -975,7 +977,7 @@ class AgentLoop:
         if usage:
             stats.input_tokens += int(usage.get("inputTokens") or 0)
             stats.output_tokens += int(usage.get("outputTokens") or 0)
-            # 用服务端 usage 校准估算系数（EMA），让轮内压缩的预算更接近真实
+            # Calibrate the estimate factor with server usage (EMA) so in-turn compaction budgets track reality
             prompt_tokens = int(usage.get("inputTokens") or 0)
             estimated = self._estimate_messages_tokens(messages, calibrate=False)
             if prompt_tokens > 0 and estimated > 0:
@@ -985,7 +987,7 @@ class AgentLoop:
             self._notify("ui.retry", {"sessionId": session.id, "status": "done"})
         return "".join(parts), calls, usage, "".join(reasoning_parts)
 
-    # ───────────────────────── 工具执行 ─────────────────────────
+    # ───────────────────────── Tool execution ─────────────────────────
 
     def _record_tool_result(
         self,
@@ -1025,7 +1027,7 @@ class AgentLoop:
         try:
             args = json.loads(call.arguments or "{}")
             if not isinstance(args, dict):
-                raise ValueError("参数必须是 JSON 对象")
+                raise ValueError("arguments must be a JSON object")
         except (json.JSONDecodeError, ValueError) as exc:
             message = f"Failed to parse arguments: {exc}. Check that the JSON is valid."
             self._emit_tool(session, call, "error", "Invalid arguments")
@@ -1052,7 +1054,7 @@ class AgentLoop:
             if isinstance(requested_ms, (int, float)) and requested_ms > 0:
                 timeout_s = max(timeout_s, float(requested_ms) / 1000.0 + 30.0)
         elif call.name == "spawn_subagent":
-            # 子代理收尾/回传结论需要一点余量
+            # A subagent needs some headroom to wrap up / return its conclusion
             timeout_s += 30.0
         started = asyncio.get_running_loop().time()
         try:
@@ -1084,7 +1086,7 @@ class AgentLoop:
             return {"error": message, "kind": "timeout"}
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - 工具错误必须回灌给模型
+        except Exception as exc:  # noqa: BLE001 - tool errors must be fed back to the model
             if stats is not None:
                 stats.tool_ms += int((asyncio.get_running_loop().time() - started) * 1000)
             message = f"Tool {call.name} failed: {type(exc).__name__}: {exc}"
@@ -1092,10 +1094,10 @@ class AgentLoop:
             ctx.log(message)
             return {"error": message, "kind": "error"}
 
-    # ───────────────────────── 守卫 ─────────────────────────
+    # ───────────────────────── Guards ─────────────────────────
 
     def _unfinished_plan_steps(self) -> list[tuple[int, dict[str, str]]]:
-        """非最后一步里仍 pending/doing 的步骤（最后一步规定为总结）。"""
+        """Steps still pending/doing among all but the last step (the last step is defined as the summary)."""
         if not self._plan or len(self._plan) <= 1:
             return []
         result: list[tuple[int, dict[str, str]]] = []
@@ -1110,25 +1112,25 @@ class AgentLoop:
         session: Session,
         nudges: int,
     ) -> dict[str, Any] | None:
-        """决定是否"催一下"。返回要追加的消息，或 None 表示可以结束。"""
+        """Decide whether to "nudge". Returns a message to append, or None if the turn can end."""
         if nudges >= self._config.nudge_limit:
             return None
 
         if not answer.strip():
             self._emit("ui.tool", {
                 "sessionId": session.id, "name": "guard", "status": "error",
-                "summary": "模型返回空响应，要求重试",
+                "summary": "The model returned an empty response; asking it to retry",
             })
             return {"role": "user", "content": "You produced no output. Continue the task; if information is missing, ask explicitly."}
 
-        # 计划未完成：非最后一步还有 pending/doing，就不要让它直接收尾
+        # Plan incomplete: if all but the last step still have pending/doing, do not let the model finish yet
         if not self._plan_nudged and not answer.rstrip().endswith(("？", "?")):
             blockers = self._unfinished_plan_steps()
             if blockers:
                 self._plan_nudged = True
                 self._emit("ui.tool", {
                     "sessionId": session.id, "name": "guard", "status": "error",
-                    "summary": f"计划还有 {len(blockers)} 步未完成",
+                    "summary": f"{len(blockers)} plan steps are still incomplete",
                 })
                 listing = "\n".join(f"{index}. [{step.get('status')}] {step.get('text')}" for index, step in blockers)
                 return {
@@ -1154,10 +1156,10 @@ class AgentLoop:
         allow_tools: bool = True,
         round_index: int = 1,
     ) -> tuple[str, list[ToolCall], dict[str, int] | None, str]:
-        """模型响应计时入口。
+        """Entry point for timing model responses.
 
-        真正的首 token / 空闲 / 总响应 deadline 在 `_stream_once` 内，
-        从上下文压缩之后开始计时；工具执行不在其中。
+        The actual first-token / idle / total-response deadlines live inside `_stream_once` and
+        start after context compaction; tool execution is not included.
         """
         return await self._stream(
             client,
@@ -1175,7 +1177,7 @@ class AgentLoop:
         session: Session,
         stats: TurnStats,
     ) -> str:
-        """达到步数上限：要求模型基于已有信息收尾（不再给工具）。"""
+        """Step limit reached: ask the model to wrap up from existing information (no more tools)."""
         return await self._finish_with_notice(
             messages,
             client,
@@ -1192,7 +1194,7 @@ class AgentLoop:
         stats: TurnStats,
         notice: str,
     ) -> str:
-        # 硬截断前先存快照：避免"预算/步数用尽时改了一半"无法回退
+        # Snapshot before a hard cutoff: avoids an unrecoverable half-applied change when budget/steps run out
         await self._checkpoint_before_cutoff(session, notice)
 
         self._emit(
@@ -1210,7 +1212,7 @@ class AgentLoop:
                 client, messages, session, stats, allow_tools=False, round_index=stats.steps
             )
         except StreamInterrupted as exc:
-            raise ModelError(f"模型在收尾阶段输出中断：{exc}") from exc
+            raise ModelError(f"The model's output was interrupted while wrapping up: {exc}") from exc
         return answer
 
     def _emit_usage(self, session: Session, stats: TurnStats, started_at: float) -> None:
@@ -1225,7 +1227,7 @@ class AgentLoop:
         )
 
     def _attach_reasoning(self, message: dict[str, Any], reasoning: str) -> None:
-        """记住 assistant 消息的思考内容；需要回传时才写进协议字段。"""
+        """Remember an assistant message's reasoning content; write it into the protocol field only when replay is needed."""
         if not reasoning:
             return
         self._reasoning_by_msg[id(message)] = reasoning
@@ -1246,16 +1248,16 @@ class AgentLoop:
         try:
             checkpoint = await self._shell.checkpoint(label=f"cutoff: {notice[:40]}")
             if checkpoint:
-                self._log(f"硬截断前快照：{checkpoint[:8]}")
+                self._log(f"Snapshot before hard cutoff: {checkpoint[:8]}")
                 self._notify(
                     "log",
-                    {"level": "warn", "msg": f"已达到本轮上限，已自动创建检查点 {checkpoint[:8]}"},
+                    {"level": "warn", "msg": f"The turn limit was reached; checkpoint {checkpoint[:8]} was created automatically"},
                 )
-        except Exception as exc:  # noqa: BLE001 - 快照失败不该阻断收尾
-            self._log(f"硬截断前快照失败：{exc}")
+        except Exception as exc:  # noqa: BLE001 - a failed snapshot must not block wrap-up
+            self._log(f"Snapshot before hard cutoff failed: {exc}")
 
     def _budget_warning(self, stats: TurnStats, started_at: float) -> str | None:
-        """到 80% token 预算时提前提醒模型收尾。"""
+        """Warn the model to wrap up early when 80% of the token budget is used."""
         del started_at
         used = stats.input_tokens + stats.output_tokens
         if used > self._config.max_turn_tokens * 0.8:
@@ -1273,7 +1275,7 @@ class AgentLoop:
         return None
 
     def _emit_read(self, session: Session, call: ToolCall, result: dict[str, Any]) -> None:
-        """读文件类工具成功后广播位置：壳用它做编辑器高亮 / 文件 chips。"""
+        """Broadcast a location after a file-reading tool succeeds: the shell uses it for editor highlighting / file chips."""
         if not result.get("ok", True) or result.get("error"):
             return
         path = result.get("path")
@@ -1297,18 +1299,18 @@ class AgentLoop:
         self._plan = steps
         self._notify("ui.plan", {"sessionId": session.id, "steps": steps})
 
-    # ───────────────────────── 子代理 ─────────────────────────
+    # ───────────────────────── Subagents ─────────────────────────
 
     async def _spawn(self, task: str, max_steps: int, parent: Session) -> dict[str, Any]:
-        """跑一个只读子代理，只把结论带回来。
+        """Run a read-only subagent and bring back only its conclusion.
 
-        隔离点：
-          - 独立 Session / 独立上下文（它读几十个文件也不会污染主对话）
-          - 只读工具集（没有 propose_edit / edit_file / spawn_subagent）
-          - 壳侧根据 `role: subagent` 收紧命令与写权限
-          - 取消随父任务一起传播（同一个 asyncio 任务树）
+        Isolation points:
+          - Separate Session / separate context (reading dozens of files will not pollute the main conversation)
+          - Read-only tool set (no propose_edit / edit_file / spawn_subagent)
+          - The shell tightens command and write permissions based on `role: subagent`
+          - Cancellation propagates with the parent task (same asyncio task tree)
         """
-        # 子代理配置：用户显式指定的字段覆盖主代理，其余沿用
+        # Subagent config: fields explicitly set by the user override the main agent; the rest are inherited
         child_config = dict(parent.model_config)
         for key, value in self._spawn_config.items():
             if value is not None and value != "":
@@ -1318,7 +1320,7 @@ class AgentLoop:
         sub_id = child.id
 
         def child_notify(method: str, params: dict[str, Any]) -> None:
-            """子代理的进度：只转发工具事件，文本不推流（避免刷屏）。"""
+            """Subagent progress: forward only tool events, not streamed text (avoids flooding the UI)."""
             if method != "ui.tool":
                 return
             name = str(params.get("name") or "")
@@ -1370,11 +1372,11 @@ class AgentLoop:
             log=self._log,
             role="subagent",
         )
-        self._log(f"subagent 开始：{task[:100]}")
+        self._log(f"subagent start: {task[:100]}")
         try:
             stats = await child_loop.run_turn(
                 child,
-                text=f"任务：{task}",
+                text=f"Task: {task}",
                 attachments=[],
                 history=[],
                 summary=None,
@@ -1383,16 +1385,16 @@ class AgentLoop:
         except asyncio.CancelledError:
             self._notify(
                 "ui.subagent",
-                {"sessionId": parent.id, "id": sub_id, "status": "end", "error": "已取消"},
+                {"sessionId": parent.id, "id": sub_id, "status": "end", "error": "cancelled"},
             )
             raise
-        except Exception as exc:  # noqa: BLE001 - 子代理失败不该拖垮主循环
+        except Exception as exc:  # noqa: BLE001 - a failed subagent must not take down the main loop
             message = f"{type(exc).__name__}: {exc}"
             self._notify(
                 "ui.subagent",
                 {"sessionId": parent.id, "id": sub_id, "status": "end", "error": message[:500]},
             )
-            self._log(f"subagent 失败：{message}")
+            self._log(f"subagent failed: {message}")
             return {"ok": False, "error": message, "findings": "", "steps": 0, "toolCalls": 0}
 
         answer = ""
@@ -1400,8 +1402,8 @@ class AgentLoop:
             if message.get("role") == "assistant" and isinstance(message.get("content"), str):
                 answer = str(message["content"])
                 break
-        self._log(f"subagent 结束：steps={stats.steps} tools={stats.tool_calls}")
-        findings = answer[:8000] if answer else "（子代理没有给出结论）"
+        self._log(f"subagent end: steps={stats.steps} tools={stats.tool_calls}")
+        findings = answer[:8000] if answer else "(the subagent returned no conclusion)"
         self._notify(
             "ui.subagent",
             {
@@ -1420,7 +1422,7 @@ class AgentLoop:
             "toolCalls": stats.tool_calls,
         }
 
-    # ───────────────────────── 通知 ─────────────────────────
+    # ───────────────────────── Notifications ─────────────────────────
 
     def _emit(self, method: str, params: dict[str, Any]) -> None:
         self._notify(method, params)
@@ -1448,7 +1450,7 @@ class AgentLoop:
         self._emit("ui.tool", params)
 
 
-# ───────────────────────── 工具函数 ─────────────────────────
+# ───────────────────────── Utility functions ─────────────────────────
 
 
 def _default_client(session: Session) -> OpenAIClient:
@@ -1535,7 +1537,7 @@ def _content_text(message: dict[str, Any]) -> str:
 
 
 def _running_job_lines(messages: list[dict[str, Any]]) -> list[str]:
-    """从当前上下文提取仍在运行的后台任务，压缩时不能把 jobId 丢掉。"""
+    """Extract background jobs that are still running from the current context; compaction must not lose their jobId."""
     lines: list[str] = []
     seen: set[str] = set()
     for message in messages:
@@ -1559,16 +1561,16 @@ def _running_job_lines(messages: list[dict[str, Any]]) -> list[str]:
 
 
 def _digest_tool_content(raw: str) -> dict[str, Any]:
-    """把一条工具结果压成"观察摘要"：留指针与关键指标，不留正文。"""
+    """Compress one tool result into an "observation digest": keep pointers and key metrics, not the body."""
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return {"digest": True, "tool": "unknown", "note": "结果已省略", "preview": raw[:120]}
+        return {"digest": True, "tool": "unknown", "note": "Result omitted", "preview": raw[:120]}
     if not isinstance(data, dict):
-        return {"digest": True, "tool": "unknown", "note": "结果已省略"}
+        return {"digest": True, "tool": "unknown", "note": "Result omitted"}
 
     if "findings" in data:
-        # 子代理只回传最终结论；这是唯一不能丢的内容，完整保留
+        # A subagent returns only its final conclusion; this is the one thing that must never be lost, so keep it in full
         return {
             "digest": True,
             "tool": "spawn_subagent",
@@ -1577,7 +1579,7 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "toolCalls": data.get("toolCalls"),
             "findings": str(data.get("findings") or ""),
             **({"error": str(data["error"])} if data.get("error") else {}),
-            "note": "子代理结论完整保留",
+            "note": "Subagent conclusion kept in full",
         }
     if data.get("tool") == "diagram" or ("kind" in data and "id" in data and "source" not in data):
         return {
@@ -1586,7 +1588,7 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "id": data.get("id"),
             "kind": data.get("kind"),
             "title": data.get("title"),
-            "note": "图已渲染；完整源码在助手消息的 diagrams 字段里",
+            "note": "Diagram rendered; the full source is in the assistant message's diagrams field",
         }
     if data.get("proposalId") and "replacements" in data:
         return {
@@ -1596,11 +1598,11 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "path": data.get("path"),
             "replacements": data.get("replacements"),
             "mode": data.get("mode"),
-            "note": "局部编辑提案已登记",
+            "note": "Targeted edit proposal registered",
         }
     if "exitCode" in data:
         if data.get("jobId"):
-            # 后台任务的状态和 jobId 不能丢；旧轮询输出只留尾部
+            # A background job's state and jobId must not be lost; keep only the tail of old polling output
             tail = str(data.get("stdout") or data.get("stderr") or "")[-300:]
             return {
                 "digest": True,
@@ -1614,14 +1616,14 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
                 "progress": data.get("progress"),
                 "noNewOutput": data.get("noNewOutput"),
                 **({"lastOutput": tail} if tail.strip() else {}),
-                "note": "后台任务状态保留；完整输出请用 command_wait",
+                "note": "Background job state kept; use command_wait for full output",
             }
         return {
             "digest": True,
             "tool": "run_command",
             "exitCode": data.get("exitCode"),
             "ok": data.get("ok"),
-            "note": "输出已省略（需要时重新运行）",
+            "note": "Output omitted (run again if needed)",
         }
     if "jobs" in data and isinstance(data.get("jobs"), list):
         jobs = []
@@ -1638,23 +1640,23 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             )
         return {"digest": True, "tool": "command_list", "jobs": jobs, "count": len(data["jobs"])}
     if "hits" in data:
-        return {"digest": True, "tool": "search_code", "hits": len(data.get("hits") or []), "note": "命中内容已省略"}
+        return {"digest": True, "tool": "search_code", "hits": len(data.get("hits") or []), "note": "Match contents omitted"}
     if "files" in data and "path" not in data:
         return {"digest": True, "tool": "list_files", "count": len(data.get("files") or [])}
     if "symbols" in data:
         return {"digest": True, "tool": "file_outline", "path": data.get("path"), "symbols": len(data.get("symbols") or [])}
     if data.get("path") and "lines" in data:
-        return {"digest": True, "tool": "read_file", "path": data.get("path"), "lines": data.get("lines"), "note": "内容已省略"}
+        return {"digest": True, "tool": "read_file", "path": data.get("path"), "lines": data.get("lines"), "note": "Content omitted"}
     if "locations" in data:
         return {"digest": True, "tool": "find_references", "count": len(data.get("locations") or [])}
     if "diagnostics" in data:
-        return {"digest": True, "tool": "get_diagnostics", "counts": data.get("counts"), "note": "明细已省略"}
+        return {"digest": True, "tool": "get_diagnostics", "counts": data.get("counts"), "note": "Details omitted"}
     preview = raw[:120]
-    return {"digest": True, "tool": "tool", "note": "结果已省略", "preview": preview}
+    return {"digest": True, "tool": "tool", "note": "Result omitted", "preview": preview}
 
 
 def _drop_oldest_exchanges(messages: list[dict[str, Any]]) -> int:
-    """删掉最早的 assistant+tool_calls 及其工具回复（保留首条 system 与当前用户消息之后）。"""
+    """Delete the oldest assistant+tool_calls and their tool replies (keep the first system message and everything after the current user message)."""
     last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
     if last_user <= 1:
         return 0
@@ -1664,7 +1666,7 @@ def _drop_oldest_exchanges(messages: list[dict[str, Any]]) -> int:
         message = messages[index]
         if message.get("role") == "assistant" and message.get("tool_calls"):
             ids = {str(call.get("id")) for call in message["tool_calls"]}
-            # 正在运行的后台 job 的 tool 结果不能丢：模型还要靠 jobId 轮询/终止
+            # The tool result of a running background job must not be dropped: the model still needs jobId to poll/terminate it
             running_job = False
             for tool_message in messages[index + 1 :]:
                 if tool_message.get("role") != "tool" or str(tool_message.get("tool_call_id")) not in ids:

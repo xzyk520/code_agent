@@ -1,12 +1,12 @@
 // @ts-check
-/* Bee Code 面板前端：纯浏览器 JS，不打包。
- * 只做渲染 + 把用户动作 postMessage 回扩展；不含任何业务逻辑。
- * 类型检查走 tsconfig.webview.json（lib 含 DOM，不含 node/vscode）。 */
+/* Bee Code panel front-end: plain browser JS, no bundler.
+ * Renders only and posts user actions back to the extension; contains no business logic.
+ * Type-checked with tsconfig.webview.json (lib includes DOM, not node/vscode). */
 (function () {
   const vscode = acquireVsCodeApi();
 
   /**
-   * 取元素，取不到就立刻抛错 —— 比「静默 null」好查得多。
+   * Get an element and throw immediately if it is missing — far easier to debug than a silent null.
    * @template {Element} T
    * @param {string} id
    * @param {new () => T} ctor
@@ -14,7 +14,7 @@
    */
   function must(id, ctor) {
     const node = document.getElementById(id);
-    if (!(node instanceof ctor)) throw new Error("面板缺少元素 #" + id);
+    if (!(node instanceof ctor)) throw new Error("Panel is missing element #" + id);
     return node;
   }
 
@@ -129,7 +129,7 @@
       const seconds = Math.ceil(left / 1000);
       el.retryBanner.textContent =
         tr("模型连接失败", "Model connection failed") + `, ${seconds}s ` + tr("后重试", "until retry") +
-        (attempt && max ? `（${attempt}/${max}）` : "") +
+        (attempt && max ? ` (${attempt}/${max})` : "") +
         (reason ? ` · ${reason.slice(0, 80)}` : "");
       if (left <= 0 && retryTimer) {
         clearInterval(retryTimer);
@@ -164,27 +164,28 @@
   }
 
   /**
-   * 屏幕阅读器播报（仅辅助技术可见，视觉上隐藏）。
+   * Screen-reader announcement (visible to assistive technology only; hidden visually).
    *
-   * 为什么需要：消息区是 aria-live 区域，流式时每个分片都可能触发播报，非常吵。
-   * 所以流式期间用 aria-busy 让 AT「先别念」，结束时再播报一次结果。
+   * Why this exists: the message area is an aria-live region, and during streaming every chunk
+   * could trigger an announcement, which is very noisy. So during streaming, aria-busy tells AT
+   * to "hold off", and the result is announced once at the end.
    */
   /** @param {string} text */
   function announce(text) {
-    // 同样的文本连续设置不会重复播报：先清空再在下一个 tick 写入
+    // Setting the same text consecutively does not re-announce it: clear first, then write on the next tick
     el.srStatus.textContent = "";
     setTimeout(() => {
       el.srStatus.textContent = text;
     }, 30);
   }
 
-  /** 流式期间把消息区标记为 busy —— 只影响播报时机，不影响视觉渲染 */
+  /** Mark the message area busy during streaming — affects announcement timing only, not visual rendering */
   /** @param {boolean} busy */
   function setMessagesBusy(busy) {
     el.messages.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
-  /** 命令级 checkpoint 卡片：变更文件 + 一键撤销 */
+  /** Command-level checkpoint card: changed files + one-click undo */
   /** @param {{ id?: string, files?: string[], command?: string }} item */
   function renderCommandCheckpoint(item) {
     const id = String(item.id || "");
@@ -268,10 +269,11 @@
   }
 
   /**
-   * 子代理卡片（按 id 聚合）。
+   * Subagent card (aggregated by id).
    *
-   * 形态参考工业级 agent：一个可折叠的「子代理」块，标题是任务，正文是它调用过的工具，
-   * 结束时补一行统计与结论。默认展开（用户想看过程），完成后可折叠。
+   * Shaped after production-grade agents: a collapsible "subagent" block whose title is the task and
+   * whose body lists the tools it called, with a stats and conclusion line added when it finishes.
+   * Expanded by default (users want to see the process); collapsible after completion.
    */
   /** @type {any} */
   const win = window;
@@ -329,7 +331,7 @@
   }
 
   /**
-   * 行内 Markdown：先转义，再处理代码、链接、粗体、斜体、删除线。
+   * Inline Markdown: escape first, then handle code, links, bold, italics, and strikethrough.
    * @param {string} text
    */
   function renderInline(text) {
@@ -366,7 +368,7 @@
     return (
       '<div class="code-block">' +
       `<div class="code-head"><span class="code-lang">${escapeHtml(language)}</span>` +
-      '<button type="button" class="code-copy">复制</button></div>' +
+      '<button type="button" class="code-copy">Copy</button></div>' +
       `<pre><code class="hljs language-${escapeHtml(language)}">${body}</code></pre>` +
       "</div>"
     );
@@ -378,7 +380,7 @@
   }
 
   /**
-   * 轻量 Markdown 渲染（不引入完整 parser，避免 raw HTML 注入）。
+   * Lightweight Markdown rendering (no full parser, to avoid raw HTML injection).
    * @param {string} text
    */
   function renderMarkdown(text) {
@@ -626,7 +628,7 @@
 
     if (status === "start") {
       const entry = ensureSubagent(id, task);
-      announce("子代理开始：" + (task || "探索代码"));
+      announce("Subagent started: " + (task || "exploring code"));
       return;
     }
 
@@ -665,8 +667,8 @@
       const steps = typeof msg.steps === "number" ? msg.steps : 0;
       const toolCalls = typeof msg.toolCalls === "number" ? msg.toolCalls : 0;
       entry.stats.textContent = error
-        ? "失败：" + error
-        : "完成 · " + steps + " 步 · " + toolCalls + " 次工具调用";
+        ? "Failed: " + error
+        : "Done · " + steps + " steps · " + toolCalls + " tool calls";
 
       const findings = typeof msg.findings === "string" ? msg.findings : "";
       if (findings) {
@@ -677,24 +679,24 @@
         entry.findings.hidden = true;
         entry.result.hidden = false;
       }
-      announce(error ? "子代理失败：" + error : "子代理完成，共 " + steps + " 步");
+      announce(error ? "Subagent failed: " + error : "Subagent finished in " + steps + " steps");
       el.messages.scrollTop = el.messages.scrollHeight;
     }
   }
-  /** 模式完全由意图分析决定：这里只显示徽标 + 调整输入提示 */
+  /** Mode is chosen entirely by intent analysis: this only updates the badge and input hint */
   function renderMode() {
     const label = state.mode === "builder" ? "Builder" : state.mode === "debugger" ? "Debugger" : "Chat";
     el.modeBadge.textContent = label;
     el.modeBadge.title = tr("模式由意图分析自动选择", "Mode selected automatically from intent");
     el.input.placeholder =
       state.mode === "builder"
-        ? "描述要实现的改动…（Ctrl+Enter 发送）"
+        ? "Describe the change to implement… (Ctrl+Enter to send)"
         : state.mode === "debugger"
-          ? "描述报错/异常现象…（Ctrl+Enter 发送）"
-          : "直接说你想做什么（模式会自动判断）…（Ctrl+Enter 发送）";
+          ? "Describe the error or unexpected behavior… (Ctrl+Enter to send)"
+          : "Tell me what you want to do (the mode is chosen automatically)… (Ctrl+Enter to send)";
   }
 
-  /** agent 读过文件的 chip（同路径只保留一个，重复读时更新行号并闪烁） */
+  /** Chips for files the agent has read (one per path; re-reads update the line range and flash) */
   const readChips = new Map();
 
   /** @param {{ path?: unknown, startLine?: unknown, endLine?: unknown }} item */
@@ -717,7 +719,7 @@
       });
       el.reads.appendChild(chip);
       readChips.set(path, chip);
-      // 只保留最近 8 个，避免占满一行
+      // Keep only the 8 most recent so they do not fill an entire row
       while (readChips.size > 8) {
         const oldest = readChips.keys().next().value;
         const node = readChips.get(oldest);
@@ -726,22 +728,22 @@
       }
     }
     chip.textContent = start && end ? `${name}:${start}-${end}` : name;
-    chip.title = start && end ? `${path} 第 ${start}-${end} 行（点击打开）` : `${path}（点击打开）`;
+    chip.title = start && end ? `${path}, lines ${start}-${end} (click to open)` : `${path} (click to open)`;
     chip.dataset.path = path;
     if (start) chip.dataset.start = String(start);
     else delete chip.dataset.start;
     if (end) chip.dataset.end = String(end);
     else delete chip.dataset.end;
-    chip.setAttribute("aria-label", `打开 ${path}${start && end ? ` 第 ${start} 到 ${end} 行` : ""}`);
+    chip.setAttribute("aria-label", `Open ${path}${start && end ? `, lines ${start} to ${end}` : ""}`);
 
-    // 重新触发动效：先移除再强制回流
+    // Retrigger the animation: remove the class, then force a reflow
     chip.classList.remove("flash");
     void chip.offsetWidth;
     chip.classList.add("flash");
     setTimeout(() => chip.classList.remove("flash"), 1_200);
   }
 
-  /** 一轮的轨迹卡片：默认折叠；外层摘要 + 内层步骤 + 完整内容三层 */
+  /** Per-turn trace card: collapsed by default; outer summary, inner steps, and full content (three levels) */
   /** @param {{ inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number }} turn */
   function formatUsage(turn) {
     const tokens = (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0);
@@ -751,8 +753,8 @@
     const parts = [];
     if (tokens > 0) parts.push(tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`);
     if (seconds > 0) parts.push(`${seconds.toFixed(1)}s`);
-    if (modelSeconds > 0) parts.push(`模型 ${modelSeconds.toFixed(1)}s`);
-    if (toolSeconds > 0) parts.push(`工具 ${toolSeconds.toFixed(1)}s`);
+    if (modelSeconds > 0) parts.push(`Model ${modelSeconds.toFixed(1)}s`);
+    if (toolSeconds > 0) parts.push(`Tool ${toolSeconds.toFixed(1)}s`);
     return parts.join(" · ");
   }
 
@@ -836,7 +838,7 @@
     el.messages.scrollTop = el.messages.scrollHeight;
   }
 
-  /** ── Mermaid：只有出现图时才懒加载（历史会话打开 / 本轮新图） ── */
+  /** ── Mermaid: lazy-loaded only when a diagram appears (opening a history session / a new diagram this turn) ── */
   const SCRIPT_NONCE = document.currentScript && document.currentScript.nonce ? document.currentScript.nonce : "";
   /** @type {any} */
   /** @type {Promise<any> | null} */
@@ -918,7 +920,7 @@
       });
   }
 
-  /** 思考内容：按"第几次模型调用"分段显示（只展示，不进上下文，但会随消息落盘） */
+  /** Reasoning content: split by "model call number" (display only, not added to context, but persisted with the message) */
   /** @type {Map<number, { node: HTMLDetailsElement, body: HTMLElement }>} */
   const reasoningBlocks = new Map();
 
@@ -942,7 +944,7 @@
       node.open = true;
       const summary = document.createElement("summary");
       summary.className = "reasoning-title";
-      summary.textContent = key > 1 ? `思考过程 · 第 ${key} 次调用` : tr("思考过程", "Reasoning");
+      summary.textContent = key > 1 ? `Reasoning · call ${key}` : tr("思考过程", "Reasoning");
       const body = document.createElement("div");
       body.className = "reasoning-body";
       node.append(summary, body);
@@ -985,11 +987,11 @@
     for (const segment of reasoning) {
       const text = typeof segment?.text === "string" ? segment.text : "";
       const round = typeof segment?.round === "number" ? segment.round : 1;
-      appendReasoningBlock(round > 1 ? `思考过程 · 第 ${round} 次调用` : tr("思考过程", "Reasoning"), text);
+      appendReasoningBlock(round > 1 ? `Reasoning · call ${round}` : tr("思考过程", "Reasoning"), text);
     }
   }
 
-  /** 右侧会话轨迹：按意图列出每一轮，点击跳到对应消息 */
+  /** Right-side session trace: one entry per turn by intent; click to jump to the matching message */
   /** @type {Array<{ id: string, mode: string, intent: string }>} */
   let trajectoryItems = [];
 
@@ -1051,7 +1053,7 @@
     el.trajectoryList.scrollTop = el.trajectoryList.scrollHeight;
   }
 
-  /** 轨迹搜索：按意图文本过滤（大小写无关） */
+  /** Trace search: filter by intent text (case-insensitive) */
   function applyTrajectoryFilter() {
     const query = el.trajectoryFilter.value.trim().toLowerCase();
     for (const element of el.trajectoryList.querySelectorAll(".trajectory-item")) {
@@ -1077,7 +1079,7 @@
   }
 
   /**
-   * 计划清单：同一轮内反复 update_plan 时复用同一个节点。
+   * Plan checklist: reuse the same node when update_plan is called repeatedly within a turn.
    * @type {HTMLElement | null}
    */
   let planNode = null;
@@ -1135,8 +1137,8 @@
   }
 
   /**
-   * 提案卡片：每个文件一张，三个动作（看 diff / 接受 / 拒绝）。
-   * 接受之前磁盘一字不动 —— 这正是"先预览、后落实"的模型。
+   * Proposal cards: one per file, three actions (view diff / accept / reject).
+   * Nothing on disk changes before acceptance — that is the "preview first, apply later" model.
    * @param {Proposal[]} items
    */
   function renderProposals(items) {
@@ -1183,7 +1185,7 @@
 
       actions.appendChild(view);
 
-      // 失效的提案不能再接受（内容已不是基于最新文件），只能查看或丢弃
+      // A stale proposal cannot be accepted (its content no longer matches the latest file); it can only be viewed or discarded
       if (!stale) {
         const accept = document.createElement("button");
         accept.className = "primary";
@@ -1246,7 +1248,7 @@
             continue;
           }
           if (item.role === "system" && currentTurn && currentTurn.error && item.text === currentTurn.error) {
-            continue;   // 错误已经在轨迹卡片里展示，避免重复气泡
+            continue;   // The error is already shown in the trace card; avoid a duplicate bubble
           }
           if (item.role === "assistant" && currentTurn) {
             if (!currentTurn.error) {
@@ -1296,10 +1298,10 @@
       }
       case "status": {
         if (!msg.busy) hideRetryBanner();
-        // 轻量状态：绝不重渲染消息列表（否则流式中的回复会被清掉）
+        // Lightweight status: never re-render the message list (otherwise the streaming reply would be cleared)
         state.mode = /** @type {Mode} */ (msg.mode);
         state.busy = Boolean(msg.busy);
-        if (!state.busy) setMessagesBusy(false);   // 兜底：本轮结束一定要解除 busy
+        if (!state.busy) setMessagesBusy(false);   // Safety net: always clear busy when the turn ends
         renderMode();
         renderBusy();
         el.hint.textContent = String(msg.hint ?? "");
@@ -1309,29 +1311,29 @@
         hideRetryBanner();
         const message = /** @type {ChatMessage} */ (msg.message);
         if (message.role === "assistant" && streamingNode) {
-          // 收尾：壳发来的全文是权威版本，直接覆盖流式累积的内容，不再追加一条
+          // Wrap-up: the full text from the shell is authoritative; overwrite the accumulated stream instead of appending
           streamingNode.innerHTML = renderMarkdown(message.text);
           clearStreaming();
-          setMessagesBusy(false);   // 流式结束：现在可以播报了
-          announce("助手回复完成，共 " + message.text.length + " 字");
+          setMessagesBusy(false);   // Streaming finished: it is safe to announce now
+          announce("Assistant reply complete: " + message.text.length + " characters");
           break;
         }
         if (message.role === "user") clearStreaming();
         if (message.reasoning) appendPersistedReasoning(message.reasoning);
         if (message.text) addMessage(message.role, message.text, undefined, message.id);
         for (const diagram of message.diagrams || []) renderDiagramCard(diagram);
-        if (message.role === "system") announce("系统消息：" + message.text);
+        if (message.role === "system") announce("System message: " + message.text);
         break;
       }
       case "delta": {
         hideRetryBanner();
         const text = String(msg.text ?? "");
-        // 正文开始：把思考块自动收起（用户仍可展开回看）
+        // Body started: collapse the reasoning blocks automatically (users can still expand them to review)
         collapseLiveReasoning();
         if (!streamingNode) {
           streamingNode = addMessage("assistant", "");
-          setMessagesBusy(true);   // 开始流式：先不自动播报
-          announce("助手开始回复");
+          setMessagesBusy(true);   // Streaming started: do not auto-announce yet
+          announce("Assistant started responding");
         }
         streamingRaw += text;
         scheduleStreamRender();
@@ -1346,7 +1348,7 @@
       case "proposals": {
         const items = /** @type {Proposal[]} */ (msg.items) || [];
         renderProposals(items);
-        if (items.length > 0) announce("待审提案 " + items.length + " 个");
+        if (items.length > 0) announce("Proposals awaiting review: " + items.length);
         break;
       }
 

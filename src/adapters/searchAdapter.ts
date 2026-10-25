@@ -33,7 +33,7 @@ export function createSearchAdapter(logger: Logger) {
     async grep(params: SearchGrepParams, ctx: InboundRequestContext): Promise<SearchGrepResult> {
       ctx.throwIfCancelled();
       const query = params.query;
-      if (!query) throw new Error("query 不能为空");
+      if (!query) throw new Error("query must not be empty");
 
       const limit = Math.min(params.maxResults ?? 200, 2_000);
       const contextLines = Math.max(0, Math.min(params.contextLines ?? 0, 5));
@@ -56,7 +56,7 @@ export function createSearchAdapter(logger: Logger) {
         ctx.throwIfCancelled();
         if (Date.now() - startedAt > MAX_SCAN_MS) {
           truncated = true;
-          logger.warn(`search.grep 超过 ${MAX_SCAN_MS}ms 预算，提前结束（扫描 ${files.length} 个文件）`);
+          logger.warn(`search.grep exceeded the ${MAX_SCAN_MS}ms budget, stopping early (scanned ${files.length} files)`);
           break;
         }
         if (!filesOnly && hits.length >= limit) {
@@ -135,10 +135,10 @@ export function createSearchAdapter(logger: Logger) {
       fileHits.sort((a, b) => a.path.localeCompare(b.path));
 
       if (filesOnly) {
-        logger.debug(`search.grep "${query}"（filesOnly）→ ${fileHits.length} 个文件（扫描 ${files.length} 个）`);
+        logger.debug(`search.grep "${query}" (filesOnly) → ${fileHits.length} files (scanned ${files.length})`);
         return { hits: [], files: fileHits, truncated };
       }
-      logger.debug(`search.grep "${query}" → ${hits.length} 条（扫描 ${files.length} 个文件）`);
+      logger.debug(`search.grep "${query}" → ${hits.length} matches (scanned ${files.length} files)`);
       return { hits, truncated };
     },
   };
@@ -157,17 +157,17 @@ function buildRegex(query: string, isRegex: boolean, caseSensitive: boolean): Re
   if (!isRegex) return new RegExp(escapeRegExp(query), flags);
 
   if (query.length > MAX_PATTERN_LENGTH) {
-    throw new Error(`正则过长（${query.length} > ${MAX_PATTERN_LENGTH} 字符），请用更短的模式或改用关键词搜索`);
+    throw new Error(`Pattern too long (${query.length} > ${MAX_PATTERN_LENGTH} chars): use a shorter pattern or a keyword search`);
   }
   if (looksCatastrophic(query)) {
     throw new Error(
-      "这个正则可能引发灾难性回溯（嵌套量词，如 (a+)+），已拒绝执行；请改用更简单的模式",
+      "This pattern may cause catastrophic backtracking (nested quantifiers such as (a+)+); refusing to run it. Use a simpler pattern.",
     );
   }
   try {
     return new RegExp(query, flags);
   } catch (err) {
-    throw new Error(`非法正则：${err instanceof Error ? err.message : String(err)}`);
+    throw new Error(`Invalid regex: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

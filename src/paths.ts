@@ -57,10 +57,10 @@ export function isApprovedRoot(target: string): boolean {
 
 export function resolveTarget(rawPath: string): vscode.Uri {
   if (!rawPath || typeof rawPath !== "string") {
-    throw new PathPolicyError("path 不能为空");
+    throw new PathPolicyError("path must not be empty");
   }
   if (rawPath.includes("\0")) {
-    throw new PathPolicyError("path 含非法字符");
+    throw new PathPolicyError("path contains invalid characters");
   }
 
   const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => path.resolve(f.uri.fsPath));
@@ -72,19 +72,19 @@ export function resolveTarget(rawPath: string): vscode.Uri {
   if (!inside) {
     // Directories the user explicitly approved (outside the workspace) are allowed through; the rest are still rejected
     if (!isApprovedRoot(candidate)) {
-      throw new PathPolicyError(`路径越界（不在工作区内）：${rawPath}`);
+      throw new PathPolicyError(`Path escapes the workspace: ${rawPath}`);
     }
   }
 
   const normalized = candidate.split(/[\\/]+/).map((s) => s.toLowerCase());
   for (const seg of FORBIDDEN_SEGMENTS) {
     if (normalized.includes(seg)) {
-      throw new PathPolicyError(`禁止访问该目录：${seg}`);
+      throw new PathPolicyError(`Access to this directory is forbidden: ${seg}`);
     }
   }
   const base = path.basename(candidate);
   if (FORBIDDEN_FILE_PATTERNS.some((re) => re.test(base))) {
-    throw new PathPolicyError(`禁止访问敏感文件：${base}`);
+    throw new PathPolicyError(`Access to sensitive file is forbidden: ${base}`);
   }
 
   return vscode.Uri.file(candidate);

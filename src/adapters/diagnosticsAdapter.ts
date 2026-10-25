@@ -68,8 +68,8 @@ export function createDiagnosticsAdapter(logger: Logger) {
       const truncated = total > items.length;
 
       logger.debug(
-        `diagnostics.get${params.path ? ` ${params.path}` : "（全量）"} → ${items.length}/${total} 条` +
-          `${truncated ? "（已截断）" : ""}`,
+        `diagnostics.get${params.path ? ` ${params.path}` : " (all)"} → ${items.length}/${total} items` +
+          `${truncated ? " (truncated)" : ""}`,
       );
       return { items, total, truncated };
     },

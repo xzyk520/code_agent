@@ -56,7 +56,7 @@ export class MockCore implements CoreApi {
   ) {}
 
   async initialize(params: InitializeParams): Promise<InitializeResult> {
-    this.logger.info(`[mock] initialize：${params.workspaceRoots.length} 个根，model=${params.modelConfig.model || "<空>"}`);
+    this.logger.info(`[mock] initialize: ${params.workspaceRoots.length} roots, model=${params.modelConfig.model || "<empty>"}`);
     return { protocolVersion: PROTOCOL_VERSION, coreVersion: "mock-0.0.1" };
   }
 
@@ -64,11 +64,11 @@ export class MockCore implements CoreApi {
     this.cancelled = false;
 
     const reply = [
-      `[mock 内核] 收到 mode=${params.mode} 的问题：`,
+      `[mock core] Received question with mode=${params.mode}:`,
       params.text,
       "",
-      "这是个假响应，用来验证：面板流式渲染 / 停止按钮 / 工具阶段 / 待审提案。",
-      "把 beeCode.core.mode 改回 python 就会走真实内核。",
+      "This is a fake response to verify: streaming panel rendering / stop button / tool phase / pending proposals.",
+      "Set beeCode.core.mode back to python to use the real core.",
     ].join("\n");
 
     for (const chunk of chunkText(reply, CHUNK_SIZE)) {
@@ -82,14 +82,14 @@ export class MockCore implements CoreApi {
     this.notify("ui.tool", { sessionId: params.sessionId, name: "read_file", status: "start" });
     await this.sleep(CHUNK_DELAY_MS * 4);
     if (this.cancelled) return this.finishCancelled(params.sessionId);
-    this.notify("ui.tool", { sessionId: params.sessionId, name: "read_file", status: "end", summary: "mock 读取完成" });
+    this.notify("ui.tool", { sessionId: params.sessionId, name: "read_file", status: "end", summary: "mock read complete" });
 
     // Fabricate a proposal: the virtual file content is stored here and pulled by proposal.read when the user clicks "View"
     const id = `mock_${Date.now()}`;
     this.proposals.set(
       id,
       [
-        "// [mock] 这是提案内容（左侧是你磁盘上的真实文件）",
+        "// [mock] This is the proposal content (the left side is the real file on your disk)",
         "export function example(): number {",
         "  return 42;",
         "}",
@@ -105,7 +105,7 @@ export class MockCore implements CoreApi {
           status: "pending",
           additions: 4,
           deletions: 1,
-          summary: "mock 的示例改动",
+          summary: "Mock example change",
         },
       ],
     });
@@ -167,8 +167,8 @@ export class MockCore implements CoreApi {
    * Simulate a kernel crash: fires `exitHandlers` so the shell runs through the "kernel died" handling path.
    * Only for dev commands (`beeCode.dev.crashMock`).
    */
-  simulateCrash(reason = "mock 模拟崩溃"): void {
-    this.logger.warn(`[mock] 模拟崩溃：${reason}`);
+  simulateCrash(reason = "mock simulated crash"): void {
+    this.logger.warn(`[mock] Simulated crash: ${reason}`);
     this.cancelled = true;
     this.disposed = true;
     this.clearTimers();
@@ -176,7 +176,7 @@ export class MockCore implements CoreApi {
       try {
         handler(1, reason);
       } catch (err) {
-        this.logger.warn(`[mock] exit handler 抛错: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(`[mock] exit handler threw: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -196,7 +196,7 @@ export class MockCore implements CoreApi {
   }
 
   private finishCancelled(sessionId: string): void {
-    this.notify("ui.delta", { sessionId, text: "\n\n（已停止）" });
+    this.notify("ui.delta", { sessionId, text: "\n\n(stopped)" });
   }
 
   /** Cancellable sleep: registers a timer and clears it plus resolves when cancelled */
@@ -224,7 +224,7 @@ export class MockCore implements CoreApi {
         handler(method, params);
       } catch (err) {
         // One handler throwing should not stop other handlers from receiving the notification
-        this.logger.warn(`[mock] 通知 ${method} 的 handler 抛错: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(`[mock] handler for notification ${method} threw: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }

@@ -37,7 +37,7 @@ export async function exportDiagnostics(deps: DiagnosticsDeps): Promise<vscode.U
 
   const body = render({ context, logger, config, coreKind, now });
   await vscode.workspace.fs.writeFile(target, Buffer.from(body, "utf8"));
-  logger.info(`诊断包已生成：${fileName}（${Math.round(body.length / 1024)} KB）`);
+  logger.info(`Diagnostics bundle created: ${fileName} (${Math.round(body.length / 1024)} KB)`);
   return target;
 }
 
@@ -53,29 +53,29 @@ function render(input: RenderInput): string {
   const stderr = logger.snapshotStderr();
 
   const lines: string[] = [];
-  lines.push("# Bee Code 诊断包", "");
-  lines.push(`> 生成时间：${now.toISOString()}`, "");
-  lines.push("本文件**已脱敏**：不含 API Key、prompt 全文、文件内容、待审改动，也不含完整工作区路径。", "");
+  lines.push("# Bee Code Diagnostics", "");
+  lines.push(`> Generated at: ${now.toISOString()}`, "");
+  lines.push("This file is **redacted**: it contains no API keys, full prompts, file contents, pending changes, or full workspace paths.", "");
 
-  lines.push("## 环境", "");
-  lines.push("| 项 | 值 |", "| --- | --- |");
-  lines.push(`| 扩展版本 | ${extVersion} |`);
+  lines.push("## Environment", "");
+  lines.push("| Item | Value |", "| --- | --- |");
+  lines.push(`| Extension version | ${extVersion} |`);
   lines.push(`| VS Code | ${vscode.version} |`);
-  lines.push(`| 平台 | ${process.platform} / ${process.arch} |`);
+  lines.push(`| Platform | ${process.platform} / ${process.arch} |`);
   lines.push(`| Node | ${process.versions.node} |`);
   lines.push(`| Electron | ${process.versions.electron ?? "-"} |`);
-  lines.push(`| 系统内存 | ${Math.round(os.totalmem() / 1024 / 1024 / 1024)} GB |`);
-  lines.push(`| 内核模式 | ${config.coreMode}（${coreKind}） |`);
+  lines.push(`| System memory | ${Math.round(os.totalmem() / 1024 / 1024 / 1024)} GB |`);
+  lines.push(`| Core mode | ${config.coreMode} (${coreKind}) |`);
   lines.push(`| Python | ${path.basename(config.pythonPath)} |`);
-  lines.push(`| 解释器参数 | ${config.coreArgs.length > 0 ? config.coreArgs.join(" ") : "-m beecode（默认）"} |`);
-  lines.push(`| 工作区数量 | ${folders.length} |`);
-  lines.push(`| 工作区名称 | ${folders.map((f) => f.name).join(", ") || "-"} |`);
+  lines.push(`| Interpreter arguments | ${config.coreArgs.length > 0 ? config.coreArgs.join(" ") : "-m beecode (default)"} |`);
+  lines.push(`| Workspace count | ${folders.length} |`);
+  lines.push(`| Workspace names | ${folders.map((f) => f.name).join(", ") || "-"} |`);
   lines.push("");
 
-  lines.push("## 配置（已脱敏）", "");
-  lines.push("| 项 | 值 |", "| --- | --- |");
-  lines.push(`| baseUrl（仅 origin） | ${originOf(config.model.baseUrl)} |`);
-  lines.push(`| model | ${config.model.model || "<未配置>"} |`);
+  lines.push("## Configuration (redacted)", "");
+  lines.push("| Item | Value |", "| --- | --- |");
+  lines.push(`| baseUrl (origin only) | ${originOf(config.model.baseUrl)} |`);
+  lines.push(`| model | ${config.model.model || "<not configured>"} |`);
   lines.push(`| temperature | ${config.model.temperature} |`);
   lines.push(`| maxOutputTokens | ${config.model.maxOutputTokens} |`);
   lines.push(`| supportsTools | ${config.model.supportsTools} |`);
@@ -84,20 +84,20 @@ function render(input: RenderInput): string {
   lines.push(`| agent.longToolTimeoutMs | ${config.longToolTimeoutMs} |`);
   lines.push(`| review.granularity | ${config.granularity} |`);
   lines.push(`| checkpoint | enabled=${config.checkpointEnabled}, retention=${config.checkpointRetention} |`);
-  lines.push(`| apiKey 是否已配置 | ${config.apiKeyId ? "见 SecretStorage（本文件不读取）" : "-"} |`);
+  lines.push(`| apiKey configured | ${config.apiKeyId ? "See SecretStorage (not read by this file)" : "-"} |`);
   lines.push("");
 
-  lines.push(`## 主日志（最近 ${log.length} 行）`, "");
-  lines.push("```text", ...(log.length > 0 ? log : ["<空>"]), "```", "");
+  lines.push(`## Main log (last ${log.length} lines)`, "");
+  lines.push("```text", ...(log.length > 0 ? log : ["<empty>"]), "```", "");
 
-  lines.push(`## 内核 stderr（最近 ${stderr.length} 行）`, "");
-  lines.push("```text", ...(stderr.length > 0 ? stderr : ["<空>"]), "```", "");
+  lines.push(`## Core stderr (last ${stderr.length} lines)`, "");
+  lines.push("```text", ...(stderr.length > 0 ? stderr : ["<empty>"]), "```", "");
 
-  lines.push("## 明确未包含", "");
-  lines.push("- API Key / 任何凭据（本文件不访问 SecretStorage）");
-  lines.push("- 对话 prompt 与模型回复全文");
-  lines.push("- 源文件内容与待审改动内容");
-  lines.push("- 完整工作区路径（只保留文件夹名）");
+  lines.push("## Explicitly excluded", "");
+  lines.push("- API keys / any credentials (this file does not access SecretStorage)");
+  lines.push("- Full conversation prompts and model replies");
+  lines.push("- Source file contents and pending changes");
+  lines.push("- Full workspace paths (folder names only)");
   lines.push("");
 
   return `${redact(lines.join("\n"))}\n`;
@@ -110,12 +110,12 @@ function readExtensionVersion(context: vscode.ExtensionContext): string {
 
 /** Keep only the origin: scheme + host + port. Paths/query parameters (which may carry a key) are dropped entirely. */
 function originOf(baseUrl: string): string {
-  if (!baseUrl) return "<未配置>";
+  if (!baseUrl) return "<not configured>";
   try {
     const url = new URL(baseUrl);
     return `${url.protocol}//${url.host}`;
   } catch {
-    return "<非合法 URL>";
+    return "<invalid URL>";
   }
 }
 

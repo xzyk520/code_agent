@@ -92,9 +92,9 @@ export class PythonCore implements CoreApi {
     this.stopping = undefined; // allow a graceful stop again after a restart
     this.transport.start({
       onLine: (line) => this.onLine(line),
-      onError: (err) => this.failAll(new Error(`内核启动失败：${err.message}`)),
+      onError: (err) => this.failAll(new Error(`Failed to start the core: ${err.message}`)),
       onExit: (code, reason) => {
-        this.failAll(new Error(`内核已退出（${reason}）`));
+        this.failAll(new Error(`The core exited (${reason})`));
         for (const handler of this.exitHandlers) handler(code, reason);
       },
     });
@@ -113,16 +113,16 @@ export class PythonCore implements CoreApi {
       )) as InitializeResult;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("RPC 超时")) {
+      if (message.includes("RPC timeout")) {
         throw new Error(
-          `内核在 ${Math.round(INITIALIZE_TIMEOUT_MS / 1000)}s 内没有完成初始化：可能是 Python 启动慢、依赖没装好，或 pythonPath 指错了。原始错误：${message}`,
+          `The core did not finish initializing within ${Math.round(INITIALIZE_TIMEOUT_MS / 1000)}s: Python may be slow to start, dependencies may be missing, or pythonPath may be wrong. Original error: ${message}`,
         );
       }
       throw err;
     }
     if (!result || result.protocolVersion !== PROTOCOL_VERSION) {
       throw new Error(
-        `协议版本不匹配：壳=${PROTOCOL_VERSION}，内核=${result?.protocolVersion ?? "未知"}。请重装扩展或同步 beecode/ipc.py。`,
+        `Protocol version mismatch: shell=${PROTOCOL_VERSION}, core=${result?.protocolVersion ?? "unknown"}. Reinstall the extension or sync beecode/ipc.py.`,
       );
     }
     return result;
@@ -159,7 +159,7 @@ export class PythonCore implements CoreApi {
       controller.abort();
       this.inbound.delete(key);
     }
-    this.rejectPending("chat.send", cancelledError("用户取消了本轮对话"));
+    this.rejectPending("chat.send", cancelledError("The user cancelled this turn"));
 
     const params: SessionAbortParams = { sessionId };
     await this.request("session.abort", params, 10_000).catch(() => undefined);
@@ -207,7 +207,7 @@ export class PythonCore implements CoreApi {
    */
   dispose(): void {
     this.disposed = true;
-    this.failAll(new Error("内核已释放"));
+    this.failAll(new Error("The core has been disposed"));
     this.transport.dispose();
     for (const controller of this.inbound.values()) controller.abort();
     this.inbound.clear();
@@ -222,7 +222,7 @@ export class PythonCore implements CoreApi {
     try {
       msg = JSON.parse(line) as JsonRpcMessage;
     } catch {
-      this.opts.logger.warn("无法解析内核报文（不是 JSON）", line.slice(0, 200));
+      this.opts.logger.warn("Unable to parse the core message (not JSON)", line.slice(0, 200));
       return;
     }
 
@@ -233,7 +233,7 @@ export class PythonCore implements CoreApi {
     if (isResponse(msg)) {
       if (typeof msg.id !== "number") {
         // Request ids we send are always numbers; a string id from the peer is a peer bug, so do not drop it silently
-        this.opts.logger.warn(`收到非数字 id 的响应（${typeof msg.id}），已忽略`);
+        this.opts.logger.warn(`Received a response with a non-numeric id (${typeof msg.id}); ignoring it`);
         return;
       }
       this.settle("error" in msg ? { id: msg.id, error: msg.error } : { id: msg.id, result: msg.result });
@@ -260,7 +260,7 @@ export class PythonCore implements CoreApi {
 
   private async handleInbound(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     if (!this.requestHandler) {
-      void this.write({ jsonrpc: "2.0", id, error: { code: RpcError.METHOD_NOT_FOUND, message: "壳未注册请求处理器" } });
+      void this.write({ jsonrpc: "2.0", id, error: { code: RpcError.METHOD_NOT_FOUND, message: "The shell has no registered request handler" } });
       return;
     }
     const controller = new AbortController();
@@ -294,7 +294,7 @@ export class PythonCore implements CoreApi {
 
   private request(method: string, params: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<unknown> {
     if (!this.transport.alive) {
-      return Promise.reject(new Error("内核未运行"));
+      return Promise.reject(new Error("The core is not running"));
     }
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
@@ -302,7 +302,7 @@ export class PythonCore implements CoreApi {
         this.pending.delete(id);
         // Also cancel the kernel-side work on timeout
         void this.notify("$/cancelRequest", { id });
-        reject(new Error(`RPC 超时：${method}（${Math.round(timeoutMs / 1000)}s）`));
+        reject(new Error(`RPC timeout: ${method} (${Math.round(timeoutMs / 1000)}s)`));
       }, timeoutMs);
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer, method });
@@ -324,7 +324,7 @@ export class PythonCore implements CoreApi {
     this.pending.delete(msg.id);
     clearTimeout(pending.timer);
     if (msg.error) {
-      pending.reject(new Error(`${pending.method}: ${msg.error.message}（code ${msg.error.code}）`));
+      pending.reject(new Error(`${pending.method}: ${msg.error.message} (code ${msg.error.code})`));
     } else {
       pending.resolve(msg.result);
     }

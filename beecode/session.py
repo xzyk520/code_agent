@@ -52,13 +52,13 @@ class Session:
                 start = item.get("startLine")
                 end = item.get("endLine")
                 untitled = item.get("untitled")
-                where = f"{path}" if path else "（未命名）"
+                where = f"{path}" if path else "(untitled)"
                 if start and end:
-                    where += f" 第 {start}-{end} 行"
+                    where += f" lines {start}-{end}"
                 if untitled:
-                    where += "（未保存）"
+                    where += " (unsaved)"
                 body = item.get("text") or ""
-                blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
+                blocks.append(f"[User-attached code] {where}\n```\n{body}\n```")
             content = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
         self.messages.append({"role": "user", "content": content})
 
@@ -93,7 +93,7 @@ class Session:
         """
         out: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         if summary:
-            out.append({"role": "system", "content": f"[早前对话摘要]\n{summary}"})
+            out.append({"role": "system", "content": f"[Earlier conversation summary]\n{summary}"})
         for item in history or []:
             role = item.get("role")
             text = item.get("text")
@@ -102,7 +102,7 @@ class Session:
             diagrams = item.get("diagrams") or []
             if role == "assistant" and diagrams:
                 fences = "\n\n".join(
-                    f"[图：{d.get('kind') or 'mermaid'} {d.get('title') or ''}]\n```mermaid\n{d.get('source') or ''}\n```"
+                    f"[Diagram: {d.get('kind') or 'mermaid'} {d.get('title') or ''}]\n```mermaid\n{d.get('source') or ''}\n```"
                     for d in diagrams
                     if isinstance(d, dict) and d.get("source")
                 )
@@ -144,33 +144,33 @@ def _format_user_content(
                 mime = item.get("mimeType") or "image/png"
                 images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
             else:
-                where = item.get("path") or "（粘贴的图片）"
-                blocks.append(f"【图片已省略】{where}：当前模型不支持图像输入")
+                where = item.get("path") or "(pasted image)"
+                blocks.append(f"[Image omitted] {where}: the current model does not support image input")
             continue
 
         path = item.get("path") or ""
         start = item.get("startLine")
         end = item.get("endLine")
-        where = path or "（未命名）"
+        where = path or "(untitled)"
         if start and end:
-            where += f" 第 {start}-{end} 行"
+            where += f" lines {start}-{end}"
         if item.get("untitled"):
-            where += "（未保存）"
+            where += " (unsaved)"
         body = str(item.get("text") or "")
         if len(body) > MAX_ATTACHMENT_CHARS:
-            body = body[:MAX_ATTACHMENT_CHARS] + "\n…（附件已截断）"
+            body = body[:MAX_ATTACHMENT_CHARS] + "\n...(attachment truncated)"
         if item.get("kind") == "focus":
-            header = f"【光标附近的代码】{where}"
+            header = f"[Code near cursor] {where}"
             symbol = item.get("symbol")
             if symbol:
-                header += f" · 函数 {symbol}"
+                header += f" · function {symbol}"
             blocks.append(f"{header}\n```\n{body}\n```")
         else:
-            blocks.append(f"【用户附加的代码】{where}\n```\n{body}\n```")
+            blocks.append(f"[User-attached code] {where}\n```\n{body}\n```")
 
     text_part = "\n\n".join([text, *blocks]) if text else "\n\n".join(blocks)
     if len(text_part) > MAX_ATTACHMENT_TOTAL:
-        text_part = text_part[:MAX_ATTACHMENT_TOTAL] + "\n…（附件总量超限，已截断）"
+        text_part = text_part[:MAX_ATTACHMENT_TOTAL] + "\n...(total attachment limit exceeded; truncated)"
     if not images:
         return text_part
     return [{"type": "text", "text": text_part}, *images]
@@ -181,7 +181,7 @@ def strip_image_parts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Modified in place; returns the same list so callers can reuse it directly.
     """
-    note = "【图片已省略：当前模型不接受图像输入】"
+    note = "[Image omitted: the current model does not accept image input]"
     for message in messages:
         content = message.get("content")
         if not isinstance(content, list):

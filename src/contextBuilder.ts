@@ -116,14 +116,14 @@ export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
     for (const match of m.text.matchAll(/[\w./-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|css|json|md|ya?ml|toml)/g)) {
       if (files.size < 12) files.add(match[0]);
     }
-    if (m.role === "system" && /失败|错误|error|Error|中断/.test(m.text)) {
+    if (m.role === "system" && /failed|error|interrupted/i.test(m.text)) {
       if (errors.length < 3) errors.push(clip(m.text.replace(/\s+/g, " "), 80));
     }
   }
 
-  const lines: string[] = [`[早前对话摘要 · ${messages.length} 条消息]`];
-  if (asks.length > 0) lines.push(`用户先后要求：${asks.slice(-6).join("；")}`);
-  if (files.size > 0) lines.push(`涉及文件：${[...files].join(", ")}`);
+  const lines: string[] = [`[Earlier conversation summary - ${messages.length} messages]`];
+  if (asks.length > 0) lines.push(`User requests, in order: ${asks.slice(-6).join("; ")}`);
+  if (files.size > 0) lines.push(`Files involved: ${[...files].join(", ")}`);
   const diagramTitles = new Set<string>();
   for (const message of messages) {
     for (const diagram of message.diagrams ?? []) {
@@ -133,9 +133,9 @@ export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
     }
   }
   if (diagramTitles.size > 0) {
-    lines.push(`涉及图示：${[...diagramTitles].join("、")}`);
+    lines.push(`Diagrams involved: ${[...diagramTitles].join(", ")}`);
   }
-  if (errors.length > 0) lines.push(`出现过的问题：${errors.join("；")}`);
+  if (errors.length > 0) lines.push(`Issues encountered: ${errors.join("; ")}`);
 
   return clip(lines.join("\n"), maxChars);
 }
@@ -160,7 +160,7 @@ function truncateSummaryFromFront(text: string, maxTokens: number): string {
     lines.shift();
     dropped += 1;
   }
-  const prefix = dropped > 0 ? `…（更早的 ${dropped} 行摘要已省略）` : "";
+  const prefix = dropped > 0 ? `... (${dropped} earlier summary lines omitted)` : "";
   let out = [prefix, ...lines].filter((line) => line.length > 0).join("\n");
   if (estimateTokens(out) > maxTokens) out = truncateToTokens(out, maxTokens);
   return out;

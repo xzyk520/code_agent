@@ -30,7 +30,7 @@ export class SummaryStore {
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch (err) {
-      this.logger.warn(`摘要目录创建失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to create summary directory: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -63,7 +63,7 @@ export class SummaryStore {
       await fs.promises.writeFile(tmp, JSON.stringify(payload), "utf8");
       await fs.promises.rename(tmp, target);
     } catch (err) {
-      this.logger.warn(`摘要保存失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to save summary: ${err instanceof Error ? err.message : String(err)}`);
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
   }

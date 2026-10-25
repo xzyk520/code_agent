@@ -52,7 +52,7 @@ export function createSymbolsAdapter(logger: Logger) {
       uri,
     );
     if (!raw || raw.length === 0) {
-      logger.debug(`symbols.outline ${path} → 无 provider（该语言没装语言扩展？）`);
+      logger.debug(`symbols.outline ${path} → no provider (is the language extension installed?)`);
       return { symbols: [], source: "none" };
     }
 
@@ -158,7 +158,7 @@ export function createSymbolsAdapter(logger: Logger) {
     async outline(params: SymbolsOutlineParams, ctx: InboundRequestContext): Promise<SymbolsOutlineResult> {
       ctx.throwIfCancelled();
       const result = await outline(params.path, ctx);
-      logger.debug(`symbols.outline ${params.path} → ${result.symbols.length} 个符号`);
+      logger.debug(`symbols.outline ${params.path} → ${result.symbols.length} symbols`);
       return result;
     },
 
@@ -172,7 +172,7 @@ export function createSymbolsAdapter(logger: Logger) {
     async search(params: SymbolsSearchParams, ctx: InboundRequestContext): Promise<SymbolsSearchResult> {
       ctx.throwIfCancelled();
       const query = params.query.trim();
-      if (!query) throw new Error("query 不能为空");
+      if (!query) throw new Error("query must not be empty");
       const limit = clamp(params.maxResults ?? DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT);
 
       let raw: vscode.SymbolInformation[] | undefined;
@@ -182,7 +182,7 @@ export function createSymbolsAdapter(logger: Logger) {
           query,
         );
       } catch (err) {
-        logger.debug(`symbols.search 走 provider 失败: ${err instanceof Error ? err.message : String(err)}`);
+        logger.debug(`symbols.search provider failed: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       if (raw && raw.length > 0) {
@@ -205,12 +205,12 @@ export function createSymbolsAdapter(logger: Logger) {
             endColumn: s.location.range.end.character + 1,
           },
         }));
-        logger.debug(`symbols.search "${query}" → ${symbols.length}/${raw.length} 个（lsp，已过滤工作区外）`);
+        logger.debug(`symbols.search "${query}" → ${symbols.length}/${raw.length} (lsp, outside-workspace results filtered out)`);
         return { symbols, source: "lsp", truncated: usable.length > symbols.length };
       }
 
       const fallback = await searchByFallback(query, limit, ctx);
-      logger.debug(`symbols.search "${query}" → ${fallback.length} 个（fallback）`);
+      logger.debug(`symbols.search "${query}" → ${fallback.length} (fallback)`);
       return {
         symbols: fallback,
         source: fallback.length > 0 ? "fallback" : "none",
@@ -234,7 +234,7 @@ export function createSymbolsAdapter(logger: Logger) {
         new vscode.Position(line, character),
       );
       if (!raw || raw.length === 0) {
-        logger.debug(`symbols.references ${params.path}:${params.line} → 无结果`);
+        logger.debug(`symbols.references ${params.path}:${params.line} → no results`);
         return { locations: [], truncated: false };
       }
 
@@ -255,7 +255,7 @@ export function createSymbolsAdapter(logger: Logger) {
       all.sort((a, b) => (a.path === b.path ? a.line - b.line || a.col - b.col : a.path.localeCompare(b.path)));
 
       const locations = all.slice(0, limit);
-      logger.debug(`symbols.references ${params.path}:${params.line} → ${locations.length} 处`);
+      logger.debug(`symbols.references ${params.path}:${params.line} → ${locations.length} locations`);
       return { locations, truncated: all.length > locations.length };
     },
   };

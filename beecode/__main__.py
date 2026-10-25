@@ -71,7 +71,7 @@ _PROPOSALS: dict[str, dict[str, Any]] = {}
 def _peer() -> JsonRpcPeer:
     peer = _state.get("peer")
     if peer is None:
-        raise RpcError(SHELL_ERROR, "内核尚未就绪")
+        raise RpcError(SHELL_ERROR, "The kernel is not ready yet")
     return peer
 
 
@@ -85,7 +85,7 @@ def _notify(method: str, params: dict[str, Any]) -> None:
 def _on_initialize(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
     version = int(params.get("protocolVersion", 0))
     if version != PROTOCOL_VERSION:
-        raise RpcError(SIG_VERSION_MISMATCH, f"协议版本不匹配：壳={version}，内核={PROTOCOL_VERSION}")
+        raise RpcError(SIG_VERSION_MISMATCH, f"Protocol version mismatch: shell={version}, kernel={PROTOCOL_VERSION}")
 
     _state["initialized"] = True
     _state["workspace_roots"] = list(params.get("workspaceRoots", []))
@@ -147,13 +147,13 @@ def _on_model_reload(params: dict[str, Any], ctx: RequestContext) -> dict[str, A
 async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
     session_id = str(params.get("sessionId") or "")
     if not session_id:
-        raise RpcError(INVALID_PARAMS, "缺少 sessionId")
+        raise RpcError(INVALID_PARAMS, "Missing sessionId")
 
     # Concurrency guard: only one turn may run per session at a time (the shell also has a busy
     # fallback; this is defense in depth)
     running = _tasks.get(session_id)
     if running is not None and not running.done():
-        raise RpcError(SIG_CONFLICT, "上一轮还没结束，请先停止或等待")
+        raise RpcError(SIG_CONFLICT, "The previous turn has not finished; stop it or wait before starting another")
 
     mode = str(params.get("mode") or "chat")
     session = _sessions.get(session_id)
@@ -218,7 +218,7 @@ async def _on_chat_send(params: dict[str, Any], ctx: RequestContext) -> dict[str
         await task
     except asyncio.CancelledError:
         _log(f"chat.send cancelled: {session_id}")
-        raise RpcError(SHELL_ERROR, "本轮已取消") from None
+        raise RpcError(SHELL_ERROR, "This turn was cancelled") from None
     except ModelError as exc:
         raise RpcError(SHELL_ERROR, str(exc)) from exc
     finally:
@@ -281,7 +281,7 @@ async def _on_context_summarize(params: dict[str, Any], ctx: RequestContext) -> 
 def _shell() -> ShellClient:
     shell = _state.get("shell")
     if shell is None:
-        raise RpcError(SHELL_ERROR, "内核尚未就绪")
+        raise RpcError(SHELL_ERROR, "The kernel is not ready yet")
     return shell
 
 
@@ -300,12 +300,12 @@ async def _propose(path: str, content: str, summary: str, *, expected_version: i
         base_text = current.text
         base_version = current.version
         if expected_version is not None and current.version != expected_version:
-            raise ValueError(f"{path} 已被修改（版本 {current.version} != {expected_version}）；请重新读取后再修改")
+            raise ValueError(f"{path} has been modified (version {current.version} != {expected_version}); read it again before editing")
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001 - a new file or a failed read must not block the proposal
         if expected_version is not None:
-            raise ValueError(f"{path} 在修改前被删除或无法读取；请重新读取后再修改") from exc
+            raise ValueError(f"{path} was deleted or could not be read before the edit; read it again before editing") from exc
         _log(f"proposal: failed to read {path} (treating it as a new file): {exc}")
 
     additions, deletions = _count_changes(base_text, content)
@@ -350,7 +350,7 @@ def _on_proposal_read(params: dict[str, Any], ctx: RequestContext) -> dict[str, 
     proposal_id = str(params.get("id", ""))
     proposal = _PROPOSALS.get(proposal_id)
     if proposal is None:
-        raise RpcError(SIG_NOT_FOUND, f"提案不存在：{proposal_id}")
+        raise RpcError(SIG_NOT_FOUND, f"Proposal not found: {proposal_id}")
     return {"text": proposal["text"]}
 
 
@@ -363,7 +363,7 @@ def _on_proposal_decide(params: dict[str, Any], ctx: RequestContext) -> dict[str
     proposal_id = str(params.get("id", ""))
     decision = str(params.get("decision", ""))
     if decision not in ("accept", "reject"):
-        raise RpcError(INVALID_PARAMS, f"未知的 decision：{decision}")
+        raise RpcError(INVALID_PARAMS, f"Unknown decision: {decision}")
     existed = _PROPOSALS.pop(proposal_id, None) is not None
     _log(f"proposal.decide {proposal_id} → {decision} ({'present' if existed else 'already gone'})")
     if existed:

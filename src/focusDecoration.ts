@@ -103,7 +103,7 @@ export class FocusHighlighter implements vscode.Disposable {
     if (!focus || !focus.path) return;
     const editor = findEditor(focus.path);
     if (!editor) {
-      this.log.debug(`高亮跳过：没有打开 ${focus.path} 的可见编辑器`);
+      this.log.debug(`Highlight skipped: no visible editor open for ${focus.path}`);
       return;
     }
 
@@ -113,16 +113,16 @@ export class FocusHighlighter implements vscode.Disposable {
       Math.max(0, focus.endLine - 1),
       editor.document.lineAt(Math.max(0, Math.min(focus.endLine - 1, editor.document.lineCount - 1))).text.length,
     );
-    const label = focus.symbol ? `（函数 ${focus.symbol}）` : "";
-    const hover = new vscode.MarkdownString(`Bee Code 读取了这段代码${label}：第 ${focus.startLine}-${focus.endLine} 行`);
+    const label = focus.symbol ? ` (function ${focus.symbol})` : "";
+    const hover = new vscode.MarkdownString(`Bee Code read this code${label}: lines ${focus.startLine}-${focus.endLine}`);
     hover.isTrusted = false;
 
     try {
       editor.setDecorations(this.decoration, [{ range, hoverMessage: hover }]);
       this.lastEditor = editor;
-      this.log.debug(`高亮 ${focus.path}:${focus.startLine}-${focus.endLine}`);
+      this.log.debug(`Highlight ${focus.path}:${focus.startLine}-${focus.endLine}`);
     } catch (err) {
-      this.log.warn(`高亮失败：${err instanceof Error ? err.message : String(err)}`);
+      this.log.warn(`Highlight failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 

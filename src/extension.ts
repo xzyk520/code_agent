@@ -387,7 +387,7 @@ class Shell {
     if (existing.length === 0 && !this.sessions.meta(this.sessionId)) {
       this.sessions.create({
         id: this.sessionId,
-        title: "新会话",
+        title: "New session",
         mode: this.panel.getMode(),
         workspace: workspaceRoots()[0] ?? "",
         createdAt: Date.now(),
@@ -759,7 +759,7 @@ class Shell {
     this.panel.setRetryAvailable(false);
     this.sessions.create({
       id: this.sessionId,
-      title: "新会话",
+      title: "New session",
       mode: this.panel.getMode(),
       workspace: workspaceRoots()[0] ?? "",
       createdAt: Date.now(),

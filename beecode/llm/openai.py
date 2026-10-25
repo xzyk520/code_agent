@@ -1,13 +1,14 @@
-"""OpenAI 兼容的流式聊天客户端（SSE）。
+"""OpenAI-compatible streaming chat client (SSE).
 
-只依赖 `httpx`，不依赖任何厂商 SDK —— 这样换供应商只改 `base_url` 和 `model`。
+Depends only on `httpx` and no vendor SDK, so switching providers only requires changing
+`base_url` and `model`.
 
-约定：
-  - `base_url` 可以是 `https://api.openai.com/v1`（自动补 `/chat/completions`），
-    也可以直接给完整的 `.../chat/completions` 地址。
-  - 流式增量按 `choices[0].delta.content` 取；工具调用按 `delta.tool_calls` 分片累积；
-    `[DONE]` 结束。
-  - 任何失败都抛 `ModelError`（消息面向用户，不含堆栈）。
+Conventions:
+  - `base_url` can be `https://api.openai.com/v1` (the client appends `/chat/completions`),
+    or the complete `.../chat/completions` URL.
+  - Streaming deltas come from `choices[0].delta.content`; tool calls accumulate from
+    `delta.tool_calls` fragments; `[DONE]` terminates the stream.
+  - Every failure raises `ModelError` (the message is user-facing and contains no stack trace).
 """
 
 from __future__ import annotations
@@ -19,15 +20,16 @@ from typing import Any
 
 import httpx
 
-#: 连接超时短一些（连不上要尽快报错），读超时长一些（模型可能在思考）
+#: Keep the connect timeout short (fail fast when unreachable) and the read timeout longer (the model may be thinking)
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 180.0
 
 
 class ModelError(RuntimeError):
-    """模型调用失败。
+    """A model call failed.
 
-    `message` 会直接显示给用户；`code` 用于决定是否重试（不要靠解析 message）。
+    `message` is shown directly to the user; `code` decides whether to retry (never parse
+    `message` to make that decision).
     """
 
     def __init__(
@@ -45,9 +47,10 @@ class ModelError(RuntimeError):
 
 
 class ModelCapabilityError(ModelError):
-    """服务端明确表示"不支持这种输入"（目前用于图片）。
+    """The server explicitly says "this input is not supported" (currently used for images).
 
-    调用方应该剥掉图片重试一次，并把"该模型不支持图片"记下来。
+    The caller should strip the image and retry once, and record that "this model does not
+    support images".
     """
 
     def __init__(self, message: str, *, status: int, body: str) -> None:
@@ -57,10 +60,10 @@ class ModelCapabilityError(ModelError):
 
 
 class ReasoningReplayRequired(ModelError):
-    """服务端要求把思考内容回传（缺少 reasoning_content 时才会抛）。"""
+    """The server requires reasoning content to be replayed (raised only when reasoning_content is missing)."""
 
 
-#: 服务端拒绝图片时常见的措辞（只认这些，别把所有 400 都当成"没视觉"）
+#: Common wording used by servers to reject images (only these count; do not treat every 400 as "no vision")
 _IMAGE_REJECT_HINTS = (
     "image",
     "vision",
@@ -81,7 +84,7 @@ def _is_image_rejection(status: int, body: str) -> bool:
 
 @dataclass(slots=True)
 class ToolCall:
-    """模型请求的一次工具调用（分片已经拼好）。"""
+    """One tool call requested by the model (fragments have already been assembled)."""
 
     id: str
     name: str
@@ -90,14 +93,14 @@ class ToolCall:
 
 @dataclass(slots=True)
 class ChatDelta:
-    """流式事件：增量文本 / 结束原因 / 用量 / 工具调用（其余都可能为空）。"""
+    """A streaming event: delta text / finish reason / usage / tool calls (the rest may be empty)."""
 
     text: str = ""
     finish_reason: str | None = None
     usage: dict[str, int] | None = None
-    #: 只在流结束时出现一次（参数已拼完整）
+    #: Appears only once at the end of the stream (arguments are fully assembled)
     tool_calls: list[ToolCall] | None = None
-    #: 思考内容增量（DeepSeek `reasoning_content` / OpenRouter `reasoning` / 网关 `thinking`）
+    #: Reasoning-content delta (DeepSeek `reasoning_content` / OpenRouter `reasoning` / gateway `thinking`)
     reasoning: str = ""
 
 
@@ -117,14 +120,14 @@ class OpenAIClient:
         self._extra_headers = extra_headers or {}
         self._timeout = httpx.Timeout(timeout, connect=CONNECT_TIMEOUT)
 
-    # ───────────────────────── 公开 ─────────────────────────
+    # ───────────────────────── Public API ─────────────────────────
 
     @property
     def chat_url(self) -> str:
-        """把用户填的 base_url 归一化成 chat/completions 地址。"""
+        """Normalize the user-supplied base_url into a chat/completions URL."""
         base = self._base_url.rstrip("/")
         if not base:
-            raise ModelError("未配置 base_url：请在命令面板运行「Bee Code: 配置模型」")
+            raise ModelError('base_url is not configured: run "Bee Code: Configure Model" from the command palette')
         if base.endswith("/chat/completions"):
             return base
         return f"{base}/chat/completions"
@@ -136,11 +139,11 @@ class OpenAIClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
     ) -> AsyncIterator[ChatDelta]:
-        """流式产出增量。调用方负责把 `text` 转发给壳。"""
+        """Yield stream deltas. The caller is responsible for forwarding `text` to the shell."""
         if not self._model:
-            raise ModelError("未配置 model：请在命令面板运行「Bee Code: 配置模型」")
+            raise ModelError('model is not configured: run "Bee Code: Configure Model" from the command palette')
         if not self._api_key:
-            raise ModelError("未配置 API Key：请在命令面板运行「Bee Code: 配置模型」")
+            raise ModelError('API key is not configured: run "Bee Code: Configure Model" from the command palette')
 
         payload: dict[str, Any] = {
             "model": self._model,
@@ -167,13 +170,13 @@ class OpenAIClient:
                         body = (await response.aread()).decode("utf-8", "replace")[:500]
                         if _is_image_rejection(response.status_code, body):
                             raise ModelCapabilityError(
-                                f"模型不接受图片输入（HTTP {response.status_code}）：{body[:200]}",
+                                f"The model does not accept image input (HTTP {response.status_code}): {body[:200]}",
                                 status=response.status_code,
                                 body=body,
                             )
                         if _is_reasoning_rejection(body):
                             raise ReasoningReplayRequired(
-                                f"服务端要求回传思考内容（HTTP {response.status_code}）：{body[:200]}"
+                                f"The server requires reasoning content to be replayed (HTTP {response.status_code}): {body[:200]}"
                             )
                         raise ModelError(
                             _explain_http_error(response.status_code, body),
@@ -195,11 +198,11 @@ class OpenAIClient:
                     if finished:
                         yield ChatDelta(tool_calls=finished)
         except httpx.TimeoutException as exc:
-            raise ModelError(f"模型响应超时（{READ_TIMEOUT:.0f}s）：{exc}", code="TIMEOUT") from exc
+            raise ModelError(f"Model response timed out ({READ_TIMEOUT:.0f}s): {exc}", code="TIMEOUT") from exc
         except httpx.HTTPError as exc:
-            # TLS/证书问题不是瞬时网络抖动，重试只会重复失败
+            # TLS/certificate problems are not transient network blips; retrying only repeats the failure
             code = "INVALID" if "certificate" in str(exc).lower() else "TRANSPORT"
-            raise ModelError(f"连接模型失败：{exc}", code=code) from exc
+            raise ModelError(f"Failed to connect to the model: {exc}", code=code) from exc
 
     async def complete(
         self,
@@ -209,14 +212,15 @@ class OpenAIClient:
         temperature: float = 0.0,
         timeout: float = 30.0,
     ) -> tuple[str, dict[str, int] | None]:
-        """非流式补全（意图分类这类"要一段 JSON"的场景用）。
+        """Non-streaming completion (for intent classification and similar "need a JSON blob" cases).
 
-        返回 (content, usage)。失败抛 ModelError；不处理图片能力（分类不需要图）。
+        Returns (content, usage). Raises ModelError on failure; does not handle image
+        capabilities (classification does not need images).
         """
         if not self._model:
-            raise ModelError("未配置 model：请在命令面板运行「Bee Code: 配置模型」")
+            raise ModelError('model is not configured: run "Bee Code: Configure Model" from the command palette')
         if not self._api_key:
-            raise ModelError("未配置 API Key：请在命令面板运行「Bee Code: 配置模型」")
+            raise ModelError('API key is not configured: run "Bee Code: Configure Model" from the command palette')
 
         payload: dict[str, Any] = {
             "model": self._model,
@@ -250,11 +254,11 @@ class OpenAIClient:
                     )
                 data = json.loads(body)
         except httpx.TimeoutException as exc:
-            raise ModelError(f"模型响应超时（{timeout:.0f}s）：{exc}", code="TIMEOUT") from exc
+            raise ModelError(f"Model response timed out ({timeout:.0f}s): {exc}", code="TIMEOUT") from exc
         except httpx.HTTPError as exc:
-            # TLS/证书问题不是瞬时网络抖动，重试只会重复失败
+            # TLS/certificate problems are not transient network blips; retrying only repeats the failure
             code = "INVALID" if "certificate" in str(exc).lower() else "TRANSPORT"
-            raise ModelError(f"连接模型失败：{exc}", code=code) from exc
+            raise ModelError(f"Failed to connect to the model: {exc}", code=code) from exc
 
         choices = data.get("choices") or []
         content = ""
@@ -270,7 +274,7 @@ class OpenAIClient:
         return content, usage_dict
 
     async def close(self) -> None:
-        """占位：目前每次请求自建连接池，无需显式关闭。"""
+        """Placeholder: each request currently creates its own connection pool, so no explicit close is needed."""
 
 
 def _is_context_overflow(status: int, body: str) -> bool:
@@ -317,12 +321,12 @@ def _retry_after_seconds(headers: httpx.Headers) -> float | None:
 def _explain_http_error(status: int, body: str) -> str:
     hint = ""
     if status == 401:
-        hint = "（API Key 无效或未授权）"
+        hint = " (invalid or unauthorized API key)"
     elif status == 404:
-        hint = "（base_url 可能不对：应指向 /v1 或完整的 /chat/completions）"
+        hint = " (base_url may be wrong: it should point to /v1 or the complete /chat/completions URL)"
     elif status == 429:
-        hint = "（限流或余额不足）"
-    return f"模型返回 HTTP {status}{hint}：{body}"
+        hint = " (rate limited or insufficient balance)"
+    return f"Model returned HTTP {status}{hint}: {body}"
 
 
 def _is_reasoning_rejection(body: str) -> bool:
@@ -333,7 +337,7 @@ def _is_reasoning_rejection(body: str) -> bool:
 
 
 def _reasoning_text(delta: dict[str, Any]) -> str:
-    """从 delta 里取出思考文本（不同厂商字段不同）。"""
+    """Extract reasoning text from a delta (the field differs between vendors)."""
     for key in ("reasoning_content", "reasoning", "thinking"):
         value = delta.get(key)
         if isinstance(value, str) and value:
@@ -346,7 +350,7 @@ def _reasoning_text(delta: dict[str, Any]) -> str:
 
 
 def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDelta]:
-    """解析一行 SSE。非数据行、心跳、`[DONE]` 都返回空列表。"""
+    """Parse one SSE line. Non-data lines, heartbeats, and `[DONE]` return an empty list."""
     if not line or not line.startswith("data:"):
         return []
     data = line[5:].strip()
@@ -359,7 +363,7 @@ def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDel
 
     out: list[ChatDelta] = []
 
-    # 多数厂商把 usage 放在最后一个带 choices 的包里；有些单独发一个 choices=[]
+    # Most vendors put usage in the last chunk that has choices; some send a separate chunk with choices=[]
     usage = chunk.get("usage")
     if isinstance(usage, dict):
         out.append(
@@ -383,7 +387,7 @@ def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDel
         if reasoning:
             out.append(ChatDelta(reasoning=reasoning))
 
-        # 工具调用分片：index / id / function.name / function.arguments 都可能分批到达
+        # Tool-call fragments: index / id / function.name / function.arguments may all arrive in pieces
         for item in delta.get("tool_calls") or []:
             index = int(item.get("index") or 0)
             slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
@@ -402,7 +406,7 @@ def _parse_sse_line(line: str, calls: dict[int, dict[str, str]]) -> list[ChatDel
 
 
 def _finish_calls(calls: dict[int, dict[str, str]]) -> list[ToolCall]:
-    """把累积的分片整理成有序的工具调用列表（缺 id 时补一个稳定的假 id）。"""
+    """Turn accumulated fragments into an ordered list of tool calls (supply a stable fake id when missing)."""
     out: list[ToolCall] = []
     for index in sorted(calls):
         slot = calls[index]
@@ -419,6 +423,6 @@ def _finish_calls(calls: dict[int, dict[str, str]]) -> list[ToolCall]:
 
 
 def estimate_tokens(text: str) -> int:
-    """粗估 token（CJK 1 字 ≈ 1 token，ASCII 4 字符 ≈ 1 token）。仅用于缺 usage 时兜底。"""
+    """Rough token estimate (about 1 token per CJK character, 1 token per 4 ASCII characters). Fallback only when usage is missing."""
     cjk = sum(1 for ch in text if "\u2e80" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af")
     return int(cjk + (len(text) - cjk) / 4)

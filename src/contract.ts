@@ -56,12 +56,12 @@ export function loadContract(roots: Array<string | undefined>): ContractCheck {
     } catch (err) {
       return {
         contract: undefined,
-        problems: [`无法解析 ${candidate}: ${err instanceof Error ? err.message : String(err)}`],
+        problems: [`Unable to parse ${candidate}: ${err instanceof Error ? err.message : String(err)}`],
       };
     }
   }
 
-  problems.push(`找不到协议契约 ${CONTRACT_RELATIVE}（已查找：${roots.filter(Boolean).join(", ") || "无工作区"}）`);
+  problems.push(`Protocol contract not found at ${CONTRACT_RELATIVE} (searched: ${roots.filter(Boolean).join(", ") || "no workspace"})`);
   return { contract: undefined, problems };
 }
 
@@ -70,17 +70,17 @@ export function verifyRegistration(contract: ContractFile, registered: readonly 
   const problems: string[] = [];
 
   if (contract.version !== PROTOCOL_VERSION) {
-    problems.push(`契约版本 ${contract.version} 与 PROTOCOL_VERSION ${PROTOCOL_VERSION} 不一致`);
+    problems.push(`Contract version ${contract.version} does not match PROTOCOL_VERSION ${PROTOCOL_VERSION}`);
   }
 
   const declared = new Set(Object.keys(contract.shellMethods));
   const actual = new Set<string>(registered);
 
   for (const method of actual) {
-    if (!declared.has(method)) problems.push(`已注册但契约未声明：${method}`);
+    if (!declared.has(method)) problems.push(`Registered but not declared in the contract: ${method}`);
   }
   for (const method of declared) {
-    if (!actual.has(method)) problems.push(`契约已声明但未注册：${method}`);
+    if (!actual.has(method)) problems.push(`Declared in the contract but not registered: ${method}`);
   }
 
   return problems;
@@ -88,12 +88,12 @@ export function verifyRegistration(contract: ContractFile, registered: readonly 
 
 function checkStructure(contract: ContractFile): string[] {
   const problems: string[] = [];
-  if (typeof contract.version !== "number") problems.push("version 必须是数字");
-  if (!contract.shellMethods || typeof contract.shellMethods !== "object") problems.push("缺少 shellMethods");
-  if (!Array.isArray(contract.coreMethods)) problems.push("缺少 coreMethods 数组");
-  if (!Array.isArray(contract.notifications)) problems.push("缺少 notifications 数组");
+  if (typeof contract.version !== "number") problems.push("version must be a number");
+  if (!contract.shellMethods || typeof contract.shellMethods !== "object") problems.push("missing shellMethods");
+  if (!Array.isArray(contract.coreMethods)) problems.push("missing coreMethods array");
+  if (!Array.isArray(contract.notifications)) problems.push("missing notifications array");
   for (const [method, spec] of Object.entries(contract.shellMethods ?? {})) {
-    if (!Array.isArray(spec.result)) problems.push(`${method} 缺少 result 列表`);
+    if (!Array.isArray(spec.result)) problems.push(`${method} is missing the result list`);
   }
   return problems;
 }

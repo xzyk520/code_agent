@@ -48,9 +48,9 @@ export class ProposalAdapter implements vscode.Disposable {
         this.byId.set(id, {
           ...existing,
           status: "stale",
-          summary: existing.summary ?? "已被同一文件的新提案取代",
+          summary: existing.summary ?? "Replaced by a newer proposal for the same file",
         });
-        this.logger.debug(`proposal ${id} 被同路径的新提案 ${dto.id} 取代（标 stale）`);
+        this.logger.debug(`proposal ${id} replaced by newer proposal ${dto.id} for the same path (marked stale)`);
       }
     }
     // Option A: body changes cannot be observed from metadata, so any upsert is treated as possibly changed → drop the cache
@@ -102,7 +102,7 @@ export class ProposalAdapter implements vscode.Disposable {
     try {
       text = await fetchText(id);
     } catch (err) {
-      this.logger.warn(`读取提案正文失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to read proposal body ${id}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
     this.rememberText(id, text);
@@ -122,11 +122,11 @@ export class ProposalAdapter implements vscode.Disposable {
     decide: (id: string, decision: "accept" | "reject") => Promise<void>,
   ): Promise<EditApplyResult> {
     const dto = this.byId.get(id);
-    if (!dto) return { applied: false, message: "提案不存在（可能已被内核撤回）" };
+    if (!dto) return { applied: false, message: "Proposal not found (it may have been withdrawn by the core)" };
 
     if (dto.baseVersion === undefined) {
       // Without baseVersion there is no conflict detection — log a warn so it does not silently become an "unconditional overwrite"
-      this.logger.warn(`提案 ${id} 缺少 baseVersion，接受时将不做版本冲突检测（可能覆盖用户的新修改）`);
+      this.logger.warn(`proposal ${id} has no baseVersion; accepting it will skip version-conflict detection (it may overwrite the user's recent edits)`);
     }
 
     let text = this.takeText(id);
@@ -134,7 +134,7 @@ export class ProposalAdapter implements vscode.Disposable {
       try {
         text = await fetchText(id);
       } catch (err) {
-        return { applied: false, message: `读取提案正文失败：${err instanceof Error ? err.message : String(err)}` };
+        return { applied: false, message: `Failed to read proposal body: ${err instanceof Error ? err.message : String(err)}` };
       }
       // A failed write can be retried, without fetching again
       this.rememberText(id, text);
@@ -155,7 +155,7 @@ export class ProposalAdapter implements vscode.Disposable {
     this.byId.delete(id);
     this.forgetText(id);
     await decide(id, "accept").catch((err: unknown) => {
-      this.logger.warn(`proposal.decide(accept) 失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`proposal.decide(accept) failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
     return result;
   }
@@ -169,7 +169,7 @@ export class ProposalAdapter implements vscode.Disposable {
     this.byId.delete(id);
     this.forgetText(id);
     await decide(id, "reject").catch((err: unknown) => {
-      this.logger.warn(`proposal.decide(reject) 失败 ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`proposal.decide(reject) failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 

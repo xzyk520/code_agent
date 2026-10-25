@@ -47,7 +47,7 @@ export class RetryStore {
       await fs.promises.mkdir(this.dir, { recursive: true });
       await fs.promises.appendFile(this.fileOf(event.sessionId), `${JSON.stringify(event)}\n`, "utf8");
     } catch (err) {
-      this.logger.warn(`重试事件写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write retry event: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -57,7 +57,7 @@ export class RetryStore {
       fs.mkdirSync(this.dir, { recursive: true });
       fs.appendFileSync(this.fileOf(event.sessionId), `${JSON.stringify(event)}\n`, "utf8");
     } catch (err) {
-      this.logger.warn(`重试事件写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write retry event: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -97,7 +97,7 @@ export class RetryStore {
       await fs.promises.writeFile(tmp, JSON.stringify(pending), "utf8");
       await fs.promises.rename(tmp, file);
     } catch (err) {
-      this.logger.warn(`待重试请求写入失败: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`Failed to write pending retry request: ${err instanceof Error ? err.message : String(err)}`);
       await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
   }

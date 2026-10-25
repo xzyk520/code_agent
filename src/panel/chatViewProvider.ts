@@ -324,7 +324,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const limits = this.attachmentLimits;
     if (this.state.attachments.length >= limits.maxCount) {
       this.handlers.onAttachmentNotice(
-        `最多附加 ${limits.maxCount} 段：本次只保留了前 ${limits.maxCount} 段，其余已忽略。`,
+        `At most ${limits.maxCount} attachments are allowed: only the first ${limits.maxCount} were kept; the rest were ignored.`,
       );
       return false;
     }
@@ -332,7 +332,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let text = attachment.text ?? "";
     let truncatedByItem = false;
     if (text.length > limits.maxCharsPerItem) {
-      text = `${text.slice(0, limits.maxCharsPerItem)}\n…（附件已截断）`;
+      text = `${text.slice(0, limits.maxCharsPerItem)}\n... (attachment truncated)`;
       truncatedByItem = true;
     }
 
@@ -340,24 +340,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const remaining = limits.maxTotalChars - current;
     if (remaining <= 0) {
       this.handlers.onAttachmentNotice(
-        `附件合计超过 ${limits.maxTotalChars} 字符：这一段未加入（请减少附件或分段发送）。`,
+        `Attachments exceed ${limits.maxTotalChars} characters in total: this item was not added (reduce the attachments or send them in batches).`,
       );
       return false;
     }
     let truncatedByTotal = false;
     if (text.length > remaining) {
-      text = `${text.slice(0, remaining)}\n…（附件已截断）`;
+      text = `${text.slice(0, remaining)}\n... (attachment truncated)`;
       truncatedByTotal = true;
     }
 
     if (truncatedByItem) {
       this.handlers.onAttachmentNotice(
-        `单个附件超过 ${limits.maxCharsPerItem} 字符，已截断（可改用行范围减少体积）。`,
+        `A single attachment exceeds ${limits.maxCharsPerItem} characters and was truncated (use a line range to reduce its size).`,
       );
     }
     if (truncatedByTotal) {
       this.handlers.onAttachmentNotice(
-        `附件合计超过 ${limits.maxTotalChars} 字符，已截断到上限。`,
+        `Attachments exceed ${limits.maxTotalChars} characters in total and were truncated to the limit.`,
       );
     }
 
@@ -406,7 +406,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "send": {
         const raw = typeof msg.text === "string" ? msg.text : "";
         if (raw.length > 20_000) {
-          this.setHint("输入过长，已截断到 20000 字符。");
+          this.setHint("Input is too long and was truncated to 20,000 characters.");
         }
         const text = raw.slice(0, 20_000);
         const mode = msg.mode === "builder" || msg.mode === "debugger" || msg.mode === "chat" ? msg.mode : this.state.mode;
@@ -491,37 +491,37 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
       <span id="mode-badge" class="mode-badge">Chat</span>
     </div>
     <span id="cost" class="cost"></span>
-    <button id="stop" class="stop" title="${tr(locale, "停止", "Stop")}">■</button>
+    <button id="stop" class="stop" title="${tr(locale, "Stop", "Stop")}">■</button>
   </header>
 
   <section id="attachments" class="attachments"></section>
-  <section id="reads" class="reads" aria-label="${tr(locale, "agent 最近读取的文件", "Files recently read by the agent")}"></section>
+  <section id="reads" class="reads" aria-label="${tr(locale, "Files recently read by the agent", "Files recently read by the agent")}"></section>
   <div id="retry-banner" class="retry-banner hidden" role="status"></div>
   <div class="conversation">
-    <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="${tr(locale, "对话记录", "Conversation")}"></section>
-    <aside id="trajectory" class="trajectory" aria-label="${tr(locale, "会话轨迹", "Session trace")}">
-      <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="${tr(locale, "搜索轨迹…", "Search trace…")}" aria-label="${tr(locale, "搜索轨迹", "Search trace")}" />
+    <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="${tr(locale, "Conversation", "Conversation")}"></section>
+    <aside id="trajectory" class="trajectory" aria-label="${tr(locale, "Session trace", "Session trace")}">
+      <input id="trajectory-filter" class="trajectory-search" type="search" placeholder="${tr(locale, "Search trace…", "Search trace…")}" aria-label="${tr(locale, "Search trace", "Search trace")}" />
       <div id="trajectory-list" class="trajectory-list"></div>
     </aside>
   </div>
   <div id="sr-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <section id="proposals" class="proposals hidden">
     <div class="proposals-head">
-      <span id="proposals-title">${tr(locale, "待审提案", "Proposals")}</span>
+      <span id="proposals-title">${tr(locale, "Proposals", "Proposals")}</span>
       <span class="proposals-actions">
-        <button id="acceptAll">${tr(locale, "全部接受", "Accept all")}</button>
-        <button id="rejectAll">${tr(locale, "全部拒绝", "Reject all")}</button>
+        <button id="acceptAll">${tr(locale, "Accept all", "Accept all")}</button>
+        <button id="rejectAll">${tr(locale, "Reject all", "Reject all")}</button>
       </span>
     </div>
     <ul id="proposals-list"></ul>
   </section>
 
   <footer class="composer">
-    <textarea id="input" placeholder="${tr(locale, "描述你的需求…（Ctrl+Enter 发送）", "Describe what you need… (Ctrl+Enter to send)")}" rows="3"></textarea>
+    <textarea id="input" placeholder="${tr(locale, "Describe what you need… (Ctrl+Enter to send)", "Describe what you need… (Ctrl+Enter to send)")}" rows="3"></textarea>
     <div class="composer-row">
       <span id="hint" class="hint"></span>
-      <button id="retry" class="retry hidden" type="button">${tr(locale, "重试本轮", "Retry this turn")}</button>
-      <button id="send">${tr(locale, "发送", "Send")}</button>
+      <button id="retry" class="retry hidden" type="button">${tr(locale, "Retry this turn", "Retry this turn")}</button>
+      <button id="send">${tr(locale, "Send", "Send")}</button>
     </div>
   </footer>
 

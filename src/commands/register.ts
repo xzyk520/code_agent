@@ -157,7 +157,7 @@ async function attachSelection(
 
   // Read-only documents (diff/preview sides) should not reach this point
   if (editor.document.uri.scheme !== "file" && editor.document.uri.scheme !== "untitled") {
-    void vscode.window.showInformationMessage("Bee Code: 请在普通文件里选择代码。");
+    void vscode.window.showInformationMessage("Bee Code: Please select code in a regular file.");
     return;
   }
 
@@ -196,8 +196,8 @@ async function attachSelection(
 
   deps.panel.reveal();
   if (added === 0) {
-    deps.panel.setHint("没有可附加的代码（光标不在文件里？）");
+    deps.panel.setHint("No code to attach (is the cursor not in a file?)");
     return;
   }
-  deps.panel.setHint(`已附加 ${added} 段（${functions} 个完整函数）· 模式由意图分析决定`);
+  deps.panel.setHint(`Attached ${added} item(s) (${functions} complete functions); mode will be determined by intent analysis`);
 }

@@ -33,27 +33,27 @@ INTENT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_SYSTEM = """你是 Bee Code 的意图分类器。只输出 JSON 对象，不要输出任何解释或 Markdown。
+_SYSTEM = """You are the intent classifier for Bee Code. Output only a JSON object; do not include any explanation or Markdown.
 
-字段：
+Fields:
 - mode: "chat" | "builder" | "debugger"
 - scale: "small" | "large"
-- needs_proposal: boolean（这一轮是否应该产出文件修改提案）
-- reason: 一句话中文说明（为什么这么判）
-- intent: 一句话概括"用户想达成什么"（用于后续总结，不要写实现细节）
-- continue_previous: boolean（这次是否在**延续**上一轮意图，而不是换了目标）
+- needs_proposal: boolean (whether this turn should produce a file modification proposal)
+- reason: a one-sentence explanation (why you made this decision)
+- intent: a one-sentence summary of "what the user wants to achieve" (used for later summaries; do not include implementation details)
+- continue_previous: boolean (whether this message **continues** the previous turn's intent rather than switching goals)
 
-判定规则：
-- chat：解释代码、回答问题、讨论方案，不需要改动文件
-- builder：新增/修改/重构/迁移代码，预期产出文件修改
-- debugger：报错、异常、崩溃、行为不符预期的定位与修复
-- builder 与 debugger **默认 needs_proposal=true**；只有用户明确表示"先讨论/不要改"时才 false
-- scale=large：涉及多个文件、架构调整、迁移、需求描述很长；否则 small
-- continue_previous=true 仅当用户是在补充信息、回答追问、说"继续/接着"，且目标没变；
-  一旦出现新目标、新对象、新约束，就判 false
+Decision rules:
+- chat: explain code, answer questions, discuss approaches; no file changes needed
+- builder: add/modify/refactor/migrate code; a file modification is expected
+- debugger: locate and fix errors, exceptions, crashes, or behavior that does not match expectations
+- builder and debugger **default to needs_proposal=true**; set it to false only when the user explicitly says "discuss first / do not change anything"
+- scale=large: involves multiple files, architectural changes, migrations, or a very long requirements description; otherwise small
+- continue_previous=true only when the user is adding information, answering a follow-up question, or saying "continue/go on" without changing the goal;
+  set it to false as soon as a new goal, new object, or new constraint appears
 """
 
-_CORRECTION = "你的输出不合法：{error}。请只输出 JSON，且 mode 必须是 chat、builder、debugger 三者之一。"
+_CORRECTION = "Your output is invalid: {error}. Output only JSON, and mode must be one of chat, builder, or debugger."
 
 
 @dataclass(slots=True)
@@ -76,7 +76,7 @@ class Intent:
 
 
 def _fallback(reason: str, usage: dict[str, int] | None = None) -> Intent:
-    return Intent("chat", "small", False, f"意图识别失败，按 Chat 处理（{reason}）", "", usage, degraded=True)
+    return Intent("chat", "small", False, f"Intent classification failed; falling back to chat ({reason})", "", usage, degraded=True)
 
 
 def _is_format_rejection(message: str) -> bool:
@@ -94,24 +94,24 @@ def _user_prompt(
 ) -> str:
     lines: list[str] = []
     if previous:
-        lines.append("上一轮意图：")
+        lines.append("Previous turn's intent:")
         lines.append(
-            f"- 目标：{str(previous.get('intent') or '').strip()[:200] or '（未记录）'}\n"
-            f"- 任务规模：{previous.get('scale') or 'small'}（small=单点/小改，large=多文件/架构/迁移）\n"
-            f"- 模式：{previous.get('mode') or 'chat'}\n"
-            f"- 是否需要产出提案：{'是' if previous.get('needs_proposal') else '否'}"
+            f"- Goal: {str(previous.get('intent') or '').strip()[:200] or '(not recorded)'}\n"
+            f"- Task scale: {previous.get('scale') or 'small'} (small=single point/small change, large=multiple files/architecture/migration)\n"
+            f"- Mode: {previous.get('mode') or 'chat'}\n"
+            f"- Needs a proposal: {'yes' if previous.get('needs_proposal') else 'no'}"
         )
-        lines.append("请判断当前消息是在延续它，还是换了新目标。")
+        lines.append("Decide whether the current message continues that intent or switches to a new goal.")
         lines.append("")
     recent = (history or [])[-4:]
     if recent:
-        lines.append("最近对话（仅供参考）：")
+        lines.append("Recent conversation (for reference only):")
         for item in recent:
             role = item.get("role") or "user"
             body = str(item.get("text") or "")[:600]
             lines.append(f"{role}: {body}")
         lines.append("")
-    lines.append("当前用户消息：")
+    lines.append("Current user message:")
     lines.append(text[:4000])
     return "\n".join(lines)
 
@@ -123,16 +123,16 @@ def _extract_json(content: str) -> tuple[dict[str, Any] | None, str]:
         text = re.sub(r"\n?```$", "", text).strip()
     try:
         value = json.loads(text)
-        return (value, "") if isinstance(value, dict) else (None, "输出不是 JSON 对象")
+        return (value, "") if isinstance(value, dict) else (None, "Output is not a JSON object")
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            return None, "输出里找不到 JSON 对象"
+            return None, "No JSON object found in the output"
         try:
             value = json.loads(match.group(0))
-            return (value, "") if isinstance(value, dict) else (None, "输出不是 JSON 对象")
+            return (value, "") if isinstance(value, dict) else (None, "Output is not a JSON object")
         except json.JSONDecodeError:
-            return None, "JSON 解析失败"
+            return None, "JSON parsing failed"
 
 
 def _parse(content: str) -> tuple[Intent | None, str]:
@@ -142,7 +142,7 @@ def _parse(content: str) -> tuple[Intent | None, str]:
 
     mode = str(data.get("mode") or "").strip().lower()
     if mode not in MODES:
-        return None, f"mode={mode!r} 不在 chat/builder/debugger 之内"
+        return None, f"mode={mode!r} is not one of chat/builder/debugger"
 
     scale = str(data.get("scale") or "small").strip().lower()
     if scale not in ("small", "large"):
@@ -159,7 +159,7 @@ def _parse(content: str) -> tuple[Intent | None, str]:
             mode=mode,
             scale=scale,
             needs_proposal=needs,
-            reason=reason or "模型判定",
+            reason=reason or "model decision",
             intent=intent_text,
             continues_previous=continues,
         ),
@@ -230,4 +230,4 @@ async def classify(
             {"role": "user", "content": _CORRECTION.format(error=error)},
         ]
 
-    return _fallback("尝试次数用尽", usage_total)
+    return _fallback("attempts exhausted", usage_total)

@@ -39,7 +39,7 @@ def contract() -> dict[str, Any]:
                 data = json.load(handle)
             _check_version(data)
             return data
-    raise ContractError(f"找不到协议契约 {CONTRACT_RELATIVE}（已查找：{', '.join(searched)}）")
+    raise ContractError(f"Protocol contract {CONTRACT_RELATIVE} not found (searched: {', '.join(searched)})")
 
 
 def shell_methods() -> dict[str, dict[str, Any]]:
@@ -58,7 +58,7 @@ def check_shell_call(method: str, params: dict[str, Any]) -> None:
     """Self-check before sending a request: method name, required parameters, extra parameters."""
     spec = shell_methods().get(method)
     if spec is None:
-        raise ContractError(f"未知的 shell 方法：{method}（契约里没有）")
+        raise ContractError(f"Unknown shell method: {method} (not present in the contract)")
 
     required = set(spec.get("required", []))
     optional = set(spec.get("optional", []))
@@ -66,12 +66,12 @@ def check_shell_call(method: str, params: dict[str, Any]) -> None:
 
     missing = required - set(params)
     if missing:
-        raise ContractError(f"{method} 缺少必填参数：{', '.join(sorted(missing))}")
+        raise ContractError(f"{method} is missing required parameters: {', '.join(sorted(missing))}")
 
     unknown = set(params) - allowed
     if unknown:
         raise ContractError(
-            f"{method} 出现契约未声明的参数：{', '.join(sorted(unknown))}（允许：{', '.join(sorted(allowed)) or '无'}）"
+            f"{method} received parameters not declared in the contract: {', '.join(sorted(unknown))} (allowed: {', '.join(sorted(allowed)) or 'none'})"
         )
 
 
@@ -94,4 +94,4 @@ def _roots() -> list[Path]:
 def _check_version(data: dict[str, Any]) -> None:
     version = data.get("version")
     if version != ipc.PROTOCOL_VERSION:
-        raise ContractError(f"契约版本 {version} 与 ipc.PROTOCOL_VERSION {ipc.PROTOCOL_VERSION} 不一致")
+        raise ContractError(f"Contract version {version} does not match ipc.PROTOCOL_VERSION {ipc.PROTOCOL_VERSION}")

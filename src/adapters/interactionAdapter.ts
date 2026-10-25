@@ -33,12 +33,12 @@ export function createSecretAdapter(context: vscode.ExtensionContext, logger: Lo
   return {
     async get(params: SecretsGetParams): Promise<SecretsGetResult> {
       if (!isAllowedSecret(params.key)) {
-        logger.warn(`secrets.get 被拒绝（不在白名单）：${params.key}`);
-        throw new Error(`不允许读取该密钥：${params.key}（只允许 ${ALLOWED_SECRET_PREFIXES.join(", ")} 前缀）`);
+        logger.warn(`secrets.get rejected (not in the allowlist): ${params.key}`);
+        throw new Error(`Reading this secret is not allowed: ${params.key} (only the ${ALLOWED_SECRET_PREFIXES.join(", ")} prefix is allowed)`);
       }
       const value = await context.secrets.get(params.key);
       // The value must never be written to the log; record only "whether it is set"
-      logger.debug(`secrets.get ${params.key} → ${value ? "已配置" : "未配置"}`);
+      logger.debug(`secrets.get ${params.key} → ${value ? "configured" : "not configured"}`);
       return { value: value ?? null };
     },
   };
@@ -51,7 +51,7 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
       if (params.rememberKey) {
         const remembered = readRemembered(context)[params.rememberKey];
         if (remembered && params.options.some((o) => o.id === remembered)) {
-          logger.debug(`confirm.ask 使用已记住的选择: ${params.rememberKey} → ${remembered}`);
+          logger.debug(`confirm.ask using remembered choice: ${params.rememberKey} → ${remembered}`);
           return { choice: remembered };
         }
       }
@@ -61,7 +61,7 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
 
       // 2) Cancelled / interrupted by the core: always treat it as "the user did not agree"
       if (!picked) {
-        logger.debug(`confirm.ask 被取消: ${params.question}`);
+        logger.debug(`confirm.ask cancelled: ${params.question}`);
         return { choice: null };
       }
 
@@ -79,11 +79,11 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
         );
         if (!chosen) return { choice: null };
         writeRemembered(context, params.rememberKey, chosen.id);
-        logger.debug(`confirm.ask 记住: ${params.rememberKey} → ${chosen.id}`);
+        logger.debug(`confirm.ask remember: ${params.rememberKey} → ${chosen.id}`);
         return { choice: chosen.id };
       }
 
-      logger.debug(`confirm.ask 选择: ${picked.id}`);
+      logger.debug(`confirm.ask choice: ${picked.id}`);
       return { choice: picked.id };
     },
   };
@@ -110,10 +110,10 @@ function buildItems(params: ConfirmAskParams): Array<vscode.QuickPickItem & { id
   }));
 
   if (!params.options.some((opt) => NEGATIVE_IDS.has(opt.id.toLowerCase()))) {
-    items.push({ id: "cancel", label: "取消", description: "不做任何修改" });
+    items.push({ id: "cancel", label: "Cancel", description: "Make no changes" });
   }
   if (params.rememberKey) {
-    items.push({ id: REMEMBER_ITEM_ID, label: "记住这次选择…", description: "下次同一操作不再询问" });
+    items.push({ id: REMEMBER_ITEM_ID, label: "Remember this choice...", description: "Don't ask again for the same action" });
   }
   return items;
 }
@@ -143,7 +143,7 @@ async function pick(
 
   try {
     return await vscode.window.showQuickPick(items, {
-      title: params.detail ? "Bee Code · 需要确认" : "Bee Code",
+      title: params.detail ? "Bee Code · Confirmation Required" : "Bee Code",
       placeHolder: params.question,
       ignoreFocusOut: true,
       matchOnDescription: true,
