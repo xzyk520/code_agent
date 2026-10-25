@@ -74,4 +74,5 @@ jobs:
           name: Bee Code ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          overwrite_files: true
           files: artifacts/**/*.vsix
