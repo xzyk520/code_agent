@@ -25,6 +25,7 @@ const REMEMBERED_STATE_KEY = "beeCode.confirm.remembered";
 
 /** Id of the appended "remember" pseudo-option */
 const REMEMBER_ITEM_ID = "__remember__";
+const PREVIEW_ITEM_ID = "__preview__";
 
 /** Ids with negative meaning: if one is already there, no default "Cancel" is added */
 const NEGATIVE_IDS = new Set(["no", "cancel", "reject", "abort", "deny", "skip"]);
@@ -57,7 +58,15 @@ export function createConfirmAdapter(context: vscode.ExtensionContext, logger: L
       }
 
       const items = buildItems(params);
-      const picked = await pick(items, params, ctx);
+      let picked = await pick(items, params, ctx);
+      while (picked?.id === PREVIEW_ITEM_ID) {
+        const doc = await vscode.workspace.openTextDocument({
+          content: `${params.question}\n\n${params.detail ?? ""}`,
+          language: "markdown",
+        });
+        await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+        picked = await pick(items, params, ctx);
+      }
 
       // 2) Cancelled / interrupted by the core: always treat it as "the user did not agree"
       if (!picked) {
@@ -111,6 +120,13 @@ function buildItems(params: ConfirmAskParams): Array<vscode.QuickPickItem & { id
 
   if (!params.options.some((opt) => NEGATIVE_IDS.has(opt.id.toLowerCase()))) {
     items.push({ id: "cancel", label: "Cancel", description: "Make no changes" });
+  }
+  if (params.detail && params.detail.length > 160) {
+    items.push({
+      id: PREVIEW_ITEM_ID,
+      label: "View full details...",
+      description: "Open the complete request in an editor (recommended for long commands)",
+    });
   }
   if (params.rememberKey) {
     items.push({ id: REMEMBER_ITEM_ID, label: "Remember this choice...", description: "Don't ask again for the same action" });

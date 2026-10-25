@@ -136,6 +136,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.command.showTerminal",
+        "title": "Show command terminal",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.exportDiagnostics",
         "title": "Export diagnostics (redacted)",
         "category": "Bee Code"

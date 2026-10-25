@@ -21,6 +21,7 @@ import { exportDiagnostics as writeDiagnostics } from "./diagnostics";
 import { MockCore } from "./dev/mockCore";
 import { Logger } from "./log";
 import { ChatViewProvider, type AttachedContext } from "./panel/chatViewProvider";
+import { CommandTerminal } from "./commandTerminal";
 import { LibraryViewProvider, type LibraryState } from "./panel/libraryViewProvider";
 import { toWorkspaceRelative } from "./paths";
 import { readFocusAtCursor, type FocusInfo } from "./focus";
@@ -181,6 +182,7 @@ class Shell {
   private dockerAvailable = false;
   private readonly sessions: SessionStore;
   private libraryView?: LibraryViewProvider;
+  private readonly commandTerminal = new CommandTerminal();
   /** Where the previous turn stopped (persisted to disk so a reload can tell whether it can continue) */
   private turn: TurnStatus = "idle";
   private turnDetail: string | undefined;
@@ -286,6 +288,7 @@ class Shell {
       restartCore: () => this.restartCore(),
       setupPython: () => this.setupPython(),
       showCoreLogs: () => this.log.showStderr(),
+      showCommandTerminal: () => this.commandTerminal.show(),
       restoreCheckpoint: () => this.restoreCheckpoint(),
       acceptAll: () => this.acceptAllProposals(),
       rejectAll: () => this.rejectAllProposals(),
@@ -379,7 +382,7 @@ class Shell {
       }),
     );
 
-    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions, this.focusHighlight);
+    this.context.subscriptions.push(this.status, this.log, this.diff, this.checkpoint, this.proposals, this.sessions, this.focusHighlight, this.commandTerminal);
     this.updateStatus();
     this.panel.setHint(this.hintForState());
   }
@@ -1615,6 +1618,10 @@ class Shell {
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
 
     let gateHandled = false;
+    this.commandTerminal.show();
+    this.commandTerminal.writeLine("");
+    this.commandTerminal.writeLine(`$ ${params.command}`);
+    this.commandTerminal.writeLine(`cwd: ${cwdAbs} · requested: ${requested}`);
     const roleLabel = role === "subagent" ? tr(this.config.language, "子代理", "Sub-agent") : tr(this.config.language, "主 agent", "Main agent");
     const approved = this.sandboxApprovals.get(this.sessionId) ?? -1;
     if (!noDocker && requested !== "host" && ranks[requested] > approved) {
@@ -1834,6 +1841,7 @@ class Shell {
       : "";
 
     const job = await this.runner.start(effectiveParams, ctx);
+    this.commandTerminal.writeLine(`sandbox: ${hostReadonlyFallback ? "host-readonly" : job.sandbox}`);
     const record = {
       job,
       sessionId: this.sessionId,
@@ -1866,6 +1874,7 @@ class Shell {
     const fresh = record.job.readNew();
     if (fresh.finished) {
       record.resultDelivered = true;
+      this.commandTerminal.writeResult(fresh.exitCode, fresh.stdout, fresh.stderr, fresh.elapsedMs);
       await this.finalizeCommandJob(record);
       return {
         exitCode: fresh.exitCode,
@@ -1963,6 +1972,7 @@ class Shell {
     if (this.disposed || record.sessionId !== this.sessionId) return;
     record.noticeSent = true;
     const snap = record.job.peek();
+    this.commandTerminal.writeResult(snap.exitCode, snap.stdout, snap.stderr, snap.elapsedMs);
     const exit = snap.exitCode === null ? "unknown" : String(snap.exitCode);
     const text =
       `Background job ${record.job.id} finished (exit ${exit}, elapsed ${Math.round(snap.elapsedMs / 1000)}s). ` +
