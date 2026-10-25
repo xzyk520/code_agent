@@ -285,6 +285,7 @@ class Shell {
       configureModel: () => this.configureModel(),
       restartCore: () => this.restartCore(),
       setupPython: () => this.setupPython(),
+      showCoreLogs: () => this.log.showStderr(),
       restoreCheckpoint: () => this.restoreCheckpoint(),
       acceptAll: () => this.acceptAllProposals(),
       rejectAll: () => this.rejectAllProposals(),

@@ -131,6 +131,11 @@
         "category": "Bee Code"
       },
       {
+        "command": "beeCode.core.showStderr",
+        "title": "Show Python core logs",
+        "category": "Bee Code"
+      },
+      {
         "command": "beeCode.exportDiagnostics",
         "title": "Export diagnostics (redacted)",
         "category": "Bee Code"
