@@ -119,7 +119,7 @@ npm run typecheck      # tsc --noEmit + 面板侧 checkJs，必须单独跑（es
 
 ```bash
 conda activate beeagent          # Python 3.11；也可用任意 venv
-pip install -e ".[dev]"          # httpx / pydantic / pytest
+pip install -e ".[dev]"          # httpx / pydantic
 ```
 
 壳会按下面的顺序自动找内核（`PYTHONPATH` 自动注入，`cwd` 默认工作区根）：
@@ -168,10 +168,9 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 npm run package        # → bee-code-0.0.1.vsix（14 个文件，约 80 KB）
 ```
 
-`.vscodeignore` 已排除 `src/`、`docs/`、`tests/`、`node_modules/`、`__pycache__`；`vscode:prepublish` 走 `--production`（压缩 + 去 sourcemap），开发版与发布版体积差 7 倍。
+`.vscodeignore` 已排除 `src/`、`docs/`、`node_modules/`、`__pycache__`；`vscode:prepublish` 走 `--production`（压缩 + 去 sourcemap），开发版与发布版体积差 7 倍。
 
 ## 许可证
 
 [MIT](LICENSE)。欢迎 Issue / PR。
 
-- [用户验收测试 / User acceptance testing](docs/testing.md)

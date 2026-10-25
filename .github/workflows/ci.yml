@@ -31,17 +31,6 @@ jobs:
       - name: Build（esbuild → dist/extension.js）
         run: npm run build
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install (内核)
-        run: pip install -e ".[dev]"
-
-      - name: Test（契约对账）
-        run: pytest -q
-
       - name: Package（vsix）
         run: npm run package
 

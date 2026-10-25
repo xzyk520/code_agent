@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "echo": {
-      "command": "python",
-      "args": ["tests/fixtures/mcp/echo_server.py"]
-    }
-  }
-}

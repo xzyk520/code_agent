@@ -119,7 +119,7 @@ The core (`beecode/`) is a Python package that runs the agent loop, tool executi
 
 ```bash
 conda activate beeagent          # Python 3.11; any venv works
-pip install -e ".[dev]"          # httpx / pydantic / pytest
+pip install -e ".[dev]"          # httpx / pydantic
 ```
 
 The shell locates the core automatically in this order (`PYTHONPATH` is injected, `cwd` defaults to the workspace root):
@@ -153,7 +153,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | Protocol and contract (`beecode/ipc.py` + `shell.py` + `protocol/contract.json`) | ✅ Bidirectional RPC works; both sides reconcile the contract at startup |
 | Agent loop, prompts, retrieval, tools, patches, guards | ✅ Implemented (read/search/symbols/diagnostics, proposals, checkpoints, permission engine and sandbox tiers, subagents, sessions) |
 | Packaging and distribution (sidecar / bootstrap) | ⬜ See [docs/development.en.md](docs/development.en.md) |
-| CI (typecheck + build + pytest + vsix) | ✅ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| CI (typecheck + build + vsix) | ✅ See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 ## Docs
 
@@ -169,10 +169,9 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 npm run package        # → bee-code-<version>.vsix
 ```
 
-`.vscodeignore` already excludes `src/`, `docs/`, `tests/`, `node_modules/`, `tools/`, `scripts/`, and `__pycache__`; `vscode:prepublish` runs `--production` (minified, no sourcemaps).
+`.vscodeignore` already excludes `src/`, `docs/`, `node_modules/`, `tools/`, `scripts/`, and `__pycache__`; `vscode:prepublish` runs `--production` (minified, no sourcemaps).
 
 ## License
 
 [MIT](LICENSE). Issues and PRs are welcome.
 
-- [用户验收测试 / User acceptance testing](docs/testing.md)

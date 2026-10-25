@@ -80,7 +80,6 @@ bee-code/
 │  ├─ apply/ pending/ guard/     # ⬜ 补丁解析、待审状态机、预算守卫
 │  └─ mcp/ skills/               # ⬜ MCP 客户端、Skill 加载
 ├─ protocol/contract.json        # ✅ 协议唯一真相（方法/参数/返回字段），两侧启动时对账
-├─ tests/                        # ◐ python/test_contract.py ✅；shell/ (@vscode/test-electron) ⬜
 ├─ scripts/                      # ⬜ bootstrap.py（找 Python/建 venv）+ build_sidecar.py（PyInstaller）
 └─ .github/workflows/            # ⬜ ci.yml / release.yml
 ```
@@ -145,7 +144,7 @@ npm run build              # 生产构建
 
 # 2) 内核依赖（conda 环境已就绪，见上）
 conda activate beeagent
-pip install -e ".[dev]"    # httpx / pydantic / pytest；不加 -e 也能 `python -m beecode`
+pip install -e ".[dev]"    # httpx / pydantic；不加 -e 也能 `python -m beecode`
 
 # 3) 只调壳、不碰内核
 #    设置 beeCode.core.mode = "mock" → 内置假内核（流式、pending、取消都能验）
@@ -160,7 +159,6 @@ pip install -e ".[dev]"    # httpx / pydantic / pytest；不加 -e 也能 `pytho
 #    launch.json 两个配置：① Extension（壳，Node 调试） ② Python: Attach（内核，:5679）
 
 # 6) 质量与打包
-pytest -q                                  # 内核单测（无编辑器，可 CI 直跑）
 npx @vscode/vsce package                   # 生成 .vsix
 ```
 

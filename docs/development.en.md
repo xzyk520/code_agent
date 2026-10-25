@@ -51,7 +51,7 @@ python -m beecode
 npm run package
 ```
 
-`vscode:prepublish` uses esbuild production mode. `.vscodeignore` excludes `src/`, `docs/`, `tests/`, and `node_modules/`.
+`vscode:prepublish` uses esbuild production mode. `.vscodeignore` excludes `src/`, `docs/`, and `node_modules/`.
 
 ## Python distribution
 
