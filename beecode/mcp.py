@@ -109,7 +109,7 @@ async def load_mcp_manager(log: Any = None) -> MCPManager:
     if not path.is_file():
         return MCPManager([], {})
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         if log:
             log(f"MCP config parse failed: {exc}")
