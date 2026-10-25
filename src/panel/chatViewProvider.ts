@@ -2,34 +2,34 @@ import * as vscode from "vscode";
 import type { DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
 import { tr, type Locale } from "../i18n";
 
-/** 面板要显示的一条消息（shell 侧的视图模型，与协议无关） */
+/** A message to display in the panel (shell-side view model, independent of the protocol) */
 export interface ChatMessageView {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
-  /** 回看用的思考内容（不进入模型上下文）；数组 = 按模型调用分段 */
+  /** Reasoning content kept for review (not part of the model context); array = split per model call */
   reasoning?: string | Array<{ round: number; text: string }>;
-  /** 助手回答里附带的图 */
+  /** Diagrams attached to the assistant answer */
   diagrams?: DiagramDto[];
 }
 
 export interface AttachedContext {
   path: string;
-  /** 未保存文档（untitled:）没有真实路径，内核不应拿它去 fs.read */
+  /** Unsaved documents (untitled:) have no real path, so the core must not pass it to fs.read */
   untitled?: boolean;
   startLine?: number;
   endLine?: number;
   text?: string;
   kind: "selection" | "file" | "diagnostic" | "focus";
-  /** focus 附件对应的符号名 */
+  /** Symbol name for a focus attachment */
   symbol?: string;
 }
 
 /**
- * 校验 webview 发来的「打开读取的文件」请求。
+ * Validates the "open a read file" request sent by the webview.
  *
- * webview 消息不可信：只接受工作区相对路径，拒绝绝对路径与 `..`，
- * 行号必须是有限数字（截断成整数），非法输入一律返回 undefined。
+ * Webview messages are untrusted: only workspace-relative paths are accepted; absolute paths and `..` are rejected;
+ * line numbers must be finite numbers (truncated to integers); invalid input always returns undefined.
  */
 export function parseOpenRead(raw: unknown): { path: string; startLine?: number; endLine?: number } | undefined {
   const msg = (raw ?? {}) as { path?: unknown; startLine?: unknown; endLine?: unknown };
@@ -56,13 +56,13 @@ export interface PanelHandlers {
   onRejectAll(): void;
   onShowProposal(id: string): void;
   onAbort(): void;
-  /** 点击「已读取文件」chip：打开文件并定位到行范围 */
+  /** Clicking a "read file" chip: open the file and jump to the line range */
   onOpenRead(path: string, startLine?: number, endLine?: number): void;
-  /** 撤销某条命令造成的文件修改 */
+  /** Undo the file changes made by a specific command */
   onRestoreCommand(id: string): void;
-  /** 重试上一轮失败的请求 */
+  /** Retry the request that failed in the previous turn */
   onRetryTurn(): void;
-  /** 附件被截断/忽略时给用户的明确提示（toast + 面板系统消息） */
+  /** Explicit notice to the user when an attachment is truncated or ignored (toast + panel system message) */
   onAttachmentNotice(message: string): void;
 }
 
@@ -93,22 +93,22 @@ export interface PanelState {
 }
 
 /**
- * 侧边栏面板宿主（WebviewView）。
+ * Sidebar panel host (WebviewView).
  *
- * 职责边界很硬：只做「渲染 + 把用户动作转成回调」。
- * 不拼提示词、不解析模型输出、不保存会话状态机 —— 那些都在内核里。
+ * The responsibility boundary is strict: only render and turn user actions into callbacks.
+ * No prompt building, model-output parsing, or session state machine — those live in the core.
  *
- * 安全：CSP nonce、localResourceRoots 限定到 media/、消息 type 白名单、
- * **不信任**前端传来的路径（面板只能传提案 id）。
+ * Security: CSP nonce, localResourceRoots limited to media/, message type allowlist,
+ * and paths from the front end are **never trusted** (the panel may only pass proposal ids).
  */
-/** 面板最多保留多少条消息（超出时从最早的丢，避免 DOM 无限增长） */
+/** Maximum number of messages the panel keeps (oldest are dropped beyond this to keep the DOM from growing without bound) */
 const MAX_MESSAGES = 300;
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = "beeCode.chatView";
 
   private view: vscode.WebviewView | undefined;
-  /** view 作用域的监听器：重建 view 时先释放旧的 */
+  /** View-scoped listeners: release the old ones before rebuilding the view */
   private viewDisposables: vscode.Disposable[] = [];
   private state: PanelState = {
     locale: "en",
@@ -128,7 +128,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.state.locale = locale;
   }
 
-  /** 切换用户可见语言；模型提示词不受影响 */
+  /** Switch the user-visible language; model prompts are unaffected */
   setLocale(locale: Locale): void {
     if (this.state.locale === locale) return;
     this.state.locale = locale;
@@ -161,8 +161,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
   }
 
-  /** 重载后恢复聊天记录（不改状态机，只回填视图） */
-  /** 设置每轮轨迹（用户消息下的折叠卡片用） */
+  /** Restore the chat history after a reload (does not change the state machine, only refills the view) */
+  /** Set the per-turn trace (used by the collapsible card under each user message) */
   setTurns(turns: TurnView[]): void {
     this.state.turns = turns;
   }
@@ -172,10 +172,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.state.commandCheckpoints = [];
     this.state.retryAvailable = false;
     if (mode) this.state.mode = mode;
-    this.pushState();   // 全量快照：重载/切换会话时才需要
+    this.pushState();   // Full snapshot: only needed on reload or session switch
   }
 
-  /** 当前完整消息列表（会话持久化用） */
+  /** Current full message list (used for session persistence) */
   getMessages(): ChatMessageView[] {
     return [...this.state.messages];
   }
@@ -202,7 +202,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   addMessage(message: ChatMessageView): void {
     this.state.messages.push(message);
     if (this.state.messages.length > MAX_MESSAGES) {
-      // 裁剪后必须整表重发，否则 DOM 与 state 会漂移
+      // After trimming, the whole list must be resent, otherwise the DOM and state drift apart
       this.state.messages = this.state.messages.slice(-MAX_MESSAGES);
       this.pushState();
       return;
@@ -210,19 +210,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "message", message });
   }
 
-  /** 流式增量：高频，所以只发增量，不重发整份状态 */
+  /** Streaming delta: high frequency, so send only the delta instead of resending the full state */
   appendDelta(text: string): void {
     this.post({ type: "delta", text });
   }
 
-  /** 子代理进度：前端按 id 聚合成可折叠卡片 */
+  /** Subagent progress: the front end groups entries by id into collapsible cards */
   subagentEvent(params: UiSubagentParams): void {
     this.post({ type: "subagent", ...params });
   }
 
 
-  /** 计划清单（大任务时由 update_plan 产生） */
-  /** 命令级 checkpoint：命令结束后显示变更文件与撤销按钮 */
+  /** Plan checklist (produced by update_plan for large tasks) */
+  /** Command-level checkpoint: shows the changed files and an undo button after a command finishes */
   commandCheckpointEvent(item: { id: string; files: string[]; command: string }): void {
     const list = this.state.commandCheckpoints ?? [];
     if (!list.some((entry) => entry.id === item.id)) {
@@ -251,27 +251,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "plan", ...params });
   }
 
-  /** 模型生成了一张图（前端懒加载 Mermaid 后渲染） */
+  /** The model generated a diagram (the front end lazily loads Mermaid and renders it) */
   diagramEvent(params: UiDiagramParams): void {
     this.post({ type: "diagram", diagram: params.diagram });
   }
 
-  /** 思考内容增量（按模型调用分段，不进上下文） */
+  /** Reasoning delta (split per model call, not added to the context) */
   reasoningDelta(text: string, round = 1): void {
     this.post({ type: "reasoning", text, round });
   }
 
-  /** 新一轮开始：清掉上一轮的思考块 */
+  /** A new turn starts: clear the previous turn reasoning block */
   resetReasoning(): void {
     this.post({ type: "reasoningReset" });
   }
 
-  /** 任务级成本（本轮 token / 耗时） */
+  /** Task-level cost (tokens / elapsed time for this turn) */
   setCost(text: string): void {
     this.post({ type: "cost", text });
   }
 
-  /** 会话轨迹：按意图列出每一轮，点击跳转到对应消息 */
+  /** Session trace: lists each turn by intent; clicking jumps to the matching message */
   setTrajectory(items: Array<{ id: string; mode: Mode; intent: string; detail?: string }>): void {
     this.post({ type: "trajectory", items });
   }
@@ -280,7 +280,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "trajectoryItem", item });
   }
 
-  /** 重载/切换会话时恢复计划 */
+  /** Restore the plan on reload or session switch */
   setPlan(plan: PlanStep[] | undefined): void {
     this.state.plan = plan;
     if (plan && plan.length > 0) this.post({ type: "plan", steps: plan });
@@ -290,7 +290,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.state.plan;
   }
 
-  /** 提案被接受：把计划里提到该文件的步骤标记完成（纯 UI 推断） */
+  /** A proposal was accepted: mark plan steps mentioning this file as done (pure UI inference) */
   planStepDone(path: string): void {
     const plan = this.state.plan;
     if (!plan || plan.length === 0) return;
@@ -309,7 +309,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (changed) this.post({ type: "plan", steps: plan });
   }
 
-  /** agent 读了文件：面板加一个文件名 chip（编辑器里由 FocusHighlighter 画范围） */
+  /** The agent read a file: add a file-name chip to the panel (the editor draws the range via FocusHighlighter) */
   readEvent(params: UiReadParams): void {
     this.post({ type: "reads", item: params });
   }
@@ -319,7 +319,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "proposals", items });
   }
 
-  /** 追加附件（带数量/体积上限）；返回是否成功，超限会给明确提示 */
+  /** Add an attachment (with count/size limits); returns whether it succeeded and gives an explicit notice when a limit is exceeded */
   addAttachment(attachment: AttachedContext): boolean {
     const limits = this.attachmentLimits;
     if (this.state.attachments.length >= limits.maxCount) {
@@ -371,12 +371,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "attachments", items: [] });
   }
 
-  /** 轻量状态：只带 mode/busy/hint，不动消息列表（高频调用，别每次重发整段历史） */
+  /** Lightweight status: carries only mode/busy/hint and leaves the message list alone (called often, so do not resend the whole history each time) */
   pushStatus(): void {
     this.post({ type: "status", mode: this.state.mode, busy: this.state.busy, hint: this.state.hint ?? "" });
   }
 
-  /** 全量快照：webview 刚加载 / 恢复会话 / 消息被裁剪时才发 */
+  /** Full snapshot: sent only when the webview just loaded, a session is restored, or messages were trimmed */
   pushState(): void {
     this.post({ type: "state", state: this.state });
   }
@@ -385,7 +385,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void this.view?.webview.postMessage(message);
   }
 
-  /** 前端消息必须过白名单；只接受 id / 纯文本，不接受路径 */
+  /** Front-end messages must pass the allowlist; only ids and plain text are accepted, never paths */
   private onMessage(raw: unknown): void {
     const msg = raw as {
       type?: unknown;
@@ -452,7 +452,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       default:
-        // 未知消息一律忽略，不报错、不回显
+        // Unknown messages are ignored: no error, no echo
         return;
     }
   }

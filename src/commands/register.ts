@@ -4,7 +4,7 @@ import type { Logger } from "../log";
 import { toWorkspaceRelative } from "../paths";
 import { readFocusForSelection } from "../focus";
 
-/** 命令只依赖这个接口，不依赖 extension.ts 的内部实现（避免循环依赖） */
+/** Commands depend only on this interface, not on extension.ts internals (avoids circular dependencies) */
 export interface CommandDeps {
   panel: ChatViewProvider;
   log: Logger;
@@ -13,39 +13,39 @@ export interface CommandDeps {
   restoreCheckpoint(): Promise<void>;
   acceptAll(): Promise<void>;
   rejectAll(): Promise<void>;
-  /** 重载中断后：让 agent 接着上次的工具调用继续 */
+  /** After an interrupted reload: let the agent continue from the last tool call */
   continueTurn(): Promise<void>;
-  /** 重载中断后：让 agent 重新生成提案 */
+  /** After an interrupted reload: ask the agent to regenerate the proposal */
   regenerateProposal(): Promise<void>;
-  /** 新建会话（当前会话的完整记录仍留在磁盘） */
+  /** Start a new session (the full record of the current session stays on disk) */
   newSession(): Promise<void>;
-  /** 从历史会话里挑一个继续 */
+  /** Pick a past session to continue */
   pickSession(): Promise<void>;
-  /** 清除「记住这次选择」里存下的确认项 */
+  /** Clear the remembered approvals stored by "remember this choice" */
   clearRemembered(): void;
-  /** 取消「全部接受」的后续处理（已完成的不回滚） */
+  /** Cancel the remaining work of "accept all" (already-completed items are not rolled back) */
   cancelAcceptAll(): void;
-  /** 仅 mock 模式：模拟内核崩溃，验证「内核挂了」的处理路径 */
+  /** Mock mode only: simulate a core crash to exercise the "core died" handling path */
   crashMock(): void;
-  /** 测试模型端点连通性（GET /models） */
+  /** Test model endpoint connectivity (GET /models) */
   testModel(): Promise<void>;
-  /** 配置子代理（端点/模型/密钥，留空 = 沿用主代理） */
+  /** Configure the subagent (endpoint/model/key; leave blank to inherit from the main agent) */
   configureSubagent(): Promise<void>;
   configureSummary(): Promise<void>;
-  /** 测试子代理端点连通性 */
+  /** Test subagent endpoint connectivity */
   testSubagent(): Promise<void>;
-  /** 清除子代理密钥 */
+  /** Clear the subagent key */
   clearSubagentKey(): Promise<void>;
-  /** 切换当前工作区信任状态（信任 ⇄ 只读） */
+  /** Toggle the current workspace trust state (trusted ⇄ read-only) */
   toggleTrust(): Promise<void>;
-  /** 重新检测 docker 沙箱（装好 Docker 后不必重启窗口） */
+  /** Re-detect the docker sandbox (no need to restart the window after installing Docker) */
   redetectSandbox(): Promise<void>;
-  /** 清除凭据库里保存的 API Key */
+  /** Clear the API key stored in the credential store */
   clearModelKey(): Promise<void>;
   pickFiles(): Promise<void>;
-  /** 光标附近代码的读取策略（附加选区命令用） */
+  /** Read strategy for code near the cursor (used by the attach-selection commands) */
   focus: { fallbackLines: number; maxLines: number };
-  /** 在编辑器里高亮 agent 实际读取的范围 */
+  /** Highlight in the editor the ranges the agent actually read */
   highlightFocus(focus: import("../focus").FocusInfo | undefined): void;
   exportDiagnostics(): Promise<void>;
   /** Choose the user-visible UI language (zh/en). */
@@ -53,10 +53,10 @@ export interface CommandDeps {
 }
 
 /**
- * 命令注册表。
+ * Command registry.
  *
- * 每个命令都是薄薄一层：拿上下文 → 调 panel/deps。
- * `context.subscriptions` 统一兜底释放，避免扩展重载时残留监听。
+ * Each command is a thin layer: take the context, then call panel/deps.
+ * `context.subscriptions` handles disposal centrally so no listeners leak on extension reload.
  */
 export function registerCommands(context: vscode.ExtensionContext, deps: CommandDeps): string[] {
   const ids: string[] = [];
@@ -67,17 +67,17 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         const startedAt = Date.now();
         try {
           await handler(...args);
-          // 成功也留痕：用户说"点了没反应"时，这条 debug 是唯一线索
-          deps.log.debug(`命令 ${id} 完成（${Date.now() - startedAt}ms）`);
+          // Log success too: when a user says "nothing happened", this debug line is the only clue
+          deps.log.debug(`Command ${id} completed in ${Date.now() - startedAt}ms`);
         } catch (err) {
           const name = err instanceof Error ? err.name : "";
           const message = err instanceof Error ? err.message : String(err);
           if (name === "CancelledError") {
-            // 用户主动取消不该弹红框
-            deps.log.debug(`命令 ${id} 被取消`);
+            // A user-initiated cancellation should not show a red error box
+            deps.log.debug(`Command ${id} cancelled`);
             return;
           }
-          deps.log.error(`命令 ${id} 失败: ${message}`);
+          deps.log.error(`Command ${id} failed: ${message}`);
           void vscode.window.showErrorMessage(`Bee Code: ${message}`);
         }
       }),
@@ -122,12 +122,12 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
 }
 
 /**
- * 命令对账：已注册的 id ↔ `package.json` 里 `contributes.commands` 声明的 id。
+ * Command reconciliation: registered ids ↔ ids declared in `contributes.commands` of `package.json`.
  *
- * 两边不一致的后果很隐蔽：
- *   - 注册了但没声明 → 命令面板里看不到（只能靠快捷键/编程调用）
- *   - 声明了但没注册 → 用户点了报 `command not found`
- * 和协议契约（contract.json）一样，这类"两份清单"必须自动对账。
+ * Mismatches fail quietly:
+ *   - Registered but not declared → invisible in the Command Palette (only reachable via keybinding/programmatic call)
+ *   - Declared but not registered → clicking it reports `command not found`
+ * Like the protocol contract (contract.json), these "two lists" must be reconciled automatically.
  */
 export function undeclaredCommands(context: vscode.ExtensionContext, registered: string[]): string[] {
   const contributes = (context.extension?.packageJSON as { contributes?: { commands?: Array<{ command?: string }> } })
@@ -139,8 +139,8 @@ export function undeclaredCommands(context: vscode.ExtensionContext, registered:
   const declaredSet = new Set(declared);
   const registeredSet = new Set(registered);
   const problems: string[] = [];
-  for (const id of registeredSet) if (!declaredSet.has(id)) problems.push(`已注册但 package.json 未声明：${id}`);
-  for (const id of declaredSet) if (!registeredSet.has(id)) problems.push(`package.json 已声明但未注册：${id}`);
+  for (const id of registeredSet) if (!declaredSet.has(id)) problems.push(`Registered but not declared in package.json: ${id}`);
+  for (const id of declaredSet) if (!registeredSet.has(id)) problems.push(`Declared in package.json but not registered: ${id}`);
   return problems;
 }
 
@@ -155,7 +155,7 @@ async function attachSelection(
     return;
   }
 
-  // 只读文档（diff 侧、预览侧）不该出现在这里
+  // Read-only documents (diff/preview sides) should not reach this point
   if (editor.document.uri.scheme !== "file" && editor.document.uri.scheme !== "untitled") {
     void vscode.window.showInformationMessage("Bee Code: 请在普通文件里选择代码。");
     return;
@@ -167,7 +167,7 @@ async function attachSelection(
   let added = 0;
   let functions = 0;
   for (const selection of selections) {
-    // 有选区：整个选区落在同一函数里就扩成整个函数；没有选区：取光标所在的整个函数
+    // With a selection: expand to the whole function if the entire selection lies inside it; without one: take the whole function at the cursor
     const focus = await readFocusForSelection(editor, selection, {
       fallbackLines: deps.focus.fallbackLines,
       maxLines: deps.focus.maxLines,
@@ -175,7 +175,7 @@ async function attachSelection(
     if (!focus) continue;
 
     const key = `${focus.path}:${focus.startLine}:${focus.endLine}`;
-    if (seen.has(key)) continue;   // 多光标重叠时别重复附加
+    if (seen.has(key)) continue;   // Do not attach duplicates when multiple cursors overlap
     seen.add(key);
 
     deps.panel.addAttachment({
@@ -185,12 +185,12 @@ async function attachSelection(
       text: focus.text,
       kind: "focus",
       ...(focus.symbol ? { symbol: focus.symbol } : {}),
-      // 未保存文档没有真实路径：标出来，内核就不会拿它去 fs.read
+      // Unsaved documents have no real path: flag it so the core will not pass it to fs.read
       untitled: focus.untitled,
     });
     added += 1;
     if (focus.kind === "function") functions += 1;
-    // 最后附加的那一段画高亮（多光标时只标最后一段，避免花屏）
+    // Highlight the last attached range (with multiple cursors, highlight only the last one to avoid visual clutter)
     deps.highlightFocus(focus);
   }
 
