@@ -239,7 +239,7 @@ npx @vscode/vsce package                   # 生成 .vsix
 
 ## 18. Git 与 GitHub 工作流
 
-### 18.1 初始化（本仓库当前状态：已 `git init`，无 remote）
+### 18.1 初始化（本仓库当前状态：已 `git init`，remote 指向 GitHub）
 
 ```bash
 git init -b main                 # 已完成
@@ -274,13 +274,13 @@ npm run package:linux
 
 每个 VSIX 只包含对应平台的 runtime；不要把所有平台塞进一个包。
 
-### 18.3 版本与发布
+### 18.4 版本与发布
 
 - SemVer：`1.x` 阶段如需破坏性变更，必须在 `CHANGELOG.md` 标注 **BREAKING**。
 - 发布链路：`git tag v1.0.0` → CI 构建 `.vsix` → GitHub Release 附 `.vsix` → `vsce publish`。
 - Marketplace 发布需要一个 Azure DevOps PAT（`Marketplace > Manage` 权限）与在 `publisher` 下注册的扩展名；`README.md` 会作为详情页正文渲染，因此**本文件同时就是商店页**。
 
-### 18.4 开源协作常规件
+### 18.5 开源协作常规件
 
 `LICENSE`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SECURITY.md`（披露渠道与「密钥泄露如何处理」）、`.github/ISSUE_TEMPLATE/*`、`Dependabot`。
 
