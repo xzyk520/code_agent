@@ -94,7 +94,11 @@ export class PythonCore implements CoreApi {
       onLine: (line) => this.onLine(line),
       onError: (err) => this.failAll(new Error(`Failed to start the core: ${err.message}`)),
       onExit: (code, reason) => {
-        this.failAll(new Error(`The core exited (${reason})`));
+        this.failAll(
+          new Error(
+            `The core exited (${reason}). Check beeCode.core.pythonPath and that the interpreter can import the beecode dependencies; see "Bee Code · Core stderr" for the traceback.`,
+          ),
+        );
         for (const handler of this.exitHandlers) handler(code, reason);
       },
     });
