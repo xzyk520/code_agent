@@ -2209,7 +2209,7 @@ class Shell {
     const current = this.config.summary;
 
     const baseUrl = await vscode.window.showInputBox({
-      title: tr(this.config.language, "Bee Code · 摘要模型 1/4 端点", "Bee Code · Summary model 1/4 Endpoint"),
+      title: tr(this.config.language, "Bee Code · 摘要模型 1/3 端点", "Bee Code · Summary model 1/3 Endpoint"),
       prompt: main.baseUrl
         ? tr(this.config.language, `留空 = 沿用主模型（${main.baseUrl}）`, `Leave empty = use the main model (${main.baseUrl})`)
         : tr(this.config.language, "OpenAI 兼容 base_url；留空 = 沿用主模型", "OpenAI-compatible base_url; leave empty = use the main model"),
@@ -2219,7 +2219,7 @@ class Shell {
     if (baseUrl === undefined) return;
 
     const model = await vscode.window.showInputBox({
-      title: tr(this.config.language, "Bee Code · 摘要模型 2/4 模型", "Bee Code · Summary model 2/4 Model"),
+      title: tr(this.config.language, "Bee Code · 摘要模型 2/3 模型", "Bee Code · Summary model 2/3 Model"),
       prompt: main.model
         ? tr(this.config.language, `留空 = 沿用主模型（${main.model}）；建议用便宜/快的模型`, `Leave empty = use the main model (${main.model}); a cheaper/faster model is recommended`)
         : tr(this.config.language, "留空 = 沿用主模型", "Leave empty = use the main model"),
@@ -2238,7 +2238,7 @@ class Shell {
             ? tr(this.config.language, "留空 = 沿用主模型密钥", "Leave empty = use the main model's key")
             : tr(this.config.language, "留空则回退到主模型密钥", "Leave empty to fall back to the main model's key");
     const apiKey = await vscode.window.showInputBox({
-      title: tr(this.config.language, "Bee Code · 摘要模型 3/4 API Key", "Bee Code · Summary model 3/4 API Key"),
+      title: tr(this.config.language, "Bee Code · 摘要模型 3/3 API Key", "Bee Code · Summary model 3/3 API Key"),
       prompt: keyHint,
       password: true,
       ignoreFocusOut: true,
@@ -2272,7 +2272,7 @@ class Shell {
       `Summary model configured: ${this.config.summary.model || "(inherit main)"} @ ${this.config.summary.baseUrl || "(inherit main)"}`,
     );
     void vscode.window.showInformationMessage(
-      tr(this.config.language, `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`, `Bee Code: Summary model configuration complete${probe.ok ? `（${probe.message}）` : ""}.`),
+      tr(this.config.language, `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`, `Bee Code: Summary model configuration complete${probe.ok ? ` (${probe.message})` : ""}.`),
     );
 
     // Configuration listeners don't fire when only the key changed, so trigger a hot reload here
