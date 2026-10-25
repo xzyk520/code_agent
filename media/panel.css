@@ -944,3 +944,22 @@ textarea,
 .jump-latest.hidden {
   display: none;
 }
+
+
+/* Live turn activity: classifying / thinking / running a tool */
+.activity {
+  margin: 0 8px 4px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: max(10px, calc(var(--bee-font-size, 14px) - 2px));
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.08));
+  border-left: 2px solid var(--vscode-focusBorder);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity.hidden {
+  display: none;
+}

@@ -39,6 +39,7 @@
     rejectAll: must("rejectAll", HTMLButtonElement),
     retry: must("retry", HTMLButtonElement),
     jumpLatest: must("jump-latest", HTMLButtonElement),
+    activity: must("activity", HTMLElement),
     sessions: must("sessions", HTMLButtonElement),
     modelSettings: must("model-settings", HTMLButtonElement),
     language: must("language", HTMLButtonElement),
@@ -75,6 +76,11 @@
     updateJumpButton();
   });
   el.jumpLatest.addEventListener("click", () => scrollToLatest(true));
+  /** @param {string} text */
+  function setActivity(text) {
+    el.activity.textContent = text;
+    el.activity.classList.toggle("hidden", !text);
+  }
   /** @type {"zh" | "en"} */
   let locale = "zh";
   /** @param {string} zh @param {string} en */
@@ -1326,6 +1332,10 @@
         renderProposals(next.proposals || []);
         el.hint.textContent = next.hint || "";
         scrollToLatest(true);
+        break;
+      }
+      case "activity": {
+        setActivity(typeof msg.text === "string" ? msg.text : "");
         break;
       }
       case "locale": {

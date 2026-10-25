@@ -3021,6 +3021,7 @@ class Shell {
       case "ui.delta": {
         const p = params as UiDeltaParams;
         this.assistantBuffer += p.text;   // for persistence (the panel's streaming display is a separate path)
+        this.panel.setActivity(tr(this.config.language, "生成回复…", "Generating reply…"));
         this.panel.appendDelta(p.text);
         return;
       }
@@ -3067,6 +3068,13 @@ class Shell {
           void this.sessions.updateStatus(this.sessionId, "thinking");
         }
         const p = params as UiToolParams;
+        this.panel.setActivity(
+          tr(
+            this.config.language,
+            `${p.status === "start" ? "运行工具" : p.status === "end" ? "完成" : "失败"}：${p.name}`,
+            `${p.status === "start" ? "Running tool" : p.status === "end" ? "Done" : "Failed"}: ${p.name}`,
+          ),
+        );
         this.panel.setHint(tr(this.config.language, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}: ${p.name}`));
         return;
       }
@@ -3085,6 +3093,7 @@ class Shell {
       case "ui.reasoning": {
         const p = params as UiReasoningParams;
         const round = typeof p.round === "number" && p.round > 0 ? p.round : 1;
+        this.panel.setActivity(tr(this.config.language, "思考中…", "Thinking…"));
         this.reasoningSegments.set(round, (this.reasoningSegments.get(round) ?? "") + p.text);
         const existing = this.turnTrace.find((step) => step.type === "reasoning" && step.round === round);
         if (existing) existing.text = (existing.text ?? "") + p.text;
@@ -3094,6 +3103,7 @@ class Shell {
       }
       case "ui.intent": {
         const p = params as UiIntentParams;
+        this.panel.setActivity(tr(this.config.language, "分析请求…", "Analyzing request…"));
         // Intent analysis itself isn't displayed (it produces no message); the panel only updates the mode badge and hint
         this.turnScale = p.scale === "large" ? "large" : "small";
         this.turnIntent = {
@@ -3319,6 +3329,7 @@ class Shell {
   private setBusy(busy: boolean): void {
     this.busy = busy;
     this.panel.setBusy(busy);
+    this.panel.setActivity(busy ? tr(this.config.language, "思考中…", "Thinking…") : "");
     this.updateStatus();
   }
 

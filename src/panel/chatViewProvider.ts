@@ -216,6 +216,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.pushStatus();
   }
 
+  /** Live progress line shown while a turn is classifying / thinking / running a tool */
+  setActivity(text: string): void {
+    this.post({ type: "activity", text });
+  }
+
   addMessage(message: ChatMessageView): void {
     this.state.messages.push(message);
     if (this.state.messages.length > MAX_MESSAGES) {
@@ -527,6 +532,7 @@ function buildHtml(webview: vscode.Webview, mediaRoot: vscode.Uri, locale: Local
   <section id="attachments" class="attachments"></section>
   <section id="reads" class="reads" aria-label="${tr(locale, "Files recently read by the agent", "Files recently read by the agent")}"></section>
   <div id="retry-banner" class="retry-banner hidden" role="status"></div>
+  <div id="activity" class="activity hidden" role="status"></div>
   <div class="conversation">
     <section id="messages" class="messages" aria-live="polite" aria-atomic="false" aria-busy="false" aria-label="${tr(locale, "Conversation", "Conversation")}"></section>
     <button id="jump-latest" class="jump-latest hidden" type="button">${tr(locale, "跳到最新", "Jump to latest")}</button>
