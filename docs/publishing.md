@@ -154,6 +154,58 @@ npm run package:mac
 npx @vscode/vsce publish --target darwin-arm64
 ```
 
+## 9.1 GitHub Actions 自动发布（免下载）
+
+在 GitHub 仓库添加 Secret：
+
+```text
+Settings → Secrets and variables → Actions
+→ New repository secret
+Name: VSCE_PAT
+Value: <Azure DevOps PAT>
+```
+
+PAT 权限：
+
+```text
+Marketplace → Manage
+```
+
+workflow：
+
+```text
+.github/workflows/release-vsix.yml
+```
+
+有两个触发方式：
+
+### 推送 v* tag
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+会自动：
+
+```text
+构建三平台 VSIX
+→ 创建 GitHub Release
+→ 发布到 VS Code Marketplace
+```
+
+### 手动运行
+
+GitHub Actions → Build platform VSIX → Run workflow：
+
+```text
+publish_marketplace: true
+```
+
+也会构建并发布，不需要把 100MB 的 Linux 包下载到本地。
+
+如果没有配置 `VSCE_PAT`，发布 job 会失败；构建和 GitHub Release 仍然不受影响。
+
 ## 10. 版本冲突
 
 Marketplace 拒绝重复版本：

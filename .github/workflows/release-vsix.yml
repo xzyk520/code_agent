@@ -2,6 +2,12 @@ name: Build platform VSIX
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: "Publish the built VSIX files to the VS Code Marketplace"
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
@@ -76,3 +82,51 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: true
           files: artifacts/**/*.vsix
+
+
+  publish-marketplace:
+    name: Publish to VS Code Marketplace
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_marketplace == 'true')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+
+      - name: Publish platform packages
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(artifacts/*/*.vsix)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No VSIX files found" >&2
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            case "$file" in
+              *win32-x64*) target=win32-x64 ;;
+              *win32-arm64*) target=win32-arm64 ;;
+              *darwin-arm64*) target=darwin-arm64 ;;
+              *darwin-x64*) target=darwin-x64 ;;
+              *linux-x64*) target=linux-x64 ;;
+              *linux-arm64*) target=linux-arm64 ;;
+              *)
+                echo "Unknown target for $file" >&2
+                exit 1
+                ;;
+            esac
+            echo "Publishing $file ($target)"
+            vsce publish --packagePath "$file" --target "$target" --skip-duplicate
+          done
