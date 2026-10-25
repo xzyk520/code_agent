@@ -1,4 +1,3 @@
-# 统一换行符，避免 Windows/macOS 协作时整文件 diff
 * text=auto eol=lf
 
 *.png binary
