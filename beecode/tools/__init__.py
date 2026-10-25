@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..shell import ShellClient
@@ -28,8 +28,8 @@ class ToolContext:
     """执行工具时需要的一切外部能力（由 loop 注入）。"""
 
     shell: ShellClient
-    #: 生成提案：path, content, summary → proposal id
-    propose: Callable[[str, str, str], Awaitable[str]]
+    #: 生成提案：path, content, summary, expected_version → proposal id
+    propose: Callable[..., Awaitable[str]]
     #: 写内核日志（stderr）
     log: Callable[[str], None]
     #: 派生子代理：task, max_steps → 结论（None = 当前 agent 不允许派生子代理）
@@ -40,6 +40,8 @@ class ToolContext:
     diagram: Callable[[dict[str, Any]], None] | None = None
     #: 命令执行等长工具的外层时限（秒），供 run_command 设置 RPC 超时
     long_tool_timeout_s: float = 600.0
+    #: 本轮已读文件 → 读取时 version；edit_file 用它做 read-before-edit / 冲突检测
+    observed: dict[str, int | None] = field(default_factory=dict)
 
 
 ToolFn = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -159,6 +161,22 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
             ),
         ),
         ToolSpec(
+            "edit_file",
+            "局部修改已有文件：只提供 old_string/new_string，不重写整个文件。"
+            "必须先 read_file 读文件；old_string 必须唯一匹配，除非 replace_all=true。"
+            "修改会先变成提案，用户接受后才落盘。新建文件或全量重写用 propose_edit。",
+            _obj(
+                {
+                    "path": _str("工作区相对路径"),
+                    "old_string": _str("要替换的原文（带足够上下文，默认要求唯一）"),
+                    "new_string": _str("替换后的文本；可以为空表示删除"),
+                    "replace_all": _bool("是否替换所有匹配（默认 false）"),
+                    "summary": _str("一句话说明改了什么（可选）"),
+                },
+                ["path", "old_string", "new_string"],
+            ),
+        ),
+        ToolSpec(
             "update_plan",
             "更新任务计划（大任务先列 3-6 步，之后逐项更新状态）。面板会显示成清单。"
 "收尾前务必再把最后一步（总结）标为 done。",
@@ -265,6 +283,7 @@ def build_tools(role: str = "main", *, allow_spawn: bool = True) -> dict[str, To
         "find_references": builtin.find_references,
         "get_diagnostics": builtin.get_diagnostics,
         "propose_edit": builtin.propose_edit,
+        "edit_file": builtin.edit_file,
         "run_command": builtin.run_command,
         "command_wait": builtin.command_wait,
         "command_terminate": builtin.command_terminate,

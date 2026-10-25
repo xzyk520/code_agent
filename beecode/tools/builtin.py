@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import uuid
 from typing import Any
@@ -48,6 +49,10 @@ def _shape_text(text: str, *, head: int = HEAD_LINES, tail: int = TAIL_LINES) ->
     return shaped, omitted
 
 
+def _path_key(path: str) -> str:
+    return posixpath.normpath(path.replace("\\", "/"))
+
+
 def _line_count(text: str) -> int:
     return text.count("\n") + 1 if text else 0
 
@@ -58,6 +63,7 @@ async def read_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
         start_line=_int_or_none(params.get("start_line")),
         end_line=_int_or_none(params.get("end_line")),
     )
+    ctx.observed[_path_key(str(params["path"]))] = result.version
     shaped, omitted = _shape_text(result.text)
     payload: dict[str, Any] = {
         "path": params["path"],
@@ -172,6 +178,43 @@ async def propose_edit(ctx: ToolContext, params: dict[str, Any]) -> dict[str, An
         raise ValueError("content 为空：请提供修改后的完整文件内容")
     proposal_id = await ctx.propose(path, content, summary)
     return {"ok": True, "proposalId": proposal_id, "path": path, "summary": summary}
+
+
+async def edit_file(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:
+    """局部替换：只把 old_string/new_string 交给模型，完整内容由内核读盘后生成提案。"""
+    path = str(params["path"])
+    old_string = str(params.get("old_string") or "")
+    new_string = str(params.get("new_string") or "")
+    replace_all = bool(params.get("replace_all", False))
+    summary = str(params.get("summary") or "").strip()
+    if not old_string:
+        raise ValueError("old_string 不能为空")
+    if old_string == new_string:
+        raise ValueError("old_string 和 new_string 相同，没有修改")
+    path_key = _path_key(path)
+    if path_key not in ctx.observed:
+        raise ValueError(f"不能修改 {path}：文件尚未读取；请先 read_file，然后重试")
+    current = await ctx.shell.read_file(path)
+    if ctx.observed.get(path_key) != current.version:
+        raise ValueError(f"不能修改 {path}：文件已被修改；请重新 read_file，然后重试")
+    count = current.text.count(old_string)
+    if count == 0:
+        raise ValueError(f"不能修改 {path}：old_string 在文件中找不到")
+    if count > 1 and not replace_all:
+        raise ValueError(f"不能修改 {path}：old_string 匹配 {count} 处；请提供更长的上下文，或设置 replace_all=true")
+    updated = current.text.replace(old_string, new_string) if replace_all else current.text.replace(old_string, new_string, 1)
+    if updated == current.text:
+        raise ValueError("修改后内容没有变化")
+    if not summary:
+        summary = f"edit_file: {path}（替换 {count if replace_all else 1} 处）"
+    proposal_id = await ctx.propose(path, updated, summary, expected_version=current.version)
+    return {
+        "ok": True,
+        "proposalId": proposal_id,
+        "path": path,
+        "replacements": count if replace_all else 1,
+        "mode": "replace_all" if replace_all else "single",
+    }
 
 
 async def run_command(ctx: ToolContext, params: dict[str, Any]) -> dict[str, Any]:

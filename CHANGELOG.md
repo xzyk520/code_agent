@@ -7,6 +7,8 @@
 
 ### Added
 
+- **局部编辑 `edit_file`**：`old_string`/`new_string` + `replace_all`，要求先读文件、版本未变、
+默认唯一匹配；内核拼出完整内容后仍走提案审批，避免小改动整文件重写
 - **长命令 job**：`run_command` 不再有硬执行时限；首次等待 120s，未结束则进入后台并返回 `backgrounded`/`notice`，
 模型自行决定 `command_wait` 的轮询间隔；有新增输出返回全部新增，无新增返回 `noNewOutput=true`；`command_terminate` 停止，`command_list` 找回 job
 - **无 Docker 回退**：`sandbox-readonly` 对严格白名单命令走 host 受限只读（结果 `host-readonly`）；

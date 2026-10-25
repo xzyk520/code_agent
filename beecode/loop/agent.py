@@ -298,6 +298,7 @@ class AgentLoop:
         ctx = ToolContext(
             shell=self._shell,
             propose=self._propose or _no_propose,
+            observed=session.observed_files,
             log=self._log,
             long_tool_timeout_s=self._config.long_tool_timeout_s,
             spawn=(lambda task, steps: self._spawn(task, steps, session)) if self._spawn_enabled else None,
@@ -565,7 +566,7 @@ class AgentLoop:
                 })
                 messages.append({
                     "role": "user",
-                    "content": "你还没有提交任何文件修改。如果任务需要改代码，请调用 propose_edit 提交；"
+                    "content": "你还没有提交任何文件修改。如果任务需要改代码，请用 edit_file 做局部修改，或用 propose_edit 提交完整文件；"
                                "如果不需要改，请明确说明原因。",
                 })
                 streamed = await stream_model(round_index=stats.steps)
@@ -580,7 +581,7 @@ class AgentLoop:
                     for call in calls:
                         result = await self._execute(ctx, call, session, stats)
                         stats.tool_calls += 1
-                        if call.name == "propose_edit" and result.get("ok"):
+                        if call.name in ("propose_edit", "edit_file") and result.get("ok"):
                             stats.proposals += 1
                         messages.append(_tool_message(call, result))
                     streamed = await stream_model(round_index=stats.steps)
@@ -996,7 +997,7 @@ class AgentLoop:
         messages: list[dict[str, Any]],
     ) -> None:
         stats.tool_calls += 1
-        if call.name == "propose_edit" and result.get("ok"):
+        if call.name in ("propose_edit", "edit_file") and result.get("ok"):
             stats.proposals += 1
         self._emit_read(session, call, result)
 
@@ -1303,7 +1304,7 @@ class AgentLoop:
 
         隔离点：
           - 独立 Session / 独立上下文（它读几十个文件也不会污染主对话）
-          - 只读工具集（没有 propose_edit / spawn_subagent）
+          - 只读工具集（没有 propose_edit / edit_file / spawn_subagent）
           - 壳侧根据 `role: subagent` 收紧命令与写权限
           - 取消随父任务一起传播（同一个 asyncio 任务树）
         """
@@ -1458,7 +1459,7 @@ def _default_client(session: Session) -> OpenAIClient:
     )
 
 
-async def _no_propose(_path: str, _content: str, _summary: str) -> str:
+async def _no_propose(_path: str, _content: str, _summary: str, **_kwargs: object) -> str:
     raise RuntimeError("当前内核没有配置提案通道")
 
 
@@ -1586,6 +1587,16 @@ def _digest_tool_content(raw: str) -> dict[str, Any]:
             "kind": data.get("kind"),
             "title": data.get("title"),
             "note": "图已渲染；完整源码在助手消息的 diagrams 字段里",
+        }
+    if data.get("proposalId") and "replacements" in data:
+        return {
+            "digest": True,
+            "tool": "edit_file",
+            "proposalId": data.get("proposalId"),
+            "path": data.get("path"),
+            "replacements": data.get("replacements"),
+            "mode": data.get("mode"),
+            "note": "局部编辑提案已登记",
         }
     if "exitCode" in data:
         if data.get("jobId"):

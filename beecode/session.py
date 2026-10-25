@@ -31,6 +31,8 @@ class Session:
     messages: list[dict[str, Any]] = field(default_factory=list)
     #: 上一轮的意图分析结果（供下一轮判断是否延续）
     last_intent: dict[str, Any] | None = None
+    #: 已读文件 → 读取时 version；edit_file 的 read-before-edit / 冲突检测
+    observed_files: dict[str, int | None] = field(default_factory=dict)
 
     @classmethod
     def create(cls, session_id: str, mode: Mode, model_config: dict[str, Any], api_key: str | None) -> "Session":

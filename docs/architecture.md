@@ -632,7 +632,8 @@ async def run_turn(self, session, *, text, attachments, history, summary) -> Tur
 | `find_symbol` | 只读 | `query`, `max_results?` | 全工作区按名字找定义（LSP 优先，fallback 文本） |
 | `find_references` | 只读 | `path`, `symbol` | 引用位置（LSP） |
 | `get_diagnostics` | 只读 | `path?` | LSP 诊断（编译错误、lint） |
-| `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | **唯一改文件入口**：完整全文 → 提案 → 广播 `proposal.changed` |
+| `propose_edit` | 提案（不写盘） | `path`, `content`, `summary` | 新建/全量重写：完整全文 → 提案 → 广播 `proposal.changed` |
+| `edit_file` | 局部修改（不写盘） | `path`, `old_string`, `new_string`, `replace_all?`, `summary?` | 先读文件；唯一匹配（或 replace_all）；内核拼出完整新内容 → 提案 |
 | `run_command` | 执行 | `command`, `cwd?`, `timeout_ms?`, `sandbox?`, `justification?` | `sandbox-readonly`（默认，Docker 只读）→ `sandbox`（工作区可写）→ `sandbox-network`（+网络）→ `host`（真实系统）；每级升级都审批，可仅本次/本会话 |
 | `spawn_subagent` | 派生 | `task`, `max_steps?` | 只读子代理（独立上下文），只回传结论；仅主代理可用 |
 | `update_plan` | 面板 | `steps[]` | 3-6 步计划；状态只由模型更新，收尾前要求把最后一步标 done |
@@ -1766,7 +1767,7 @@ Run(npm test *)     命令：`*` 结尾 = 前缀匹配；否则精确匹配
 | 项 | 实现 |
 | --- | --- |
 | 工具 | `spawn_subagent(task, max_steps?)`，只在**主代理**的工具集里 |
-| 子代理工具集 | 8 个只读工具（无 `propose_edit`、无 `spawn_subagent`）→ **不能无限嵌套** |
+| 子代理工具集 | 只读工具 + 命令 job 控制（无 `propose_edit` / `edit_file`、无 `spawn_subagent`）→ **不能无限嵌套** |
 | 上下文 | 独立 `Session`，只把 ≤8KB 的结论回传主代理 |
 | 角色 | 子代理的 `ShellClient` 带 `role: "subagent"`，壳侧策略自动收紧（§12.5.5） |
 | 步数 | 默认 8、上限 12；父轮次 `abort` 会级联取消子代理 |

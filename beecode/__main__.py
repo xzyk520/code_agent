@@ -282,7 +282,7 @@ def _shell() -> ShellClient:
     return shell
 
 
-async def _propose(path: str, content: str, summary: str) -> str:
+async def _propose(path: str, content: str, summary: str, *, expected_version: int | None = None) -> str:
     """把模型给出的完整文件内容登记为提案，并通知壳。
 
     - 先读一次当前文件拿 `version`：接受时作为 expectedVersion，防止覆盖用户新编辑
@@ -295,7 +295,13 @@ async def _propose(path: str, content: str, summary: str) -> str:
         current = await _shell().read_file(path)
         base_text = current.text
         base_version = current.version
+        if expected_version is not None and current.version != expected_version:
+            raise ValueError(f"{path} 已被修改（版本 {current.version} != {expected_version}）；请重新读取后再修改")
+    except ValueError:
+        raise
     except Exception as exc:  # noqa: BLE001 - 新文件或读取失败都不该阻断提案
+        if expected_version is not None:
+            raise ValueError(f"{path} 在修改前被删除或无法读取；请重新读取后再修改") from exc
         _log(f"proposal: 读取 {path} 失败（按新文件处理）：{exc}")
 
     additions, deletions = _count_changes(base_text, content)
