@@ -4,19 +4,19 @@ import type { Logger } from "./log";
 import { toWorkspaceRelative } from "./paths";
 
 /**
- * 隐式选区高亮：把"agent 实际读了哪一段"画在编辑器里。
+ * Implicit selection highlighting: draws "which section the agent actually read" in the editor.
  *
- * 为什么需要：自动附加的代码用户在面板里看不到范围（只有一条 hint），
- * 不画出来就没法判断"它是不是看错地方了"。
+ * Why it is needed: for automatically attached code the user cannot see the range in the panel (only a
+ * one-line hint), so without drawing it there is no way to tell "did it look at the wrong place".
  *
- * 行为：
- *   - 发送/附加时高亮对应编辑器里的行范围（虚线框 + 概览标尺）
- *   - 5 秒后自动淡出；下一次高亮会先清掉上一处
- *   - 只对当前可见、路径匹配的编辑器生效（切到别的文件不会乱画）
+ * Behaviour:
+ *   - On send/attach, highlight the corresponding line range in the editor (dashed border + overview ruler)
+ *   - Fades out automatically after 5 seconds; the next highlight clears the previous one first
+ *   - Only applies to the currently visible editor whose path matches (switching to another file does not draw randomly)
  */
 export class FocusHighlighter implements vscode.Disposable {
   private readonly decoration: vscode.TextEditorDecorationType;
-  /** agent 读取过的范围：可叠加，颜色比"用户光标"更淡 */
+  /** Ranges the agent has read: stackable, and fainter than "the user's cursor" */
   private readonly readDecoration: vscode.TextEditorDecorationType;
   private lastEditor: vscode.TextEditor | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -49,10 +49,10 @@ export class FocusHighlighter implements vscode.Disposable {
   }
 
   /**
-   * agent 通过工具读了某个文件。
+   * The agent read some file through a tool.
    *
-   * 返回 true = 编辑器打开着、范围已画；false = 文件没打开（或没给范围），
-   * 调用方应退化为"文件名高亮"（面板 chip）。
+   * Returns true = the editor is open and the range was drawn; false = the file is not open (or no range
+   * was given), in which case the caller should degrade to a "file name highlight" (panel chip).
    */
   addRead(info: { path: string; startLine?: number; endLine?: number }): boolean {
     if (this.disposed) return false;
@@ -65,7 +65,7 @@ export class FocusHighlighter implements vscode.Disposable {
     const range = new vscode.Range(start, 0, end, editor.document.lineAt(end).text.length);
     const key = editor.document.uri.fsPath;
     const entry = this.readState.get(key) ?? { editor, ranges: [] };
-    // 同一范围重复读时只保留一条；总数封顶，避免装饰过多
+    // Keep only one entry for a repeated read of the same range; cap the total to avoid too many decorations
     if (!entry.ranges.some((r) => r.start.line === range.start.line && r.end.line === range.end.line)) {
       entry.ranges.push(range);
       if (entry.ranges.length > 12) entry.ranges.shift();
@@ -79,7 +79,7 @@ export class FocusHighlighter implements vscode.Disposable {
     return true;
   }
 
-  /** 清掉所有"agent 读取"高亮 */
+  /** Clear all "agent read" highlights */
   clearReads(): void {
     if (this.readTimer) {
       clearTimeout(this.readTimer);
@@ -89,13 +89,13 @@ export class FocusHighlighter implements vscode.Disposable {
       try {
         entry.editor.setDecorations(this.readDecoration, []);
       } catch {
-        // 编辑器已关闭
+        // The editor has been closed
       }
       this.readState.delete(key);
     }
   }
 
-  /** 高亮某个 focus 范围；`focus` 为空等价于清除 */
+  /** Highlight a focus range; an empty `focus` is equivalent to clearing */
   show(focus: FocusInfo | undefined): void {
     if (this.disposed) return;
     this.clear();
@@ -132,7 +132,7 @@ export class FocusHighlighter implements vscode.Disposable {
     }
   }
 
-  /** 清掉上一处高亮（幂等） */
+  /** Clear the previous highlight (idempotent) */
   clear(): void {
     if (this.timer) {
       clearTimeout(this.timer);
@@ -142,7 +142,7 @@ export class FocusHighlighter implements vscode.Disposable {
       try {
         this.lastEditor.setDecorations(this.decoration, []);
       } catch {
-        // 编辑器可能已关闭，忽略
+        // The editor may have been closed; ignore
       }
       this.lastEditor = undefined;
     }
@@ -158,7 +158,7 @@ export class FocusHighlighter implements vscode.Disposable {
   }
 }
 
-/** 找到路径匹配的可见编辑器（focus.path 是工作区相对路径） */
+/** Find the visible editor whose path matches (focus.path is a workspace-relative path) */
 export function findEditor(relativePath: string): vscode.TextEditor | undefined {
   const normalized = relativePath.replace(/\\/g, "/");
   for (const editor of vscode.window.visibleTextEditors) {

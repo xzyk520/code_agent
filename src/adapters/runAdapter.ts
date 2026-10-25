@@ -10,44 +10,44 @@ import type { RunParams, RunResult } from "../protocol";
 
 const execFileAsync = promisify(execFile);
 
-/** 输出上限：stdout / stderr 各 64KB（模型不需要更多，多了反而撑爆上下文） */
+/** Output cap: 64KB each for stdout / stderr (the model needs no more; extra would only blow up the context) */
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MAX_TIMEOUT_MS = 3_600_000;
-/** 命令长度上限：防止把整个脚本塞进来（真脚本应该写文件） */
+/** Command length cap: stops an entire script being pasted in here (a real script belongs in a file) */
 const MAX_COMMAND_LENGTH = 4_000;
 
-/** 这些环境变量会把密钥递给子进程，必须剔除 */
+/** These environment variables hand secrets to the child process and must be stripped */
 const SECRET_ENV_PATTERN = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i;
 
 export interface RunPolicy {
-  /** 沙箱模式：off=直接跑；docker=容器内；auto=有 docker 就用 */
+  /** Sandbox mode: off = run directly; docker = inside a container; auto = use docker when available */
   sandbox: "off" | "docker" | "auto";
   dockerImage: string;
 }
 
 export interface RunAdapterDeps {
   logger: Logger;
-  /** 每次调用时现取策略（配置可能刚改过） */
+  /** Policy is fetched fresh on every call (the config may have just changed) */
   policy: () => RunPolicy;
-  /** 沙箱可用性探测（缓存由调用方负责） */
+  /** Sandbox availability probe (caching is the caller's responsibility) */
   dockerAvailable: () => boolean;
 }
 
 /**
- * 命令执行（L1 + 可选 L3 沙箱）。
+ * Command execution (L1 + optional L3 sandbox).
  *
- * 安全措施（缺一不可）：
- *   1. cwd 必须落在工作区内
- *   2. 环境变量清洗（剔除 *KEY* / *TOKEN* / *SECRET* …）
- *   3. 超时 + **整棵进程树** kill（否则 npm 的子进程会活下来）
- *   4. 输出限幅（各 64KB）
- *   5. 非交互（stdin 立即关闭，防止 git 之类卡住等输入）
- *   6. 可选 docker 沙箱：无网络、只读根文件系统、限制内存/PID、丢弃全部 capability
+ * Safety measures (none optional):
+ *   1. cwd must lie inside the workspace
+ *   2. Environment scrubbing (strip *KEY* / *TOKEN* / *SECRET* …)
+ *   3. Timeout + killing the **whole process tree** (otherwise npm's child processes survive)
+ *   4. Output clamping (64KB each)
+ *   5. Non-interactive (stdin closed immediately, so tools like git don't hang waiting for input)
+ *   6. Optional docker sandbox: no network, read-only root filesystem, memory/PID limits, all capabilities dropped
  */
 export function createRunAdapter(deps: RunAdapterDeps) {
   return {
-    /** 启动一个不设硬超时的后台命令；由壳侧用 wait/kill 管理 */
+    /** Start a background command with no hard timeout; the shell side manages it via wait/kill */
     async start(params: RunParams, ctx: InboundRequestContext): Promise<CommandJob> {
       return startJob(deps, params, ctx);
     },
@@ -123,7 +123,7 @@ export function createRunAdapter(deps: RunAdapterDeps) {
   };
 }
 
-// ───────────────────────── 执行器 ─────────────────────────
+// ───────────────────────── Executors ─────────────────────────
 
 interface RawResult {
   exitCode: number;
@@ -148,7 +148,7 @@ function runDirect(
       cwd,
       shell: true,
       windowsHide: true,
-      // POSIX 上独立进程组，超时才能连同子进程一起杀
+      // Own process group on POSIX, so a timeout can kill the children along with the parent
       detached: process.platform !== "win32",
       env: sanitizedEnv(),
       stdio: ["ignore", "pipe", "pipe"],
@@ -194,13 +194,13 @@ function runDirect(
 }
 
 /**
- * docker 沙箱：
- *   --network none        基础沙箱：无网络（防外联/下载）
- *   --network bridge      sandbox-network：允许出网，其余限制不变
- *   --read-only           根文件系统只读，只有工作区与 /tmp 可写
- *   --cap-drop ALL        丢弃全部 capability
- *   --memory / --pids     限制资源，防 fork 炸弹
- *   no-new-privileges     禁止提权
+ * docker sandbox:
+ *   --network none        base sandbox: no network (no outbound calls/downloads)
+ *   --network bridge      sandbox-network: outbound network allowed, all other limits unchanged
+ *   --read-only           read-only root filesystem; only the workspace and /tmp are writable
+ *   --cap-drop ALL        drop every capability
+ *   --memory / --pids     resource limits, guarding against fork bombs
+ *   no-new-privileges     forbid privilege escalation
  */
 function runInDocker(
   deps: RunAdapterDeps,
@@ -215,7 +215,7 @@ function runInDocker(
 ): Promise<RawResult> {
   const relative = path.relative(root, cwd).split(path.sep).join("/");
   if (relative.startsWith("..")) {
-    // docker 只挂载工作区；工作区外的 cwd 无法被沙箱覆盖，不能假装隔离
+    // docker only mounts the workspace; a cwd outside it cannot be covered by the sandbox, so don't pretend it is isolated
     throw new Error("工作区外的目录无法在 docker 沙箱中执行：请在工作区内运行，或改用 off 模式（需自行承担风险）");
   }
   const workdir = relative ? `/workspace/${relative}` : "/workspace";
@@ -309,9 +309,9 @@ function runProcess(
   });
 }
 
-// ───────────────────────── 工具 ─────────────────────────
+// ───────────────────────── Utilities ─────────────────────────
 
-// ───────────────────────── 长命令 job ─────────────────────────
+// ───────────────────────── Long-running command jobs ─────────────────────────
 
 export interface CommandJobSnapshot {
   id: string;
@@ -331,11 +331,11 @@ export interface CommandJob {
   startedAt: number;
   wait(ms: number): Promise<CommandJobSnapshot>;
   kill(): void;
-  /** 子进程结束时通知一次（用于命令结束后落 checkpoint） */
+  /** Notify once when the child process exits (used to record a checkpoint after the command finishes) */
   onFinished(callback: () => void): void;
-  /** 不消费游标地查看当前状态；用于 command_list */
+  /** Inspect the current state without consuming the cursor; used by command_list */
   peek(): CommandJobSnapshot;
-  /** 消费自上次 readNew 以来的输出；不会重复返回旧内容 */
+  /** Consume output since the last readNew; old content is never returned again */
   readNew(): CommandJobSnapshot;
   tail(maxChars?: number): string;
 }
@@ -560,7 +560,7 @@ function killTree(child: ReturnType<typeof spawn>, logger: Logger): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      // Windows 没有进程组信号，必须用 taskkill /T 杀整棵树
+      // Windows has no process-group signals, so taskkill /T is required to kill the whole tree
       execFile("taskkill", ["/pid", String(pid), "/T", "/F"], () => undefined);
     } else {
       process.kill(-pid, "SIGKILL");
@@ -570,7 +570,7 @@ function killTree(child: ReturnType<typeof spawn>, logger: Logger): void {
     try {
       child.kill("SIGKILL");
     } catch {
-      /* 已经退出 */
+      /* already exited */
     }
   }
 }
@@ -578,7 +578,7 @@ function killTree(child: ReturnType<typeof spawn>, logger: Logger): void {
 function stopContainer(name: string): void {
   const attempt = (remaining: number): void => {
     void execFileAsync("docker", ["rm", "-f", name]).catch(() => {
-      // 容器可能还没创建完：短重试，避免 abort 后容器才开始跑
+      // The container may not be created yet: retry briefly, so it doesn't start running only after the abort
       if (remaining > 0) setTimeout(() => attempt(remaining - 1), 150);
     });
   };
@@ -591,7 +591,7 @@ function sanitizedEnv(): NodeJS.ProcessEnv {
     if (SECRET_ENV_PATTERN.test(key)) continue;
     env[key] = value;
   }
-  // 保留最基本的可执行环境
+  // Keep the bare minimum executable environment
   env.PATH = process.env.PATH ?? "";
   return env;
 }
@@ -609,7 +609,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.trunc(value), min), max);
 }
 
-/** docker 可用性探测（结果缓存由调用方负责） */
+/** Docker availability probe (caching the result is the caller's responsibility) */
 export async function detectDocker(): Promise<boolean> {
   try {
     await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], { timeout: 3_000 });

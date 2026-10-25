@@ -2,13 +2,14 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 /**
- * 路径策略的**唯一权威**在壳这一侧（README §4.5.4 第 3 条）。
+ * The **single authority** for path policy lives on the shell side (README §4.5.4 item 3).
  *
- * 内核传来的 path 可能是「模型编造的」，所以要独立校验：
- *   - 必须在某个工作区根之内（防止 ../ 穿越、符号链接逃逸）
- *   - 不允许命中禁止清单（.git / .env / 私钥等）
+ * A path coming from the kernel may be "made up by the model", so validate it independently:
+ *   - it must be inside some workspace root (prevent ../ traversal and symlink escapes)
+ *   - it must not hit the forbidden list (.git / .env / private keys etc.)
  *
- * 注意：这里是「纵深防御」的一环，内核侧也应校验；两边都做才叫纵深。
+ * Note: this is one layer of "defence in depth"; the kernel side should validate too. Only doing both
+ * counts as depth.
  */
 
 const FORBIDDEN_SEGMENTS = new Set([".git", "node_modules", ".venv", "__pycache__"]);
@@ -29,12 +30,12 @@ export class PathPolicyError extends Error {
   }
 }
 
-/** 把内核给的相对/绝对路径解析成 Uri，并做边界校验 */
+/** Resolve the relative/absolute path given by the kernel into a Uri and check the boundary */
 /**
- * 被用户显式批准的工作区外根目录（内存态，不持久化）。
+ * Roots outside the workspace that the user has explicitly approved (in-memory, not persisted).
  *
- * 用途：用户对"工作区外路径"点了允许之后，把它的目录加进来，
- * 后续同一目录的访问不再反复弹窗。重启即失效（保守）。
+ * Purpose: once the user allows an "outside workspace path", add its directory here so later access
+ * to the same directory does not prompt again. Gone after a restart (conservative).
  */
 const approvedRoots = new Set<string>();
 
@@ -69,7 +70,7 @@ export function resolveTarget(rawPath: string): vscode.Uri {
 
   const inside = roots.some((root) => isInside(root, candidate));
   if (!inside) {
-    // 用户显式批准过的目录（工作区外）允许通过；其余仍然拒绝
+    // Directories the user explicitly approved (outside the workspace) are allowed through; the rest are still rejected
     if (!isApprovedRoot(candidate)) {
       throw new PathPolicyError(`路径越界（不在工作区内）：${rawPath}`);
     }
@@ -89,13 +90,13 @@ export function resolveTarget(rawPath: string): vscode.Uri {
   return vscode.Uri.file(candidate);
 }
 
-/** 仅做边界判断，不抛错（给「列表/搜索」这种软过滤场景用） */
+/** Boundary check only, never throws (for soft-filtering cases such as "list/search") */
 export function isInside(root: string, target: string): boolean {
   const rel = path.relative(root, target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-/** 统一成工作区相对路径（正斜杠），给内核与 UI 用 */
+/** Normalize to a workspace-relative path (forward slashes) for the kernel and the UI */
 export function toWorkspaceRelative(absPath: string): string {
   const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => path.resolve(f.uri.fsPath));
   for (const root of roots) {

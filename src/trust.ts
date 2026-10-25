@@ -2,15 +2,15 @@ import * as vscode from "vscode";
 import type { Logger } from "./log";
 
 /**
- * 工作区信任：**我们自己的记录**，与 VS Code 的 Workspace Trust 叠加。
+ * Workspace trust: **our own record**, layered on top of VS Code's Workspace Trust.
  *
- * 为什么要自己记：
- *   - VS Code 的信任粒度是"整个文件夹"，我们可能需要更细（只读 vs 可写）
- *   - 用户第一次打开陌生仓库时，我们也要问一次"是否允许它改文件/跑命令"
+ * Why keep our own record:
+ *   - VS Code's trust granularity is "the whole folder", while we may need something finer (read-only vs writable)
+ *   - When the user first opens an unfamiliar repository we also want to ask once "may it change files / run commands"
  *
- * 判定规则：
- *   - VS Code 判定不受信任 → 我们也不信任（不覆盖更严格的一侧）
- *   - VS Code 受信任但没有我们的记录 → 提示一次并记录
+ * Decision rules:
+ *   - VS Code says untrusted -> we also do not trust (never override the stricter side)
+ *   - VS Code trusts it but we have no record -> prompt once and record the answer
  */
 
 const TRUST_KEY = "beeCode.trustedWorkspaces";
@@ -30,10 +30,10 @@ export function isTrusted(context: vscode.ExtensionContext): boolean {
 }
 
 /**
- * 启动时确保有信任记录。返回最终是否受信任。
+ * Ensure a trust record exists at startup. Returns whether the workspace is ultimately trusted.
  *
- * 只在"VS Code 已信任 + 我们没有记录"时问一次；用户拒绝会记录 false，
- * 之后可用命令「信任此工作区」改回来。
+ * It only asks once, when "VS Code trusts it + we have no record"; a refusal is recorded as false and can
+ * later be changed back with the "Trust This Workspace" command.
  */
 export async function ensureWorkspaceTrust(
   context: vscode.ExtensionContext,
@@ -79,7 +79,7 @@ export async function setTrust(
   await context.globalState.update(TRUST_KEY, map);
 }
 
-/** 供命令「信任此工作区 / 取消信任」使用 */
+/** Used by the "Trust This Workspace / Revoke Trust" command */
 export async function toggleWorkspaceTrust(
   context: vscode.ExtensionContext,
   logger: Logger,

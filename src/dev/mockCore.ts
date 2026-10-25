@@ -18,16 +18,16 @@ const CHUNK_SIZE = 24;
 const CHUNK_DELAY_MS = 40;
 
 /**
- * 假内核（dev/mock）：只用来调壳，不实现任何 agent 逻辑。
+ * Fake kernel (dev/mock): only for exercising the shell; implements no agent logic at all.
  *
- * 为什么值得存在：壳的问题（面板、流式、取消、提案渲染、RPC 分帧）
- * 不应该被 Python 侧的问题挡住。配 `beeCode.core.mode = "mock"` 即可。
+ * Why it earns its place: shell problems (panel, streaming, cancellation, proposal rendering, RPC
+ * framing) should not be blocked by problems on the Python side. Set `beeCode.core.mode = "mock"` to use it.
  *
- * 它刻意覆盖了壳的三条关键路径：
- *   - 流式输出（`ui.delta` 分片）
- *   - 工具阶段（`ui.tool` start/end）—— 用于验证「重载时停在工具调用」的恢复分支
- *   - 待审提案（`proposal.changed` + `proposal.read/decide`）
- * 以及一条手工路径：`simulateCrash()` 触发 `exitHandlers`，验证内核崩溃的处理。
+ * It deliberately covers three critical shell paths:
+ *   - streaming output (`ui.delta` chunks)
+ *   - the tool phase (`ui.tool` start/end) -- to verify the recovery branch for "reload while stopped at a tool call"
+ *   - pending proposals (`proposal.changed` + `proposal.read/decide`)
+ * plus one manual path: `simulateCrash()` fires `exitHandlers` to verify kernel-crash handling.
  */
 export class MockCore implements CoreApi {
   readonly kind = "mock" as const;
@@ -38,16 +38,17 @@ export class MockCore implements CoreApi {
 
   private readonly notificationHandlers = new Set<CoreNotificationHandler>();
   private readonly exitHandlers = new Set<CoreExitHandler>();
-  /** 定时器 → 它的 resolve：取消时要主动唤醒等待者，否则 await 永远不返回 */
+  /** Timer -> its resolve: on cancellation the waiters must be woken up, otherwise the awaits never return */
   private readonly timers = new Map<NodeJS.Timeout, () => void>();
   private cancelled = false;
-  /** 假的"虚拟文件"内容：proposal.read 从这里取 */
+  /** Fake "virtual file" contents: proposal.read reads from here */
   private readonly proposals = new Map<string, string>();
   private disposed = false;
 
   /**
-   * @param proposalPath 提供「提案指向哪个真实文件」；没提供就退回 `src/example.ts`（可能就是假的，
-   *   点「查看」会看到空 diff —— 所以真实使用时由 extension 注入一个存在的文件）
+   * @param proposalPath supplies "which real file the proposal points at"; if omitted it falls back to
+   *   `src/example.ts` (which may not exist, so "View" would show an empty diff -- in real use the
+   *   extension injects a file that exists)
    */
   constructor(
     private readonly logger: Logger,
@@ -77,13 +78,13 @@ export class MockCore implements CoreApi {
       this.notify("ui.delta", { sessionId: params.sessionId, text: chunk });
     }
 
-    // 工具阶段：让「重载时停在工具调用」这条恢复分支可以被真实验证
+    // Tool phase: lets the "reload while stopped at a tool call" recovery branch be verified for real
     this.notify("ui.tool", { sessionId: params.sessionId, name: "read_file", status: "start" });
     await this.sleep(CHUNK_DELAY_MS * 4);
     if (this.cancelled) return this.finishCancelled(params.sessionId);
     this.notify("ui.tool", { sessionId: params.sessionId, name: "read_file", status: "end", summary: "mock 读取完成" });
 
-    // 造一个提案：虚拟文件内容存在这里，用户点「查看」时由 proposal.read 拉走
+    // Fabricate a proposal: the virtual file content is stored here and pulled by proposal.read when the user clicks "View"
     const id = `mock_${Date.now()}`;
     this.proposals.set(
       id,
@@ -112,7 +113,7 @@ export class MockCore implements CoreApi {
   }
 
   async contextSummarize(_params: ContextSummarizeParams): Promise<ContextSummarizeResult> {
-    // mock 没有模型：返回空摘要，壳会自动退回机械摘要
+    // The mock has no model: return an empty summary and the shell falls back to the mechanical summary
     return { summary: "", pairs: [] };
   }
 
@@ -128,7 +129,7 @@ export class MockCore implements CoreApi {
 
   async abort(_sessionId: string): Promise<void> {
     this.cancelled = true;
-    // 立刻唤醒所有在等 sleep 的地方 —— 否则要等一个 chunk 周期才停
+    // Wake everything waiting on sleep immediately -- otherwise stopping waits one full chunk cycle
     this.clearTimers();
   }
 
@@ -136,7 +137,7 @@ export class MockCore implements CoreApi {
     this.logger.info("[mock] model.reload");
   }
 
-  /** 幂等：清掉所有在飞的定时器即可，没有进程需要等 */
+  /** Idempotent: just clear all in-flight timers; there is no process to wait for */
   async shutdown(): Promise<void> {
     this.cancelled = true;
     this.disposed = true;
@@ -153,7 +154,7 @@ export class MockCore implements CoreApi {
     return { dispose: () => this.exitHandlers.delete(handler) };
   }
 
-  /** 同步释放：不等待、不抛错、幂等 */
+  /** Synchronous release: no waiting, never throws, idempotent */
   dispose(): void {
     this.cancelled = true;
     this.disposed = true;
@@ -163,8 +164,8 @@ export class MockCore implements CoreApi {
   }
 
   /**
-   * 模拟内核崩溃：触发 `exitHandlers`，让壳走一遍「内核挂了」的处理路径。
-   * 只给 dev 命令用（`beeCode.dev.crashMock`）。
+   * Simulate a kernel crash: fires `exitHandlers` so the shell runs through the "kernel died" handling path.
+   * Only for dev commands (`beeCode.dev.crashMock`).
    */
   simulateCrash(reason = "mock 模拟崩溃"): void {
     this.logger.warn(`[mock] 模拟崩溃：${reason}`);
@@ -180,7 +181,7 @@ export class MockCore implements CoreApi {
     }
   }
 
-  // ───────────────────────── 内部 ─────────────────────────
+  // ───────────────────────── internals ─────────────────────────
 
   private async resolveProposalPath(): Promise<string> {
     if (this.proposalPath) {
@@ -188,7 +189,7 @@ export class MockCore implements CoreApi {
         const path = await this.proposalPath();
         if (path) return path;
       } catch {
-        /* 忽略：退回默认值 */
+        /* Ignore: fall back to the default */
       }
     }
     return "src/example.ts";
@@ -198,7 +199,7 @@ export class MockCore implements CoreApi {
     this.notify("ui.delta", { sessionId, text: "\n\n（已停止）" });
   }
 
-  /** 可取消的 sleep：登记定时器，取消时同时 clearTimeout 并 resolve */
+  /** Cancellable sleep: registers a timer and clears it plus resolves when cancelled */
   private sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -222,14 +223,14 @@ export class MockCore implements CoreApi {
       try {
         handler(method, params);
       } catch (err) {
-        // 一个 handler 抛错不该影响其他 handler 收通知
+        // One handler throwing should not stop other handlers from receiving the notification
         this.logger.warn(`[mock] 通知 ${method} 的 handler 抛错: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
 }
 
-/** 按 **code point** 切分：按 UTF-16 切会把 emoji / 生僻字劈成孤立代理，面板渲染成乱码 */
+/** Split by **code point**: splitting by UTF-16 would cut emoji / rare characters into lone surrogates, which the panel renders as garbage */
 function chunkText(text: string, size: number): string[] {
   const chars = Array.from(text);
   const chunks: string[] = [];

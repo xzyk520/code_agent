@@ -2,50 +2,52 @@ import type { ChatMessage } from "./protocol";
 import type { StoredMessage } from "./sessionStore";
 
 /**
- * 模型上下文构建：**完整历史 ≠ 模型上下文**。
+ * Model context construction: **the full history != the model context**.
  *
- * 落盘的 transcript 可以无限长（用户随时回看），但每次发给模型的必须是"够用且不爆"的子集。
- * 这一层就是那个裁剪器，纯函数、可单测，不依赖 vscode。
+ * The transcript on disk can grow without bound (the user may look back any time), but what is sent to
+ * the model each time must be a subset that is "enough without blowing up". This layer is that
+ * trimmer: pure functions, unit-testable, no vscode dependency.
  *
- * 分层（对应 docs/architecture.md §9.4）：
- *   L1 摘要摘要（早前轮次的压缩结果，≤1.5k token）
- *   L2 最近 N 条逐字（默认 8 条）
- *   L3 当前轮的附件/检索结果（由内核自己加，不在 history 里）
+ * Layers (matching docs/architecture.md §9.4):
+ *   L1 summary of summaries (compressed result of earlier turns, <=1.5k tokens)
+ *   L2 the last N messages verbatim (8 by default)
+ *   L3 attachments/retrieval results for the current turn (added by the kernel itself, not part of history)
  *
- * 触发压缩的时机：折叠后仍超预算 → 从最旧的逐字消息开始丢。
+ * When compaction triggers: still over budget after folding -> drop the oldest verbatim messages first.
  */
 
 export interface ContextBudget {
-  /** 最近多少条消息逐字保留 */
+  /** How many of the most recent messages to keep verbatim */
   recentMessages: number;
-  /** 历史部分（摘要 + 逐字）的 token 上限 */
+  /** Token limit for the history part (summary + verbatim) */
   maxTokens: number;
 }
 
 export const DEFAULT_BUDGET: ContextBudget = { recentMessages: 8, maxTokens: 6_000 };
 
 export interface BuiltContext {
-  /** 早前轮次的摘要（没有则 undefined） */
+  /** Summary of earlier turns (undefined when there is none) */
   summary?: string;
-  /** 逐字保留的消息 */
+  /** Messages kept verbatim */
   messages: ChatMessage[];
-  /** 被折叠进摘要 / 被丢弃的条数（可观测性） */
+  /** How many entries were folded into the summary / dropped (observability) */
   folded: number;
   estimatedTokens: number;
 }
 
 /**
- * 粗估 token：CJK 约 1 token/字，ASCII 约 1 token/4 字符。
+ * Rough token estimate: CJK is about 1 token per character, ASCII about 1 token per 4 characters.
  *
- * 不追求精确——真实分词在模型侧，这里只需要一个"别超预算"的量级。
+ * Precision is not the goal -- real tokenization happens on the model side; all that is needed here is
+ * an order of magnitude so we "do not exceed the budget".
  */
 export function estimateTokens(text: string): number {
   let cjk = 0;
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
-    if (code >= 0x2e80 && code <= 0x9fff) cjk += 1; // 中日韩
-    else if (code >= 0xac00 && code <= 0xd7af) cjk += 1; // 韩文
-    else if (code >= 0xff00 && code <= 0xffef) cjk += 1; // 全角标点
+    if (code >= 0x2e80 && code <= 0x9fff) cjk += 1; // CJK
+    else if (code >= 0xac00 && code <= 0xd7af) cjk += 1; // Korean
+    else if (code >= 0xff00 && code <= 0xffef) cjk += 1; // full-width punctuation
   }
   const ascii = text.length - cjk;
   return Math.ceil(cjk + ascii / 4);
@@ -69,7 +71,7 @@ export function buildContext(
   let kept = recent.map((m) => ({ role: m.role, text: m.text, ...(m.diagrams ? { diagrams: m.diagrams } : {}) }) as ChatMessage);
   let folded = older.length;
 
-  // 摘要本身可能就超预算：**保留最新的行**（越靠后越新），从最旧的行开始丢
+  // The summary itself may be over budget: **keep the newest lines** (later = newer) and drop from the oldest
   if (summary) {
     const summaryTokens = estimateTokens(summary);
     if (summaryTokens > budget.maxTokens / 2) {
@@ -77,7 +79,7 @@ export function buildContext(
     }
   }
 
-  // 仍超预算：从最旧的逐字消息开始丢（允许清空——当前用户输入由调用方单独传 text）
+  // Still over budget: drop the oldest verbatim messages first (emptying is allowed -- the current user input is passed separately by the caller as text)
   const messageTokens = (m: ChatMessage): number =>
     estimateTokens(m.text) + (m.diagrams ?? []).reduce((sum, d) => sum + estimateTokens(d.source), 0);
   let tokens = (summary ? estimateTokens(summary) : 0) + kept.reduce((n, m) => n + messageTokens(m), 0);
@@ -91,11 +93,13 @@ export function buildContext(
 }
 
 /**
- * 机械摘要（不调模型）：提取"后续还用得上"的锚点。
+ * Mechanical summary (no model call): extract the anchors that "will still be useful later".
  *
- * 为什么不用 LLM 摘要：这一层要在同步路径上跑（面板一刷新就要算），
- * 而且重载后可能没有可用的模型。等内核实现了 `compact`，可以换成模型摘要，
- * 接口保持不变。机械摘要保住了最有用的三类信息：用户要什么、动过哪些文件、出过什么错。
+ * Why not use an LLM summary: this layer runs on the synchronous path (it must be computed as soon as
+ * the panel refreshes), and after a reload there may be no model available. Once the kernel implements
+ * `compact` the summary can be model-generated with this interface unchanged. The mechanical summary
+ * preserves the three most useful kinds of information: what the user wants, which files were touched,
+ * and which errors occurred.
  */
 export function summarize(messages: StoredMessage[], maxChars = 1_200): string {
   if (messages.length === 0) return "";
@@ -141,10 +145,12 @@ function clip(text: string, max: number): string {
 }
 
 /**
- * 摘要超预算时保留**较新**的部分：逐行从头部删，而不是截断字符串。
+ * When the summary is over budget, keep the **newer** part: delete line by line from the head rather
+ * than truncating the string.
  *
- * 摘要行按时间追加（旧 → 新），所以"保留开头"会丢掉最近结论；
- * 这里反过来，只丢最旧的几行，并在开头注明省略了多少行。
+ * Summary lines are appended chronologically (old -> new), so "keep the beginning" would lose the latest
+ * conclusions; this does the reverse, dropping only the oldest lines and noting at the top how many were
+ * omitted.
  */
 function truncateSummaryFromFront(text: string, maxTokens: number): string {
   if (estimateTokens(text) <= maxTokens) return text;
@@ -162,7 +168,7 @@ function truncateSummaryFromFront(text: string, maxTokens: number): string {
 
 function truncateToTokens(text: string, maxTokens: number): string {
   if (estimateTokens(text) <= maxTokens) return text;
-  // 按字符逐步逼近（够用即可，不做精确分词）
+  // Approximate character by character (good enough; no precise tokenization)
   let lo = 0;
   let hi = text.length;
   while (lo < hi) {

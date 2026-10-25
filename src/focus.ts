@@ -2,13 +2,13 @@ import * as vscode from "vscode";
 import { toWorkspaceRelative } from "./paths";
 
 /**
- * 光标/选区 → 要送给模型的代码块。
+ * Cursor/selection -> the code block to send to the model.
  *
- * 规则（用户明确要求）：
- *   1. 优先取**包含光标的整个函数**（含方法/构造函数）；
- *   2. 不在函数里 → 退化成"光标上下 N 行"；
- *   3. 函数太长（> maxLines）→ 也退化成上下 N 行，避免一次塞几千行；
- *   4. 选区同理：整个选区落在同一个函数里 → 扩成整个函数；跨函数/跨块 → 保留选区 ± 少量上下文。
+ * Rules (explicitly requested by the user):
+ *   1. Prefer the **entire function containing the cursor** (including methods/constructors);
+ *   2. Not inside a function -> degrade to "N lines above and below the cursor";
+ *   3. Function too long (> maxLines) -> also degrade to N lines above and below, to avoid sending thousands of lines at once;
+ *   4. Selections likewise: a selection that falls entirely inside one function -> expand to the whole function; spanning functions/blocks -> keep the selection +/- a little context.
  */
 
 export interface SymbolNode {
@@ -21,22 +21,22 @@ export interface SymbolNode {
 
 export interface FocusRange {
   startLine: number; // 1-based
-  endLine: number; // 1-based（含）
+  endLine: number; // 1-based (inclusive)
   kind: "function" | "block";
   symbol?: string;
-  /** 因为太长而被降级/截断 */
+  /** Downgraded/truncated because it was too long */
   truncated?: boolean;
 }
 
 export interface FocusInfo extends FocusRange {
   path: string;
-  /** 光标所在行（1-based） */
+  /** Line the cursor is on (1-based) */
   line: number;
   untitled?: boolean;
   text: string;
 }
 
-/** 只有这些 kind 才算"函数" */
+/** Only these kinds count as a "function" */
 const FUNCTION_KINDS = new Set<number>([
   vscode.SymbolKind.Function,
   vscode.SymbolKind.Method,
@@ -53,7 +53,7 @@ export function toSymbolNodes(symbols: readonly vscode.DocumentSymbol[]): Symbol
   }));
 }
 
-/** 找包含该行（1-based）的最内层函数 */
+/** Find the innermost function containing the given line (1-based) */
 export function findEnclosingFunction(nodes: readonly SymbolNode[], line: number): SymbolNode | undefined {
   let best: SymbolNode | undefined;
   for (const node of nodes) {
@@ -70,7 +70,7 @@ export function findEnclosingFunction(nodes: readonly SymbolNode[], line: number
   return best;
 }
 
-/** 纯函数：算出一个要读的范围（便于单测，不碰 vscode） */
+/** Pure function: compute the range to read (easy to unit test, no vscode involved) */
 export function computeFocusRange(
   line: number,
   nodes: readonly SymbolNode[],
@@ -85,7 +85,7 @@ export function computeFocusRange(
     if (length <= options.maxLines) {
       return { startLine: clampStart(fn.startLine), endLine: clampEnd(fn.endLine), kind: "function", symbol: fn.name };
     }
-    // 函数太大：退化成光标附近，避免一次送几千行
+    // Function too large: degrade to the area around the cursor so thousands of lines are not sent at once
     const start = clampStart(line - options.fallbackLines);
     const end = clampEnd(line + options.fallbackLines);
     return { startLine: start, endLine: end, kind: "block", symbol: fn.name, truncated: true };
@@ -98,7 +98,7 @@ export function computeFocusRange(
   };
 }
 
-/** 选区版本：整个选区落在同一函数内才扩成函数，否则保留选区 + 少量上下文 */
+/** Selection variant: expand to the function only if the whole selection lies within one, otherwise keep the selection + a little context */
 export function computeSelectionRange(
   startLine: number,
   endLine: number,
@@ -117,7 +117,7 @@ export function computeSelectionRange(
   };
 }
 
-/** 读取当前编辑器的符号表；没有 LSP 支持时返回空数组而不是抛错 */
+/** Read the current editor's symbol table; return an empty array instead of throwing when there is no LSP support */
 async function documentSymbols(uri: vscode.Uri): Promise<SymbolNode[]> {
   try {
     const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
@@ -136,9 +136,9 @@ export interface FocusOptions {
 }
 
 /**
- * 取"当前光标附近的代码"。
+ * Get "the code near the current cursor".
  *
- * 无活动编辑器 / 只读文档（diff 预览等）→ 返回 undefined。
+ * No active editor / a read-only document (diff preview etc.) -> returns undefined.
  */
 export async function readFocusAtCursor(
   options: FocusOptions,
@@ -173,7 +173,7 @@ export async function readFocusAtCursor(
   };
 }
 
-/** 取一个选区（或一个光标位置）对应的代码块；供「附加选区」命令使用 */
+/** Get the code block for a selection (or a cursor position); used by the "attach selection" command */
 export async function readFocusForSelection(
   editor: vscode.TextEditor,
   selection: vscode.Selection,

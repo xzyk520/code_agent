@@ -3,16 +3,17 @@ import * as path from "node:path";
 import type { Logger } from "./log";
 
 /**
- * 会话摘要的持久化（自动保存，无手动入口）。
+ * Persistence for session summaries (saved automatically, no manual entry point).
  *
- * 目的：同一会话重载窗口后，不必重新调用模型做摘要——直接读回上次的结果。
+ * Purpose: after reloading the window for the same session there is no need to call the model again for
+ * a summary -- just read back the previous result.
  *
- * 存储：`<sessions>/<sessionId>.summary.json`
+ * Storage: `<sessions>/<sessionId>.summary.json`
  *   { covered, coveredMessageIndex, lines, updatedAt }
  *
- *   covered             已覆盖的轮次数（与 lines 一一对应）
- *   coveredMessageIndex 最后一轮覆盖到的会话消息条数（用于校验会话是否被外部截断）
- *   lines               每条形如 "- 意图：调用了…改动了…实现了…"
+ *   covered             number of turns already covered (one-to-one with lines)
+ *   coveredMessageIndex number of session messages covered by the last turn (used to verify the session was not truncated externally)
+ *   lines               each line looks like "- intent: called ... changed ... implemented ..."
  */
 export interface StoredSummary {
   covered: number;
@@ -71,7 +72,7 @@ export class SummaryStore {
     try {
       await fs.promises.rm(this.fileOf(sessionId), { force: true });
     } catch {
-      // 不存在就算了
+      // If it does not exist, never mind
     }
   }
 }

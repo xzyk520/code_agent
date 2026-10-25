@@ -3,19 +3,19 @@ import * as path from "node:path";
 import type { Logger } from "./log";
 import type { DiagramDto, LastIntentDto, Mode, PlanStep } from "./protocol";
 
-/** 一条已落盘的消息（追加写，永不修改） */
+/** One persisted message (append-only, never modified) */
 export interface StoredMessage {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   ts: number;
-  /** 仅用于回看：思考内容不进入模型上下文，也不参与摘要 */
+  /** For review only: reasoning content does not enter the model context and does not join the summary */
   reasoning?: string | ReasoningSegment[];
-  /** 助手回答里附带的图（Mermaid 源码；重载后由前端懒加载渲染） */
+  /** Diagrams attached to the assistant's answer (Mermaid source; rendered lazily by the frontend after reload) */
   diagrams?: DiagramDto[];
 }
 
-/** 一次模型调用的思考内容（用于分段回看） */
+/** Reasoning content of one model call (for segmented review) */
 export interface ReasoningSegment {
   round: number;
   text: string;
@@ -25,19 +25,19 @@ export type TurnStatus = "idle" | "thinking" | "tool" | "awaiting-decision";
 
 export interface SessionMeta {
   id: string;
-  /** 标题：取第一条用户消息的前 40 字 */
+  /** Title: first 40 characters of the first user message */
   title: string;
   mode: Mode;
   workspace: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
-  /** 上一次崩溃/重载时停在哪个阶段（见 docs §9.3） */
+  /** Which phase it was in at the last crash/reload (see docs §9.3) */
   status?: TurnStatus;
   statusDetail?: string;
-  /** 最近一次计划（跨轮延续 + 重载后恢复面板） */
+  /** Most recent plan (carried across turns + restores the panel after a reload) */
   plan?: PlanStep[];
-  /** 上一轮意图（跨轮延续；内核重启后仍可用） */
+  /** Intent of the previous turn (carried across turns; still usable after a kernel restart) */
   lastIntent?: LastIntentDto;
 }
 
@@ -45,18 +45,18 @@ const INDEX_FILE = "index.json";
 const INDEX_VERSION = 1;
 
 /**
- * 会话仓库：**完整对话落盘**（append-only JSONL）+ 一份索引。
+ * Session repository: **the full conversation on disk** (append-only JSONL) plus one index.
  *
- * 目录布局（默认 `<globalStorage>/sessions/`，可用 `beeCode.session.dir` 覆盖）：
+ * Directory layout (default `<globalStorage>/sessions/`, overridable with `beeCode.session.dir`):
  *
  *   sessions/
- *     index.json                 ← 会话列表（标题/时间/消息数），供 UI 快速枚举
- *     <sessionId>.jsonl          ← 完整记录，一行一条消息，只追加
+ *     index.json                 <- session list (title/time/message count) for fast UI enumeration
+ *     <sessionId>.jsonl          <- the full record, one message per line, append-only
  *
- * 为什么是 JSONL 而不是单个 JSON：
- *   - 追加写，崩溃最多丢最后半行；整份重写则会丢掉整个会话
- *   - 完整历史永不被截断（模型上下文是另一回事：只取需要的部分，见 `contextBuilder.ts`）
- *   - 与 Claude Code（`~/.claude/projects/<proj>/<id>.jsonl`）、Codex（`~/.codex/sessions/**`）同构，便于排查与迁移
+ * Why JSONL instead of a single JSON file:
+ *   - Appends, so a crash loses at most the last partial line; rewriting the whole file would lose the whole session
+ *   - The full history is never truncated (the model context is a different matter: it takes only what is needed, see `contextBuilder.ts`)
+ *   - Same shape as Claude Code (`~/.claude/projects/<proj>/<id>.jsonl`) and Codex (`~/.codex/sessions/**`), which eases troubleshooting and migration
  */
 export class SessionStore {
   private index: SessionMeta[] | undefined;
@@ -64,12 +64,12 @@ export class SessionStore {
   private disposed = false;
 
   constructor(
-    /** 根目录（默认 globalStorage 的 sessions 子目录） */
+    /** Root directory (defaults to the sessions subdirectory of globalStorage) */
     private readonly dir: string,
     private readonly logger: Logger,
   ) {}
 
-  /** 列出所有会话（最近更新的在前） */
+  /** List all sessions (most recently updated first) */
   list(): SessionMeta[] {
     this.ensureIndex();
     return [...(this.index ?? [])].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -80,7 +80,7 @@ export class SessionStore {
     return this.index?.find((m) => m.id === id);
   }
 
-  /** 读取某会话的完整消息（坏行跳过，不让一行坏数据拖垮整个会话） */
+  /** Read a session's complete messages (bad lines are skipped so one corrupt line cannot take down the whole session) */
   async open(id: string): Promise<StoredMessage[]> {
     const file = this.fileOf(id);
     let raw: string;
@@ -97,13 +97,13 @@ export class SessionStore {
         const parsed = JSON.parse(trimmed) as StoredMessage;
         if (typeof parsed.text === "string" && typeof parsed.role === "string") out.push(parsed);
       } catch {
-        // 崩溃留下的半行：忽略
+        // A partial line left by a crash: ignore
       }
     }
     return out;
   }
 
-  /** 创建会话（只登记索引，不建文件；第一条消息时才真正落盘） */
+  /** Create a session (only registers the index, no file yet; it is written when the first message arrives) */
   create(meta: Omit<SessionMeta, "messageCount" | "updatedAt">): void {
     this.ensureIndex();
     this.index = (this.index ?? []).filter((m) => m.id !== meta.id);
@@ -111,7 +111,7 @@ export class SessionStore {
     this.scheduleIndexWrite();
   }
 
-  /** 追加一条消息：立刻写 JSONL，索引防抖更新 */
+  /** Append a message: write the JSONL immediately, update the index with debounce */
   append(id: string, message: StoredMessage): void {
     void this.appendAsync(id, message);
   }
@@ -137,10 +137,10 @@ export class SessionStore {
   }
 
   /**
-   * 把会话截断到前 `messageCount` 条（回滚聊天记录用）。
+   * Truncate the session to the first `messageCount` entries (used to roll back chat history).
    *
-   * JSONL 是追加写的；截断时整份重写（先写临时文件再 rename），
-   * 避免写到一半崩掉把整个会话弄坏。
+   * The JSONL is append-only; truncation rewrites the whole file (write a temp file first, then rename)
+   * so that crashing halfway does not corrupt the entire session.
    */
   async truncate(id: string, messageCount: number): Promise<StoredMessage[]> {
     const messages = await this.open(id);
@@ -167,7 +167,7 @@ export class SessionStore {
     return kept;
   }
 
-  /** 记录"上一轮停在哪"，供重载后判断能否继续 */
+  /** Record "where the previous turn stopped" so a reload can tell whether it may continue */
   async updateStatus(id: string, status: SessionMeta["status"], detail?: string): Promise<void> {
     const entry = this.meta(id);
     if (!entry) return;
@@ -184,7 +184,7 @@ export class SessionStore {
     this.scheduleIndexWrite();
   }
 
-  /** 记录上一轮意图（内核重启后由 send 带回去） */
+  /** Record the previous turn's intent (carried back by send after a kernel restart) */
   updateLastIntent(id: string, lastIntent: LastIntentDto | undefined): void {
     const entry = this.meta(id);
     if (!entry) return;
@@ -193,7 +193,7 @@ export class SessionStore {
     this.scheduleIndexWrite();
   }
 
-  /** 记录/更新本会话的计划（用于跨轮延续与重载恢复） */
+  /** Record/update this session's plan (for carrying across turns and restoring after a reload) */
   updatePlan(id: string, plan: PlanStep[] | undefined): void {
     const entry = this.meta(id);
     if (!entry) return;
@@ -225,7 +225,7 @@ export class SessionStore {
     void this.writeIndex();
   }
 
-  // ───────────────────────── 内部 ─────────────────────────
+  // ───────────────────────── internals ─────────────────────────
 
   private fileOf(id: string): string {
     return path.join(this.dir, `${id.replace(/[^A-Za-z0-9_.-]/g, "_")}.jsonl`);

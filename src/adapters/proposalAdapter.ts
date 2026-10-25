@@ -7,24 +7,24 @@ import type { createEditAdapter } from "./editAdapter";
 
 type EditAdapter = ReturnType<typeof createEditAdapter>;
 
-/** 正文缓存上限：条数与总字节（LRU 淘汰）。没有 TTL —— 失效靠 upsert 事件，不靠时间 */
+/** Text cache caps: entry count and total bytes (LRU eviction). No TTL — invalidation comes from upsert events, not from time */
 const TEXT_CACHE_MAX_ENTRIES = 3;
 const TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
- * 提案（虚拟文件）的暂存与落实。
+ * Staging and applying proposals (virtual files).
  *
- * 模型（README §10）：
- *   1. 内核给出「修正后的完整文件内容」，但**不碰磁盘**，只发一条 `proposal.changed` 元数据
- *   2. 用户点「查看」→ 壳调 `proposal.read` 拉正文 → 左侧真实文件 / 右侧虚拟文件，`vscode.diff` 展示
- *   3. 用户点「接受」→ 壳用 `edit.apply` 一次性写入 → 成功后通知内核 `proposal.decide(accept)`
- *   4. 用户点「拒绝」→ 什么都不写，直接通知内核 `proposal.decide(reject)`
+ * Model (README §10):
+ *   1. The core supplies the "full corrected file content" but **never touches disk**; it only emits a `proposal.changed` metadata event
+ *   2. The user clicks "View" → the shell calls `proposal.read` to fetch the body → real file on the left / virtual file on the right, shown by `vscode.diff`
+ *   3. The user clicks "Accept" → the shell writes it in one shot via `edit.apply` → only on success does it notify the core with `proposal.decide(accept)`
+ *   4. The user clicks "Reject" → nothing is written; the core is notified directly with `proposal.decide(reject)`
  *
- * 关键在于顺序：**先落盘、再告知内核**。反过来会出现「内核以为已应用、磁盘其实没变」。
+ * The order is what matters: **write to disk first, tell the core afterwards**. Reversed, you get "the core thinks it was applied but the disk never changed".
  */
 export class ProposalAdapter implements vscode.Disposable {
   private readonly byId = new Map<string, ProposalDto>();
-  /** 查看过的正文缓存：避免「查看 → 接受」把同一份大文件拉两次（LRU，有容量上限） */
+  /** Cache of bodies already viewed: avoids pulling the same large file twice on "view → accept" (LRU, with capacity caps) */
   private readonly textCache = new Map<string, { text: string; bytes: number }>();
   private textCacheBytes = 0;
   private disposed = false;
@@ -36,11 +36,11 @@ export class ProposalAdapter implements vscode.Disposable {
   ) {}
 
   /**
-   * 登记/更新提案。
+   * Register/update a proposal.
    *
-   * **同路径去重**：同一个文件只应有一个有效提案。新提案到来时，把该路径下
-   * 其它仍为 pending 的旧提案标成 stale —— 否则用户可能先接受旧的那个，
-   * 用旧内容覆盖掉新内容。
+   * **Deduplicate by path**: a file should have only one valid proposal. When a new proposal arrives, any other
+   * still-pending proposal for that path is marked stale — otherwise the user might accept the old one first
+   * and overwrite the new content with the old.
    */
   upsert(dto: ProposalDto): void {
     for (const [id, existing] of this.byId) {
@@ -53,7 +53,7 @@ export class ProposalAdapter implements vscode.Disposable {
         this.logger.debug(`proposal ${id} 被同路径的新提案 ${dto.id} 取代（标 stale）`);
       }
     }
-    // A 方案：正文变化无法从元数据观测，任何 upsert 都视为可能变了 → 丢弃缓存
+    // Option A: body changes cannot be observed from metadata, so any upsert is treated as possibly changed → drop the cache
     this.forgetText(dto.id);
     this.byId.set(dto.id, dto);
   }
@@ -72,20 +72,20 @@ export class ProposalAdapter implements vscode.Disposable {
     this.textCacheBytes = 0;
   }
 
-  /** 文件在提案生成后被改过 → 标记 stale，UI 上会提示"重新生成" */
+  /** The file was modified after the proposal was generated → mark it stale; the UI then prompts to "regenerate" */
   markStale(id: string): void {
     const dto = this.byId.get(id);
     if (dto) this.byId.set(id, { ...dto, status: "stale" });
   }
 
-  /** 面板要展示的全部提案：pending + stale（stale 也要看得见，否则会「凭空消失」） */
+  /** All proposals the panel should show: pending + stale (stale ones must stay visible, or they "vanish into thin air") */
   visible(): ProposalDto[] {
     return [...this.byId.values()]
       .filter((p) => p.status === "pending" || p.status === "stale")
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 
-  /** 真正待决策的提案（stale 不算，它只能重新生成） */
+  /** Proposals genuinely awaiting a decision (stale ones don't count; they can only be regenerated) */
   pending(): ProposalDto[] {
     return this.visible().filter((p) => p.status === "pending");
   }
@@ -94,7 +94,7 @@ export class ProposalAdapter implements vscode.Disposable {
     return this.pending().length;
   }
 
-  /** 打开提案 diff（左=磁盘现状，右=提案内容）。正文按需拉取，不在内存里常驻。 */
+  /** Open the proposal diff (left = current disk state, right = proposed content). The body is fetched on demand and is not kept resident in memory. */
   async show(id: string, fetchText: (id: string) => Promise<string>): Promise<boolean> {
     const dto = this.byId.get(id);
     if (!dto) return false;
@@ -111,10 +111,10 @@ export class ProposalAdapter implements vscode.Disposable {
   }
 
   /**
-   * 接受一个提案：拉正文 → 写盘 → 成功才通知内核。
+   * Accept a proposal: fetch the body → write to disk → notify the core only on success.
    *
-   * 失败（版本冲突 / 被锁定 / 路径被拒）时不改状态，提案继续留着，
-   * 用户可以重新看一眼再决定 —— 绝不出现"内核认为已接受、文件没变"。
+   * On failure (version conflict / locked / path rejected) the state is left untouched and the proposal stays,
+   * so the user can look again and decide — never "the core believes it was accepted while the file did not change".
    */
   async accept(
     id: string,
@@ -125,7 +125,7 @@ export class ProposalAdapter implements vscode.Disposable {
     if (!dto) return { applied: false, message: "提案不存在（可能已被内核撤回）" };
 
     if (dto.baseVersion === undefined) {
-      // 没有 baseVersion 就没法做冲突检测 —— 记一条 warn，别让它静默变成"无条件覆盖"
+      // Without baseVersion there is no conflict detection — log a warn so it does not silently become an "unconditional overwrite"
       this.logger.warn(`提案 ${id} 缺少 baseVersion，接受时将不做版本冲突检测（可能覆盖用户的新修改）`);
     }
 
@@ -136,7 +136,7 @@ export class ProposalAdapter implements vscode.Disposable {
       } catch (err) {
         return { applied: false, message: `读取提案正文失败：${err instanceof Error ? err.message : String(err)}` };
       }
-      // 写失败时可以重试，不必再拉一次
+      // A failed write can be retried, without fetching again
       this.rememberText(id, text);
     }
 
@@ -160,7 +160,7 @@ export class ProposalAdapter implements vscode.Disposable {
     return result;
   }
 
-  /** 拒绝：磁盘一字不动，只通知内核丢掉提案 */
+  /** Reject: not a single byte on disk changes; the core is merely told to drop the proposal */
   async reject(
     id: string,
     decide: (id: string, decision: "accept" | "reject") => Promise<void>,
@@ -181,7 +181,7 @@ export class ProposalAdapter implements vscode.Disposable {
     this.textCacheBytes = 0;
   }
 
-  // ───────────────────────── 正文缓存（LRU + 字节上限） ─────────────────────────
+  // ───────────────────────── Body cache (LRU + byte cap) ─────────────────────────
 
   private rememberText(id: string, text: string): void {
     this.forgetText(id);
@@ -191,7 +191,7 @@ export class ProposalAdapter implements vscode.Disposable {
     this.evictTextCache();
   }
 
-  /** 取用即刷新 LRU 顺序；返回 undefined 表示没缓存 */
+  /** Taking an entry refreshes its LRU position; undefined means it was not cached */
   private takeText(id: string): string | undefined {
     const hit = this.textCache.get(id);
     if (!hit) return undefined;
@@ -216,13 +216,13 @@ export class ProposalAdapter implements vscode.Disposable {
   }
 }
 
-/** 适配器要的 ctx 只在 RPC 场景存在；本地触发时给一个空的（无取消语义） */
+/** The ctx the adapters want only exists in RPC scenarios; local triggers get an empty one (no cancellation semantics) */
 function syntheticContext(): InboundRequestContext {
   return {
     id: "local",
     signal: new AbortController().signal,
     throwIfCancelled() {
-      /* 本地动作不可取消 */
+      /* local actions are not cancellable */
     },
   };
 }

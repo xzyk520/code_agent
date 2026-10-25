@@ -2,28 +2,29 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * 内核定位：决定「用哪个 Python 包、从哪个目录起、带什么参数」。
+ * Kernel location: decides "which Python package to use, which directory to start from, and with what arguments".
  *
- * 为什么需要它：开发时内核在**工作区**里（`<repo>/beecode`），打包后内核在
- * **扩展目录**里（`<ext>/beecode`）。如果只写死 `cwd=workspaceFolder`，
- * 装好的 vsix 会 `ModuleNotFoundError: beecode` —— 这正是之前打包版跑不起来的原因。
+ * Why this is needed: during development the kernel lives in the **workspace** (`<repo>/beecode`), while
+ * after packaging it lives in the **extension directory** (`<ext>/beecode`). If we simply hardcoded
+ * `cwd=workspaceFolder`, an installed vsix would hit `ModuleNotFoundError: beecode` -- which is exactly
+ * why the packaged build did not run before.
  *
- * 解析顺序（第一个命中的胜出）：
- *   1. `beeCode.core.coreRoot` 显式设置
- *   2. 工作区根下的 `beecode/__main__.py`（开发模式）
- *   3. 扩展目录下的 `beecode/__main__.py`（安装模式）
+ * Resolution order (first hit wins):
+ *   1. An explicit `beeCode.core.coreRoot` setting
+ *   2. `beecode/__main__.py` under the workspace root (development mode)
+ *   3. `beecode/__main__.py` under the extension directory (install mode)
  */
 
 export interface CoreLaunchSpec {
-  /** 含 `beecode/` 包的目录（要进 PYTHONPATH） */
+  /** Directory containing the `beecode/` package (goes into PYTHONPATH) */
   coreRoot: string;
-  /** 传给解释器的参数（默认 `-m beecode`） */
+  /** Arguments passed to the interpreter (default `-m beecode`) */
   args: string[];
-  /** 子进程工作目录 */
+  /** Child process working directory */
   cwd: string;
-  /** 追加/覆盖的环境变量 */
+  /** Environment variables to add/override */
   env: Record<string, string>;
-  /** 命中的来源，用于日志与排障 */
+  /** Which source matched, used for logging and troubleshooting */
   source: "setting" | "workspace" | "extension";
 }
 
@@ -38,15 +39,15 @@ export class CoreNotFoundError extends Error {
 }
 
 export interface LocateOptions {
-  /** `beeCode.core.coreRoot` 的值，空串表示自动探测 */
+  /** Value of `beeCode.core.coreRoot`; empty string means auto-detect */
   configuredRoot: string;
-  /** `beeCode.core.args` 的值，空数组表示用默认 `["-m","beecode"]` */
+  /** Value of `beeCode.core.args`; empty array means the default `["-m","beecode"]` */
   configuredArgs: string[];
-  /** 第一个工作区根的绝对路径；没有工作区时传 undefined */
+  /** Absolute path of the first workspace root; undefined when there is no workspace */
   workspaceRoot: string | undefined;
-  /** 扩展安装目录（`context.extensionUri.fsPath`） */
+  /** Extension install directory (`context.extensionUri.fsPath`) */
   extensionPath: string;
-  /** `beeCode.core.cwd` 解析后的值；空串表示用 workspaceRoot ?? coreRoot */
+  /** Resolved value of `beeCode.core.cwd`; empty string means use workspaceRoot ?? coreRoot */
   cwdOverride?: string;
 }
 
@@ -84,8 +85,8 @@ function buildSpec(
     ? options.cwdOverride
     : options.workspaceRoot ?? coreRoot;
 
-  // PYTHONPATH 是这里的关键：`-m beecode` 需要包在 sys.path 上，
-  // 而安装模式下拿不到工作区里的那份拷贝。
+  // PYTHONPATH is the key here: `-m beecode` needs the package on sys.path, and in install mode the
+  // copy inside the workspace is not available.
   const existingPath = process.env["PYTHONPATH"];
   const pythonPath = existingPath ? `${coreRoot}${path.delimiter}${existingPath}` : coreRoot;
 
@@ -96,7 +97,7 @@ function buildSpec(
     source,
     env: {
       PYTHONPATH: pythonPath,
-      // Windows 上 Python 的 stdio 默认可能是 cp936，会让中文 JSON 变乱码
+      // On Windows Python's stdio default may be cp936, which turns Chinese JSON into mojibake
       PYTHONIOENCODING: "utf-8",
       PYTHONUTF8: "1",
       PYTHONUNBUFFERED: "1",
@@ -104,7 +105,7 @@ function buildSpec(
   };
 }
 
-/** 供面板/日志展示的一句话描述 */
+/** One-line description for the panel/log */
 export function describeLaunch(spec: CoreLaunchSpec): string {
   return `${path.basename(spec.coreRoot)} [${spec.source}] ${spec.args.join(" ")}`;
 }

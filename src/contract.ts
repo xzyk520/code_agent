@@ -3,16 +3,19 @@ import * as path from "node:path";
 import { PROTOCOL_VERSION, type ShellMethod } from "./protocol";
 
 /**
- * 协议契约的运行时校验（补齐「协议类型没有唯一真相」这个缺口）。
+ * Runtime validation of the protocol contract (closing the gap that "protocol types have no single source of truth").
  *
- * 为什么需要：`protocol.ts` 的接口是**类型**，编译后消失，无法在运行时枚举；
- * 而 Python 侧又完全看不到 TypeScript。于是两侧的「方法名/参数名」只能靠人肉同步。
+ * Why it is needed: the interfaces in `protocol.ts` are **types**, which disappear after compilation and
+ * cannot be enumerated at runtime; the Python side, meanwhile, cannot see TypeScript at all. So the
+ * method/param names on both sides can only be kept in sync by hand.
  *
- * 折中方案：把契约抽成 `protocol/contract.json`（唯一真相），两侧各自在启动时校验：
- *   - 壳：注册了哪些方法 vs 契约声明了哪些方法（多一个、少一个都报警）
- *   - 内核：每次发 RPC 前校验方法名与必填参数（见 `beecode/contract.py`）
+ * Compromise: extract the contract into `protocol/contract.json` (the single source of truth) and have
+ * both sides validate it at startup:
+ *   - shell: which methods are registered vs which the contract declares (flag both extras and gaps)
+ *   - kernel: validates the method name and required params before every RPC (see `beecode/contract.py`)
  *
- * 它不能替代编译期类型，但能**在启动 100ms 内**发现两侧漂移，而不是等到运行到某个分支才炸。
+ * It cannot replace compile-time types, but it **catches drift within 100ms of startup** instead of
+ * blowing up only when some branch happens to run.
  */
 export interface ShellMethodSpec {
   required?: string[];
@@ -32,7 +35,7 @@ export interface ContractCheck {
   problems: string[];
 }
 
-/** 依次尝试这些位置：扩展目录（安装后）→ 工作区（开发时）→ 进程 cwd */
+/** Try these locations in order: extension directory (installed) -> workspace (development) -> process cwd */
 const CONTRACT_RELATIVE = path.join("protocol", "contract.json");
 
 export function loadContract(roots: Array<string | undefined>): ContractCheck {
@@ -62,7 +65,7 @@ export function loadContract(roots: Array<string | undefined>): ContractCheck {
   return { contract: undefined, problems };
 }
 
-/** 契约内容与运行时注册表对账 */
+/** Reconcile the contract content against the runtime registry */
 export function verifyRegistration(contract: ContractFile, registered: readonly ShellMethod[]): string[] {
   const problems: string[] = [];
 

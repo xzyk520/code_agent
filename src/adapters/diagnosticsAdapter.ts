@@ -5,11 +5,11 @@ import { resolveTarget, toWorkspaceRelative } from "../paths";
 import type { DiagnosticDto, DiagnosticsGetParams, DiagnosticsGetResult } from "../protocol";
 import { isIgnored } from "../workspaceIgnore";
 
-/** 单次查询返回的诊断条数上限（超出会截断并标记 truncated） */
+/** Upper bound on diagnostics returned per query (excess is truncated and flagged truncated) */
 const DEFAULT_MAX_ITEMS = 200;
 const HARD_MAX_ITEMS = 2_000;
 
-/** 严重度排序权重：数字越小越严重 */
+/** Severity sort weight: the smaller the number, the more severe */
 const SEVERITY_RANK: Record<DiagnosticDto["severity"], number> = {
   error: 0,
   warning: 1,
@@ -17,15 +17,16 @@ const SEVERITY_RANK: Record<DiagnosticDto["severity"], number> = {
   hint: 3,
 };
 
-/** 每处理多少个文件检查一次取消（避免长循环里点停止没反应） */
+/** Check for cancellation every N files (so Stop responds during long loops) */
 const CANCEL_CHECK_EVERY = 50;
 
 /**
- * LSP 诊断：Debugger 模式的第一手证据。
+ * LSP diagnostics: first-hand evidence for Debugger mode.
  *
- * ⚠️ **诊断为空 ≠ 代码没问题**：`languages.getDiagnostics()` 返回的是「已被语言服务
- * 分析过」的文件的诊断。刚打开窗口时可能只有打开过的那几个文件有诊断，
- * 内核不能据此得出「项目没有编译错误」的结论（写 Debugger 提示词时要说明）。
+ * ⚠️ **No diagnostics ≠ no problems**: `languages.getDiagnostics()` returns diagnostics
+ * only for files the language service has already analyzed. Just after a window opens,
+ * only the files that were opened may have diagnostics, so the core must not conclude
+ * "the project has no compile errors" from this (say so when writing the Debugger prompt).
  */
 export function createDiagnosticsAdapter(logger: Logger) {
   return {
@@ -36,7 +37,7 @@ export function createDiagnosticsAdapter(logger: Logger) {
       const minRank = SEVERITY_RANK[params.minSeverity ?? "hint"];
       const includeIgnored = params.includeIgnored ?? false;
 
-      // 1) 选定候选集合：单文件 or 全量
+      // 1) Pick the candidate set: a single file or everything
       let entries: Array<[vscode.Uri, readonly vscode.Diagnostic[]]>;
       if (params.path) {
         const uri = resolveTarget(params.path);
@@ -45,7 +46,7 @@ export function createDiagnosticsAdapter(logger: Logger) {
         entries = vscode.languages.getDiagnostics();
       }
 
-      // 2) 过滤（忽略规则 + 严重度门槛）并收集
+      // 2) Filter (ignore rules + severity threshold) and collect
       const collected: DiagnosticDto[] = [];
       let scanned = 0;
       for (const [uri, diagnostics] of entries) {
@@ -59,7 +60,7 @@ export function createDiagnosticsAdapter(logger: Logger) {
         }
       }
 
-      // 3) 严重度优先排序（error 在前），同级按文件与行号，结果稳定可读
+      // 3) Sort by severity (errors first), then file and line, so the result is stable and readable
       collected.sort(compare);
 
       const total = collected.length;
@@ -91,7 +92,7 @@ function toDto(uri: vscode.Uri, diagnostic: vscode.Diagnostic, severity: Diagnos
   };
 }
 
-/** `code` 可能是 string / number / `{ value, target }`，统一成字符串 */
+/** `code` may be a string / number / `{ value, target }`; normalize it to a string */
 function codeOf(code: vscode.Diagnostic["code"]): string | undefined {
   if (code === undefined) return undefined;
   if (typeof code === "string" || typeof code === "number") return String(code);

@@ -6,22 +6,22 @@ import type { Logger } from "./log";
 import { redact } from "./log";
 
 /**
- * 诊断包导出：把「排查问题需要的信息」打成一份**已脱敏**的 Markdown。
+ * Diagnostics export: package "the information needed to troubleshoot" into a **redacted** Markdown file.
  *
- * 隐私红线（写进文件头，也让用户看得见）：
- *   - **不含** API Key（连 `redact` 都不依赖，压根不读 SecretStorage）
- *   - **不含** prompt 全文、文件内容、待审改动内容
- *   - **不含** 完整工作区路径（只留文件夹名，避免泄露用户名/目录结构）
- *   - baseUrl 只保留 origin（协议+主机+端口），路径与查询参数一律丢弃
+ * Privacy red lines (written into the file header so the user can see them too):
+ *   - **No** API Key (not even `redact` is relied on; SecretStorage is never read at all)
+ *   - **No** full prompt text, file contents, or pending-change contents
+ *   - **No** full workspace paths (only the folder name, to avoid leaking user names/directory structure)
+ *   - baseUrl keeps only the origin (scheme + host + port); paths and query parameters are dropped entirely
  *
- * 落点：`<globalStorage>/diagnostics/`（扩展私有目录，不会被误提交进 git）。
- * 用户想发 issue 时，再由命令提示「另存为…」复制到桌面/文档。
+ * Location: `<globalStorage>/diagnostics/` (an extension-private directory that will not be committed to git by accident).
+ * If the user wants to file an issue, the command then offers "Save As..." to copy it to the Desktop/Documents.
  */
 export interface DiagnosticsDeps {
   context: vscode.ExtensionContext;
   logger: Logger;
   config: ShellConfig;
-  /** 内核实现种类，用于说明当前是 python 还是 mock */
+  /** Kind of kernel implementation, to state whether it is python or mock */
   coreKind: string;
 }
 
@@ -108,7 +108,7 @@ function readExtensionVersion(context: vscode.ExtensionContext): string {
   return typeof pkg?.version === "string" ? pkg.version : "unknown";
 }
 
-/** 只保留 origin：协议 + 主机 + 端口。路径/查询参数（可能带 key）全部丢弃。 */
+/** Keep only the origin: scheme + host + port. Paths/query parameters (which may carry a key) are dropped entirely. */
 function originOf(baseUrl: string): string {
   if (!baseUrl) return "<未配置>";
   try {

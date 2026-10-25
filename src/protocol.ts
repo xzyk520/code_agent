@@ -1,26 +1,26 @@
 /**
- * 壳 ↔ 内核的协议定义（README §4.5）。
+ * Protocol definitions between shell and core (README §4.5).
  *
- * 传输：子进程 stdin/stdout 上的 NDJSON（一行一个 JSON），JSON-RPC 2.0 风格。
- * 方向：
- *   - 壳 → 内核（CoreApi）：initialize / chat.send / proposal.read / proposal.decide / session.abort / model.reload / shutdown
- *   - 内核 → 壳（ShellMethods）：fs.read / fs.list / search.grep / symbols.outline / diagnostics.get /
- *                                symbols.search / symbols.references / edit.apply /
- *                                checkpoint.create / checkpoint.restore / diff.open /
- *                                confirm.ask / secrets.get / run
- *   - 内核 → 壳 通知：ui.delta / ui.tool / ui.usage / proposal.changed / log
+ * Transport: NDJSON over the child process's stdin/stdout (one JSON per line), JSON-RPC 2.0 style.
+ * Directions:
+ *   - Shell → core (CoreApi): initialize / chat.send / proposal.read / proposal.decide / session.abort / model.reload / shutdown
+ *   - Core → shell (ShellMethods): fs.read / fs.list / search.grep / symbols.outline / diagnostics.get /
+ *                                 symbols.search / symbols.references / edit.apply /
+ *                                 checkpoint.create / checkpoint.restore / diff.open /
+ *                                 confirm.ask / secrets.get / run
+ *   - Core → shell notifications: ui.delta / ui.tool / ui.usage / proposal.changed / log
  *
- * ⚠️ 改这个文件 = 改协议，必须同时改 beecode/ipc.py 并把 PROTOCOL_VERSION +1。
+ * ⚠️ Changing this file means changing the protocol: you must also update beecode/ipc.py and bump PROTOCOL_VERSION by 1.
  */
 export const PROTOCOL_VERSION = 39;
 
-// ─────────────────────────── 报文 ───────────────────────────
+// ─────────────────────────── Messages ───────────────────────────
 
 /**
- * JSON-RPC 的 id。规范允许 number 或 string。
+ * JSON-RPC id. The spec allows a number or a string.
  *
- * 我们自己发出的请求一律用 number（自增计数器，好匹配），
- * 但**收到**的请求可能是对端用 string 发的，必须原样回显。
+ * Requests we send ourselves always use a number (an incrementing counter, easy to match),
+ * but a request we **receive** may have been sent by the peer as a string, and must be echoed back unchanged.
  */
 export type JsonRpcId = number | string;
 
@@ -61,14 +61,14 @@ export type JsonRpcMessage =
   | JsonRpcSuccess
   | JsonRpcFailure;
 
-/** 协议层错误码（HTTP-like，但不是 HTTP） */
+/** Protocol-level error codes (HTTP-like, but not HTTP) */
 export const RpcError = {
   PARSE: -32700,
   INVALID_REQUEST: -32600,
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL: -32603,
-  /** 工具/适配器抛出的业务错误 */
+  /** Business errors thrown by tools/adapters */
   SHELL_ERROR: -32000,
   VERSION_MISMATCH: -32010,
   CONFLICT: -32011,
@@ -77,9 +77,10 @@ export const RpcError = {
 } as const;
 
 /**
- * 把适配器异常映射成协议错误码。
+ * Maps an adapter exception to a protocol error code.
  *
- * 只有这一份：之前 client / server 各写一遍，改一边忘另一边就会漂移。
+ * This lives in exactly one place: client and server used to each have their own copy,
+ * and changing one while forgetting the other made them drift apart.
  */
 export function rpcCodeFor(err: unknown): number {
   const name = err instanceof Error ? err.name : "";
@@ -93,7 +94,7 @@ export function rpcCodeFor(err: unknown): number {
   }
 }
 
-/** 请求/响应：同时有 `id` 与 `method`。id 为 number 或 string 都算。 */
+/** Request/response: has both `id` and `method`. An id of either number or string counts. */
 export function isRequest(msg: JsonRpcMessage): msg is JsonRpcRequest {
   const candidate = msg as JsonRpcRequest;
   return (
@@ -102,7 +103,7 @@ export function isRequest(msg: JsonRpcMessage): msg is JsonRpcRequest {
   );
 }
 
-/** 响应：有 `id` 但没有 `method`。用于 settle 前判别（不会与 request 混淆）。 */
+/** Response: has `id` but no `method`. Used to discriminate before settling (cannot be confused with a request). */
 export function isResponse(msg: JsonRpcMessage): msg is JsonRpcSuccess | JsonRpcFailure {
   const candidate = msg as { id?: unknown; method?: unknown };
   return (
@@ -111,7 +112,7 @@ export function isResponse(msg: JsonRpcMessage): msg is JsonRpcSuccess | JsonRpc
   );
 }
 
-// ────────────────────── 内核 → 壳（shell 实现） ──────────────────────
+// ────────────────────── Core → shell (implemented by the shell) ──────────────────────
 
 export interface TextRangeDto {
   startLine: number; // 1-based
@@ -119,24 +120,24 @@ export interface TextRangeDto {
 }
 
 export interface FsReadParams {
-  /** main = 主代理；subagent = 子代理（影响工作区外路径的判定） */
+  /** main = main agent; subagent = subagent (affects how paths outside the workspace are judged) */
   role?: "main" | "subagent"; path: string; startLine?: number; endLine?: number }
 export interface FsReadResult {
   text: string;
-  /** 编辑器文档版本；走磁盘/流式读取时省略（0 会和真实版本 0 混淆） */
+  /** Editor document version; omitted for disk/streaming reads (0 would be confused with a real version 0) */
   version?: number;
-  /** 总行数；流式读取没读到文件尾时可能未知 */
+  /** Total line count; may be unknown when a streaming read has not reached the end of the file */
   totalLines?: number;
-  /** 本次实际返回的行范围（1-based） */
+  /** Line range actually returned this time (1-based) */
   startLine: number;
   endLine: number;
-  /** 是否因为单次上限被截断（行数或字节） */
+  /** Whether it was truncated by the per-call limit (lines or bytes) */
   truncated: boolean;
 }
 
 export interface FsListParams {
   glob?: string;
-  /** `null` = 完全不过滤（透传给 findFiles）；省略 = 用默认排除 */
+  /** `null` = no filtering at all (passed straight through to findFiles); omitted = use the default exclusions */
   exclude?: string | null;
   maxResults?: number;
 }
@@ -148,34 +149,34 @@ export interface SearchGrepParams {
   glob?: string;
   contextLines?: number;
   maxResults?: number;
-  /** 只返回「哪些文件命中、各几次」，不返回行文本（召回阶段用，token 省一个数量级） */
+  /** Return only "which files matched and how many times each", without line text (used in the recall phase; saves an order of magnitude of tokens) */
   filesOnly?: boolean;
-  /** 区分大小写（默认 false：代码搜索通常不区分，但找常量/类型名时需要开） */
+  /** Case-sensitive (default false: code search is usually case-insensitive, but finding constants/type names needs it on) */
   caseSensitive?: boolean;
-  /** `null` = 完全不过滤（透传 findFiles）；省略 = 默认排除 */
+  /** `null` = no filtering at all (passed through to findFiles); omitted = default exclusions */
   exclude?: string | null;
 }
 export interface GrepHit {
   path: string;
   line: number;
   col: number;
-  /** 命中行原文（裸行，不含行号前缀） */
+  /** Raw matched line (bare line, without the line-number prefix) */
   text: string;
-  /** 这一行里命中了多少次（>1 时才返回） */
+  /** How many matches on this line (returned only when > 1) */
   count?: number;
-  /** 上下文片段（`contextLines > 0` 时返回，带行号与 ▶ 标记） */
+  /** Context snippet (returned when `contextLines > 0`, with line numbers and ▶ markers) */
   context?: string;
 }
 export interface GrepFileHit {
   path: string;
-  /** 命中次数；达到单文件上限时按上限记 */
+  /** Match count; recorded as the cap when the per-file limit is reached */
   matches: number;
-  /** true = 该文件命中数超过统计上限（`matches` 只是下限） */
+  /** true = this file has more matches than the counting cap (`matches` is only a lower bound) */
   capped?: boolean;
 }
 export interface SearchGrepResult {
   hits: GrepHit[];
-  /** `filesOnly: true` 时返回：文件 + 命中次数（不含行文本，省 token） */
+  /** Returned when `filesOnly: true`: files + match counts (no line text, saves tokens) */
   files?: GrepFileHit[];
   truncated: boolean;
 }
@@ -185,14 +186,14 @@ export interface SymbolDto {
   name: string;
   kind: string;
   container?: string;
-  /** 整个符号（含前导注释/docstring）：`read_symbol` 用它 */
+  /** The whole symbol (including leading comments/docstring): used by `read_symbol` */
   range: TextRangeDto;
-  /** 标识符本身的位置（含列）：`references` 要用它（用 range 起始行常常落在注释里） */
+  /** Position of the identifier itself (with column): needed by `references` (using the start line of the range often lands in a comment) */
   selection?: SymbolSelectionDto;
 }
 export interface SymbolsOutlineResult { symbols: SymbolDto[]; source: "lsp" | "none" }
 
-/** 标识符的精确位置（1-based 行列） */
+/** Exact position of an identifier (1-based line and column) */
 export interface SymbolSelectionDto {
   startLine: number;
   startColumn: number;
@@ -214,16 +215,16 @@ export interface SymbolsSearchParams {
 }
 export interface SymbolsSearchResult {
   symbols: SymbolHitDto[];
-  /** lsp = 语言服务的 workspace/symbol；fallback = grep + outline 扫描；none = 都没结果 */
+  /** lsp = the language service's workspace/symbol; fallback = grep + outline scan; none = neither produced results */
   source: "lsp" | "fallback" | "none";
   truncated: boolean;
 }
 
 export interface SymbolsReferencesParams {
   path: string;
-  /** 1-based 行；用 outline 拿到的 range.startLine 即可 */
+  /** 1-based line; the range.startLine obtained from outline works fine */
   line: number;
-  /** 1-based 列，默认 1 */
+  /** 1-based column, default 1 */
   column?: number;
   maxResults?: number;
 }
@@ -231,13 +232,13 @@ export interface ReferenceHitDto { path: string; line: number; col: number; text
 export interface SymbolsReferencesResult { locations: ReferenceHitDto[]; truncated: boolean }
 
 export interface DiagnosticsGetParams {
-  /** 只看这个文件；省略 = 全量（只包含已被语言服务分析过的文件） */
+  /** Only look at this file; omitted = everything (only files already analyzed by the language service) */
   path?: string;
-  /** 只返回不低于该严重度的诊断（默认 hint = 全部） */
+  /** Return only diagnostics at or above this severity (default hint = all) */
   minSeverity?: "error" | "warning" | "info" | "hint";
-  /** 最多返回多少条（默认 200，硬上限 2000） */
+  /** Maximum number of items to return (default 200, hard cap 2000) */
   maxItems?: number;
-  /** 是否包含 node_modules/.git 与 .gitignore 忽略的文件（默认 false） */
+  /** Whether to include node_modules/.git and files ignored by .gitignore (default false) */
   includeIgnored?: boolean;
 }
 
@@ -245,13 +246,13 @@ export interface DiagnosticDto {
   path: string;
   severity: "error" | "warning" | "info" | "hint";
   message: string;
-  /** 诊断码：`TS2322` / `no-unused-vars` / `E501` …（模型定位问题的最强线索） */
+  /** Diagnostic code: `TS2322` / `no-unused-vars` / `E501` … (the strongest clue for the model to locate a problem) */
   code?: string;
   source?: string;
   range: {
     startLine: number;
     endLine: number;
-    /** 1-based 列，可选（旧客户端可能没有） */
+    /** 1-based column, optional (older clients may not send it) */
     startColumn?: number;
     endColumn?: number;
   };
@@ -259,20 +260,20 @@ export interface DiagnosticDto {
 
 export interface DiagnosticsGetResult {
   items: DiagnosticDto[];
-  /** 过滤后、截断前的总数 */
+  /** Total count after filtering, before truncation */
   total: number;
   truncated: boolean;
 }
 
-/** 内核算好新文本，壳负责落盘（唯一写入通道）。 */
+/** The core computes the new text; the shell is responsible for writing it to disk (the only write channel). */
 export interface EditApplyParams {
-  /** main = 主代理；subagent = 子代理（默认 main） */
+  /** main = main agent; subagent = subagent (defaults to main) */
   role?: "main" | "subagent";
   path: string;
   newText: string;
-  /** write = 整文件替换；delete = 删除文件（newText 忽略） */
+  /** write = replace the whole file; delete = delete the file (newText is ignored) */
   op?: "write" | "delete";
-  /** 内核期望的文件版本；与当前 TextDocument.version 不一致则拒绝写入 */
+  /** File version the core expects; the write is rejected if it does not match the current TextDocument.version */
   expectedVersion?: number;
   reason?: string;
 }
@@ -285,23 +286,23 @@ export interface EditApplyResult {
 
 export interface CheckpointCreateParams {
   label?: string;
-  /** 轻量模式：只快照这些路径（相对工作区根）。留空 = 整个工作区 */
+  /** Lightweight mode: snapshot only these paths (relative to the workspace root). Empty = the whole workspace */
   paths?: string[];
 }
 export interface CheckpointCreateResult {
   id: string;
   files: number;
-  /** true = 这次没有建检查点（设置关闭 / 没工作区），此时 id 为空串 */
+  /** true = no checkpoint was created this time (feature disabled / no workspace); in that case id is an empty string */
   skipped?: boolean;
-  /** skipped 的原因，给内核与日志看 */
+  /** Why it was skipped, for the core and the logs */
   reason?: string;
 }
 
 /**
- * 恢复检查点。
+ * Restores a checkpoint.
  *
- * 只恢复**文件**：会话/任务状态属于内核自己，由内核合成「整轮回滚」
- * （先重置自身状态，再调这个方法把文件退回去）。
+ * Only **files** are restored: session/task state belongs to the core, which composes the
+ * "whole-turn rollback" itself (reset its own state first, then call this method to roll the files back).
  */
 export interface CheckpointRestoreParams {
   id: string;
@@ -313,12 +314,13 @@ export interface DiffOpenResult { opened: boolean }
 
 export interface ConfirmAskParams {
   question: string;
-  /** 一句解释「为什么要问」——会显示在每个选项下方，别让用户盲点确认 */
+  /** One sentence explaining "why we are asking" — shown under each option so the user does not confirm blindly */
   detail?: string;
   options: Array<{ id: string; label: string; description?: string }>;
   /**
-   * 若提供，用户可以选「记住这次选择」；下次同一 key 直接返回，不再弹窗。
-   * 安全门闸**不要**用它；只用于低风险确认。
+   * If provided, the user can choose "remember this choice"; the next call with the same key
+   * returns immediately instead of prompting again.
+   * Do **not** use this for safety gates; only for low-risk confirmations.
    */
   rememberKey?: string;
 }
@@ -326,50 +328,50 @@ export interface ConfirmAskResult { choice: string | null }
 
 export interface RunParams {
   command: string;
-  /** main = 主代理；subagent = 子代理（默认 main） */
+  /** main = main agent; subagent = subagent (defaults to main) */
   role?: "main" | "subagent";
-  /** 工作区相对目录；省略 = 工作区根 */
+  /** Directory relative to the workspace; omitted = the workspace root */
   cwd?: string;
   timeoutMs?: number;
-  /** 本次最多等待多久就返回运行中状态（不是杀进程的超时） */
+  /** How long to wait before returning a running status (not the timeout that kills the process) */
   yieldMs?: number;
-  /** 执行环境请求：sandbox-readonly = Docker 只读；sandbox = Docker 工作区可写；sandbox-network = Docker + 网络；host = 真实系统 Shell */
+  /** Requested execution environment: sandbox-readonly = read-only Docker; sandbox = Docker with a writable workspace; sandbox-network = Docker + network; host = the real system shell */
   sandbox?: "sandbox-readonly" | "sandbox" | "sandbox-network" | "host";
-  /** sandbox-network / host 请求必须说明理由（会展示给用户审批） */
+  /** sandbox-network / host requests must state a justification (shown to the user for approval) */
   justification?: string;
 }
 export interface RunResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
-  /** 输出超过上限被截断 */
+  /** Output was truncated because it exceeded the limit */
   truncated: boolean;
   durationMs: number;
   sandbox: "none" | "docker-readonly" | "docker" | "docker-network" | "host" | "host-readonly";
-  /** 超时被杀（exitCode 通常为 124） */
+  /** Killed by timeout (exitCode is usually 124) */
   killed: boolean;
-  /** 长命令后台任务 id；有它表示命令还在运行 */
+  /** Background job id for long commands; when present the command is still running */
   jobId?: string;
   status?: "running" | "exited";
-  /** 从启动到本次返回的已运行毫秒数 */
+  /** Milliseconds elapsed from start to this return */
   elapsedMs?: number;
-  /** 首次超过前台等待后转入后台 */
+  /** Moved to the background after first exceeding the foreground wait */
   backgrounded?: boolean;
-  /** 本次 command_wait 是否读到了新输出 */
+  /** Whether this command_wait read any new output */
   hasNewOutput?: boolean;
-  /** 运行中且没有新输出 */
+  /** Running with no new output */
   noNewOutput?: boolean;
-  /** 展示给模型的后台/轮询提示 */
+  /** Background/polling notice shown to the model */
   notice?: string;
-  /** 根据输出尾部推断的当前阶段 */
+  /** Current phase inferred from the tail of the output */
   progress?: string;
-  /** 距离最近一次新输出的毫秒数；没有输出时为 undefined */
+  /** Milliseconds since the most recent new output; undefined when there has been no output */
   outputAgeMs?: number;
 }
 
 export interface CommandWaitParams {
   jobId: string;
-  /** 本次最多等待多久；默认 60000，上限 300000 */
+  /** Maximum wait for this call; default 60000, cap 300000 */
   yieldMs?: number;
 }
 
@@ -390,15 +392,15 @@ export interface CommandListResult {
   jobs: CommandJobInfo[];
 }
 
-/** 一轮用于总结的输入 */
+/** Input for one round of summarization */
 export interface TurnSummaryInput {
   intent: string;
   assistant?: string;
   tools?: string[];
   files?: string[];
-  /** 一行一条观察（工具名 + 结果摘要），供总结时判断"做了什么" */
+  /** One observation per line (tool name + result summary), so the summary can judge "what was done" */
   observations?: string[];
-  /** 本轮生成的图（摘要时要提到图的主题） */
+  /** Diagrams generated this round (the summary should mention their topics) */
   diagrams?: DiagramDto[];
 }
 
@@ -459,25 +461,25 @@ export interface ShellMethodResults {
 
 export type ShellMethod = keyof ShellMethodParams;
 
-// ────────────────────── 壳 → 内核（内核实现） ──────────────────────
+// ────────────────────── Shell → core (implemented by the core) ──────────────────────
 
 export type Mode = "chat" | "builder" | "debugger";
 
 export interface ModelConfigDto {
-  /** 视觉能力：auto=先试，被拒后自愈；on/off=显式声明 */
+  /** Vision capability: auto = try first and self-heal after a rejection; on/off = explicit declaration */
   supportsVision?: "auto" | "on" | "off";
-  /** 是否把思考内容回传给服务端：auto=被拒后自动打开；always/never=强制 */
+  /** Whether to send reasoning content back to the server: auto = turn it on automatically after a rejection; always/never = force it */
   reasoningReplay?: "auto" | "always" | "never";
   baseUrl: string;
   model: string;
   temperature?: number;
   maxOutputTokens?: number;
   supportsTools?: boolean;
-  /** 模型上下文窗口（token）；轮内压缩按它计算预算 */
+  /** Model context window (tokens); in-turn compaction computes its budget from this */
   contextWindow?: number;
 }
 
-/** 子代理的模型配置（可选；省略则完全沿用主代理） */
+/** Model config for the subagent (optional; when omitted the main agent's is used verbatim) */
 export interface SubagentConfigDto {
   enabled?: boolean;
   baseUrl?: string;
@@ -493,32 +495,32 @@ export interface InitializeParams {
   modelConfig: ModelConfigDto;
   maxSteps?: number;
   toolTimeoutMs?: number;
-  /** 命令执行 / 派生子代理等长工具的超时（毫秒） */
+  /** Timeout for long tools such as command execution / spawning a subagent (milliseconds) */
   longToolTimeoutMs?: number;
-  /** 大任务自动放宽后的步数上限 */
+  /** Step limit after automatically relaxing for a large task */
   largeTaskSteps?: number;
-  /** 一轮的 token 预算（输入 + 输出） */
+  /** Token budget for one turn (input + output) */
   maxTurnTokens?: number;
-  /** 一轮的墙钟预算（秒）；普通任务用 */
+  /** Wall-clock budget for one turn (seconds); used for ordinary tasks */
   maxTurnSeconds?: number;
-  /** 大任务的主 agent 模型响应时限（秒） */
+  /** Response deadline for the main agent model on a large task (seconds) */
   largeTaskSeconds?: number;
-  /** 首 token 超时（秒） */
+  /** First-token timeout (seconds) */
   firstTokenSeconds?: number;
-  /** 流式 token 空闲超时（秒） */
+  /** Streaming token idle timeout (seconds) */
   idleSeconds?: number;
-  /** 一次 assistant 消息里最多执行多少个工具调用 */
+  /** Maximum number of tool calls to execute in a single assistant message */
   maxToolCallsPerBatch?: number;
   checkpointEnabled?: boolean;
-  /** 只在握手时通过 stdin 传入；内核只应放内存，不落盘、不进日志 */
+  /** Passed only via stdin during the handshake; the core should keep it in memory only, never on disk or in logs */
   apiKey?: string;
-  /** 子代理模型配置（不填则沿用主代理） */
+  /** Subagent model config (when unset, the main agent's is used) */
   subagentConfig?: SubagentConfigDto;
-  /** 子代理的密钥（只经 stdin 传递；不填则沿用主代理密钥） */
+  /** Subagent key (passed only via stdin; when unset, the main agent's key is used) */
   subagentApiKey?: string;
-  /** 摘要模型（空 = 沿用主模型） */
+  /** Summary model (empty = use the main model) */
   summaryConfig?: ModelConfigDto;
-  /** 摘要模型密钥（只经 stdin；不填则沿用主密钥） */
+  /** Summary model key (stdin only; when unset, the main key is used) */
   summaryApiKey?: string;
 }
 
@@ -527,10 +529,10 @@ export interface InitializeResult {
   coreVersion?: string;
 }
 
-/** 用户当前光标（或选区）所在位置；内核用它决定"先读哪里" */
+/** Where the user's current cursor (or selection) sits; the core uses it to decide "what to read first" */
 export interface FocusDto {
   path: string;
-  /** 光标行（1-based） */
+  /** Cursor line (1-based) */
   line: number;
   startLine: number;
   endLine: number;
@@ -539,26 +541,26 @@ export interface FocusDto {
 }
 
 export interface Attachment {
-  /** 未保存的临时文档（untitled:）：`path` 只是显示名，不能用来 fs.read */
+  /** Unsaved temporary document (untitled:): `path` is only a display name and cannot be used for fs.read */
   untitled?: boolean;
   path: string;
   startLine?: number;
   endLine?: number;
   text?: string;
   kind?: "selection" | "file" | "diagnostic" | "focus";
-  /** focus 附件对应的符号名（显示用） */
+  /** Symbol name for a focus attachment (for display) */
   symbol?: string;
 }
 
-/** 会话历史里的一条消息（重载后恢复上下文用；只带文本，不带工具调用细节） */
+/** One message in the session history (used to restore context after a reload; text only, without tool-call details) */
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
-  /** 助手消息里附带的图（历史上下文里会转成 Mermaid 围栏） */
+  /** Diagrams attached to an assistant message (turned into Mermaid fences in the history context) */
   diagrams?: DiagramDto[];
 }
 
-/** 上一轮的意图分析结果（壳持久化，内核重启后仍能判断"是否延续"） */
+/** Intent analysis result from the previous turn (persisted by the shell so the core can still judge "whether this continues" after a restart) */
 export interface LastIntentDto {
   mode: Mode;
   scale?: "small" | "large";
@@ -568,26 +570,26 @@ export interface LastIntentDto {
 }
 
 export interface ChatSendParams {
-  /** 本轮光标位置（可选；壳会自动附上对应代码块） */
+  /** Cursor position for this turn (optional; the shell attaches the corresponding code block automatically) */
   focus?: FocusDto;
   sessionId: string;
   mode: Mode;
   text: string;
   attachments?: Attachment[];
   /**
-   * 之前轮次的对话（重载恢复 / "继续上次"时由壳带上）。
-   * 内核可以据此重建上下文；不传就是全新会话。
+   * Conversation from previous turns (supplied by the shell on reload recovery / "continue last time").
+   * The core can rebuild its context from it; without it this is a brand-new session.
    */
   history?: ChatMessage[];
-  /** 早前轮次的压缩摘要（contextBuilder 产出；内核可选消费） */
+  /** Compacted summary of earlier turns (produced by contextBuilder; the core may optionally consume it) */
   summary?: string;
-  /** 上一轮未完成的计划（跨轮延续） */
+  /** Plan left unfinished in the previous turn (carried across turns) */
   plan?: PlanStep[];
-  /** 上一轮意图（壳从 session meta 读取，供内核重启后判断延续） */
+  /** Previous turn's intent (read by the shell from session meta, so the core can judge continuation after a restart) */
   lastIntent?: LastIntentDto;
 }
 
-/** 提案（虚拟文件）：内核把「修正后的代码」暂存在自己那边，壳按需拉取，用户批准后才真正落盘 */
+/** Proposal (virtual file): the core keeps the "corrected code" on its side, the shell pulls it on demand, and it is only written to disk after the user approves */
 export interface ProposalReadParams { id: string }
 export interface ProposalReadResult { text: string }
 export interface ProposalDecideParams { id: string; decision: "accept" | "reject" }
@@ -603,7 +605,7 @@ export interface ModelReloadParams {
   summaryApiKey?: string;
 }
 
-// ────────────────────── 内核 → 壳 通知 ──────────────────────
+// ────────────────────── Core → shell notifications ──────────────────────
 
 export interface UiDeltaParams { sessionId: string; text: string }
 export interface UiToolParams {
@@ -612,12 +614,12 @@ export interface UiToolParams {
   args?: unknown;
   status: "start" | "end" | "error";
   summary?: string;
-  /** 工具结果的截断文本（用于历史轨迹） */
+  /** Truncated text of the tool result (used for the history trace) */
   detail?: string;
   durationMs?: number;
 }
 
-/** 一轮的轨迹步骤（思考 / 工具 / 图 / 错误） */
+/** Steps of one turn's trace (reasoning / tool / diagram / error) */
 export interface TraceStepDto {
   type: "reasoning" | "tool" | "diagram" | "plan" | "error";
   round?: number;
@@ -630,44 +632,44 @@ export interface TraceStepDto {
   text?: string;
   title?: string;
 }
-/** 子代理的进度（面板里渲染成可折叠卡片） */
+/** Subagent progress (rendered as a collapsible card in the panel) */
 export interface UiSubagentParams {
   sessionId: string;
-  /** 子代理实例 id，同一轮里可能同时有多个 */
+  /** Subagent instance id; there may be several in the same turn */
   id: string;
   status: "start" | "tool" | "end";
   task?: string;
   maxSteps?: number;
-  /** status=tool 时有效 */
+  /** Valid when status=tool */
   tool?: { name: string; status: "start" | "end" | "error"; summary?: string };
   steps?: number;
   toolCalls?: number;
-  /** status=end 时有效：结论（已截断） */
+  /** Valid when status=end: the conclusion (already truncated) */
   findings?: string;
   error?: string;
 }
 
-/** 意图分析结果：模式与用户意图（面板只显示模式徽标，不显示分析内容） */
+/** Intent analysis result: mode and user intent (the panel shows only the mode badge, not the analysis content) */
 export interface UiIntentParams {
   sessionId: string;
   mode: "chat" | "builder" | "debugger";
-  /** 一句话用户意图（会被持久化进轮次记录，供模型总结） */
+  /** One-sentence user intent (persisted into the turn record for the model's summary) */
   intent: string;
   reason?: string;
   scale?: "small" | "large";
   needsProposal?: boolean;
   degraded?: boolean;
-  /** 连续追问：沿用上一轮意图（未调用分类器） */
+  /** Follow-up question: reuse the previous turn's intent (the classifier was not called) */
   reused?: boolean;
 }
 
-/** 计划（大任务时由 update_plan 工具产出） */
+/** Plan (produced by the update_plan tool on large tasks) */
 export interface PlanStep {
   text: string;
   status: "pending" | "doing" | "done";
 }
 
-/** 模型生成的一张图（Mermaid 源码；由前端渲染） */
+/** One diagram generated by the model (Mermaid source; rendered by the frontend) */
 export interface DiagramDto {
   id: string;
   kind: string;
@@ -685,28 +687,28 @@ export interface UiPlanParams {
   steps: PlanStep[];
 }
 
-/** agent 读了一个文件（用于编辑器高亮 / 面板文件 chips） */
+/** The agent read a file (used for editor highlighting / panel file chips) */
 export interface UiReadParams {
   sessionId: string;
   path: string;
-  /** 仅 read_file 有 */
+  /** read_file only */
   startLine?: number;
   endLine?: number;
-  /** 触发读取的工具名 */
+  /** Name of the tool that triggered the read */
   tool?: string;
 }
 
-/** 思考内容增量（只给用户看，不进上下文、不落盘） */
+/** Reasoning content delta (shown to the user only; never enters the context or touches disk) */
 export interface UiReasoningParams {
   sessionId: string;
   text: string;
-  /** 第几次模型调用（用于分段显示） */
+  /** Which model call this is (for segmented display) */
   round?: number;
 }
 
 export interface CommandWaitParams {
   jobId: string;
-  /** 本次最多等待多久；默认 60000，上限 300000 */
+  /** Maximum wait for this call; default 60000, cap 300000 */
   yieldMs?: number;
 }
 
@@ -716,7 +718,7 @@ export interface CommandTerminateParams {
 
 export interface UiRetryParams {
   sessionId?: string;
-  /** 第几次尝试（1-based） */
+  /** Which attempt this is (1-based) */
   attempt?: number;
   max?: number;
   delayMs?: number;
@@ -729,14 +731,14 @@ export interface UiUsageParams {
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
-  /** 本轮已耗时（毫秒），用于面板实时显示成本 */
+  /** Time elapsed this turn (milliseconds), for live cost display in the panel */
   elapsedMs?: number;
-  /** 等待模型响应的累计耗时（毫秒） */
+  /** Cumulative time spent waiting for model responses (milliseconds) */
   modelWaitMs?: number;
-  /** 工具执行累计耗时（毫秒） */
+  /** Cumulative tool execution time (milliseconds) */
   toolMs?: number;
 }
-/** 提案集合变化（只有元数据，正文用 `proposal.read` 按需拉取） */
+/** Proposal set changed (metadata only; the body is pulled on demand via `proposal.read`) */
 export interface ProposalChangedParams {
   added?: ProposalDto[];
   updated?: ProposalDto[];
@@ -745,21 +747,21 @@ export interface ProposalChangedParams {
 export interface ProposalDto {
   id: string;
   path: string;
-  /** 生成提案时读到的 document.version；接受时作为 expectedVersion，防止覆盖用户的新编辑 */
+  /** The document.version read when the proposal was generated; used as expectedVersion on accept, so new user edits are not overwritten */
   baseVersion?: number;
   additions?: number;
   deletions?: number;
   status: "pending" | "applied" | "discarded" | "stale";
-  /** 一句话说明这次改了什么（显示在卡片上） */
+  /** One-sentence description of what changed (shown on the card) */
   summary?: string;
 }
 export interface LogParams { level: "debug" | "info" | "warn" | "error"; msg: string; fields?: Record<string, unknown> }
 
-// ─────────────────────── NDJSON 分帧 ───────────────────────
+// ─────────────────────── NDJSON framing ───────────────────────
 
 /**
- * 按行切分字节流。JSON.stringify 不会产生裸换行，所以按 `\n` 分帧是安全的。
- * 不保证一次 data 事件里恰好是整数行 —— 必须缓存残行。
+ * Splits the byte stream on line boundaries. JSON.stringify never emits a bare newline, so framing on `\n` is safe.
+ * A single data event is not guaranteed to contain a whole number of lines — residual lines must be buffered.
  */
 export class LineReader {
   private buffer = "";
@@ -776,7 +778,7 @@ export class LineReader {
     }
   }
 
-  /** 进程退出时把最后一行（无换行）也吐出来 */
+  /** Emit the last line (which has no newline) on process exit */
   flush(): void {
     const rest = this.buffer.trim();
     this.buffer = "";

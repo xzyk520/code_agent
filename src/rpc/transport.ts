@@ -12,25 +12,27 @@ export interface ChildTransportOptions {
 }
 
 export interface TransportHandlers {
-  /** 收到一整行（已按 \n 分帧、去掉 \r） */
+  /** A complete line was received (already framed on \n with \r stripped) */
   onLine(line: string): void;
-  /** 进程退出（含启动失败） */
+  /** The process exited (including a failed start) */
   onExit(code: number | null, reason: string): void;
-  /** 进程级错误（spawn 失败等）；不代表已退出 */
+  /** Process-level error (spawn failure etc.); does not imply the process has exited */
   onError(error: Error): void;
 }
 
 /**
- * 传输层：只管「起进程 + 分帧 + 写管道」。
+ * Transport layer: only "spawn the process + frame lines + write to the pipe".
  *
- * 与 RPC 语义（请求跟踪、取消、错误码）分开的原因：
- *   - 这一层的 bug（残行、背压、退出清理）和协议无关，单独测更清楚
- *   - 将来换传输（socket / WebSocket / 远端）只改这个文件
+ * Why it is separate from RPC semantics (request tracking, cancellation, error codes):
+ *   - Bugs in this layer (partial lines, backpressure, exit cleanup) are protocol-independent and
+ *     easier to test on their own
+ *   - Swapping the transport later (socket / WebSocket / remote) touches only this file
  *
- * 三个必须做对的点：
- *   1. `data` 事件不保证整数行 → 用 LineReader 攒行
- *   2. `stdin.write()` 返回 false 表示缓冲满 → 等 `drain`，否则大报文堆内存
- *   3. 进程退出前把残行 flush 出来
+ * Three things that must be right:
+ *   1. `data` events are not guaranteed to align with lines -> collect them with LineReader
+ *   2. `stdin.write()` returning false means the buffer is full -> wait for `drain`, otherwise large
+ *      messages pile up in memory
+ *   3. Flush any leftover partial line before the process exits
  */
 export class ChildTransport {
   private child: ChildProcessWithoutNullStreams | undefined;
@@ -42,7 +44,7 @@ export class ChildTransport {
     return this.child !== undefined && this.child.exitCode === null && !this.disposed;
   }
 
-  /** 是否已经 spawn 过（不判断存活） */
+  /** Whether spawn has happened (does not check liveness) */
   get started(): boolean {
     return this.child !== undefined;
   }
@@ -56,7 +58,7 @@ export class ChildTransport {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
-      // PYTHONPATH（定位 beecode 包）+ 编码相关；密钥仍走 stdin 报文，不进环境变量
+      // PYTHONPATH (to locate the beecode package) + encoding related; secrets still travel in the stdin message, not via environment variables
       env: { ...process.env, ...(this.opts.env ?? {}) },
     });
     this.child = child;
@@ -84,10 +86,10 @@ export class ChildTransport {
   }
 
   /**
-   * 写一行报文。
+   * Write one line of message.
    *
-   * 返回 Promise 只在**发生背压**时才真正等待（`drain`）——正常情况立即 resolve，
-   * 不会给每个通知增加一个微任务开销。
+   * The returned Promise really waits (on `drain`) only when **backpressure** occurs -- normally it
+   * resolves immediately, so no extra microtask cost per notification.
    */
   async write(message: JsonRpcMessage): Promise<void> {
     const child = this.child;
@@ -98,12 +100,12 @@ export class ChildTransport {
     }
   }
 
-  /** 优雅关闭输入：内核读到 EOF 会自己退 */
+  /** Close input gracefully: the kernel sees EOF and exits on its own */
   endInput(): void {
     try {
       this.child?.stdin.end();
     } catch {
-      /* 管道可能已断 */
+      /* The pipe may already be broken */
     }
   }
 
@@ -113,7 +115,7 @@ export class ChildTransport {
     try {
       child.kill();
     } catch {
-      /* 进程可能已退出 */
+      /* The process may have exited already */
     }
   }
 

@@ -8,10 +8,10 @@ import type { CheckpointCreateParams, CheckpointCreateResult, CheckpointRestoreP
 
 const exec = promisify(execFile);
 
-/** 压缩滞后量：攒到 retention + 这个数才压缩，避免每次 create 都重写历史 */
+/** Compaction slack: compact only once history reaches retention + this many commits, so every create doesn't rewrite history */
 const COMPACT_SLACK = 10;
 
-/** retention=0（不压缩）时，list() 最多显示这么多条，避免 QuickPick 塞几千项 */
+/** With retention=0 (no compaction), list() shows at most this many entries, so the QuickPick isn't stuffed with thousands of items */
 const LIST_LIMIT_WHEN_UNBOUNDED = 500;
 
 export interface CheckpointRecord {
@@ -21,26 +21,26 @@ export interface CheckpointRecord {
 }
 
 /**
- * 检查点：影子 git 仓库（README §10.5）。
+ * Checkpoints: a shadow git repository (README §10.5).
  *
- *   GIT_DIR       = <globalStorage>/shadow.git   ← 与项目 .git 完全隔离
- *   GIT_WORK_TREE = 工作区根（每次操作时现取，支持切换/新增文件夹）
+ *   GIT_DIR       = <globalStorage>/shadow.git   ← completely isolated from the project's .git
+ *   GIT_WORK_TREE = the workspace root (taken fresh on every operation, supports switching/adding folders)
  *
- * 关键：**写入之前**必须有一次快照，否则「写到一半崩了」就无解。
+ * Key point: a snapshot must exist **before writing**, otherwise "crashed halfway through a write" is unrecoverable.
  *
- * 七个曾经踩过的坑（都已处理）：
- *   1. 提交身份：不依赖用户 git 配置，命令里用 `-c user.name/email` 覆盖
- *   2. 历史只在内存 → `list()` 改为从 `git log` 读，重载窗口后仍可回滚
- *   3. 影子仓库只增不减 → 超过 retention 时用 `commit-tree` 重建父链 + `gc --prune=now`
- *   4. 大仓库 add 全树慢 → 支持 `paths` 只快照指定文件
- *   5. 并发 create 撞 `index.lock` → 内部 promise 队列串行化
- *   6. 不可用时静默返回空 id → 返回 `skipped + reason`，调用方能区分「没做」和「做了」
- *   7. 任务级回滚：壳只能恢复**文件**，会话/任务状态由内核自己合成（协议已移除 scope）
+ * Seven pitfalls hit in the past (all handled):
+ *   1. Commit identity: do not rely on the user's git config; override with `-c user.name/email` in the command
+ *   2. History lived only in memory → `list()` now reads from `git log`, so rollback still works after a window reload
+ *   3. The shadow repo only ever grew → past retention, rebuild the parent chain with `commit-tree` + `gc --prune=now`
+ *   4. Adding the whole tree is slow on big repos → `paths` snapshots only the specified files
+ *   5. Concurrent creates colliding on `index.lock` → an internal promise queue serializes them
+ *   6. Silently returning an empty id when unavailable → return `skipped + reason`, so callers can tell "didn't do it" from "did it"
+ *   7. Task-level rollback: the shell can only restore **files**; session/task state is synthesized by the core itself (the protocol dropped scope)
  */
 export class CheckpointAdapter implements vscode.Disposable {
   private readonly gitDir: string;
   private initialized = false;
-  /** 串行队列：git 的 index.lock 不支持并发写 */
+  /** Serial queue: git's index.lock does not support concurrent writes */
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -52,7 +52,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     this.gitDir = path.join(context.globalStorageUri.fsPath, "shadow.git");
   }
 
-  /** 工作区根：每次现取，避免构造时冻结（用户可能切换或新增文件夹） */
+  /** Workspace root: taken fresh every time, so it isn't frozen at construction (the user may switch or add folders) */
   private get workTree(): string {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   }
@@ -73,7 +73,7 @@ export class CheckpointAdapter implements vscode.Disposable {
       if (!params.id) throw new Error("缺少检查点 id");
       await this.ensureRepo();
 
-      // 先算出「将要被覆盖」的文件（= 当前工作区与目标快照的差异），再覆盖
+      // First work out which files "are about to be overwritten" (= the diff between the current workspace and the target snapshot), then overwrite
       const dirty = await this.git(["diff", "--name-only", params.id, "--", "."]);
       const restored = dirty.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
 
@@ -84,10 +84,10 @@ export class CheckpointAdapter implements vscode.Disposable {
   }
 
   /**
-   * 命令级 checkpoint：返回相对于指定快照的变更文件。
+   * Command-level checkpoint: returns the files changed relative to the given snapshot.
    *
-   * 先把工作区 stage 到影子索引（不碰项目 .git），这样新增文件也能被 diff 到；
-   * 返回的是工作区相对路径。
+   * Stage the workspace into the shadow index first (never touching the project's .git), so newly added files get diffed too;
+   * the returned paths are workspace-relative.
    */
   async diff(id: string): Promise<string[]> {
     return this.serialize(async () => {
@@ -109,10 +109,10 @@ export class CheckpointAdapter implements vscode.Disposable {
   }
 
   /**
-   * 只恢复指定文件到快照状态：
-   *   - 快照里没有、命令新增的 → 删除
-   *   - 快照里有、命令修改/删除的 → checkout 回来
-   * 不影响工作区里其他文件。
+   * Restore only the specified files to their snapshot state:
+   *   - added by the command but absent from the snapshot → delete
+   *   - present in the snapshot but modified/deleted by the command → checkout them back
+   * Other files in the workspace are untouched.
    */
   async restorePaths(id: string, paths: string[]): Promise<string[]> {
     return this.serialize(async () => {
@@ -162,7 +162,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     });
   }
 
-  /** 从 git 历史读（不依赖内存），重载窗口后仍能列出旧检查点 */
+  /** Read from git history (not from memory), so old checkpoints still list after a window reload */
   async list(): Promise<CheckpointRecord[]> {
     return this.serialize(() => this.listInner());
   }
@@ -171,7 +171,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     if (!this.available) return [];
     try {
       await this.ensureRepo();
-      // retention=0 表示「不压缩」，此时不能用 `-n 0`（会返回空列表），给个显示上限
+      // retention=0 means "no compaction", and `-n 0` cannot be used then (it returns an empty list), so use a display cap instead
       const limit = this.retention > 0 ? this.retention : LIST_LIMIT_WHEN_UNBOUNDED;
       const out = await this.git(["log", `--format=%H%x09%ct%x09%s`, "-n", String(limit)]);
       return out
@@ -184,18 +184,18 @@ export class CheckpointAdapter implements vscode.Disposable {
         })
         .filter((record) => record.id.length > 0);
     } catch {
-      // 仓库还没建 / 还没有任何 commit：没有检查点
+      // Repository not created yet / no commits at all yet: no checkpoints
       return [];
     }
   }
 
   /**
-   * 把影子仓库的 HEAD 移回指定检查点，让"更新的快照"作废。
+   * Move the shadow repo's HEAD back to the given checkpoint, voiding "newer snapshots".
    *
-   * 语义（对应 README §10.5 的回滚）：
-   *   - 目标检查点本身保持不变
-   *   - 比它更新的检查点从历史上"消失"（分支指针回退，后续提交从目标点继续）
-   *   - 返回被作废的 id，供调用方删除对应的聊天快照
+   * Semantics (matching the rollback in README §10.5):
+   *   - the target checkpoint itself stays unchanged
+   *   - checkpoints newer than it "disappear" from history (the branch pointer moves back, later commits continue from the target)
+   *   - returns the voided ids so the caller can delete the matching chat snapshots
    */
   async rewind(id: string): Promise<{ voided: string[] }> {
     return this.serialize(async () => {
@@ -213,10 +213,10 @@ export class CheckpointAdapter implements vscode.Disposable {
   }
 
   dispose(): void {
-    /* git 是短命子进程，无需清理 */
+    /* git is a short-lived child process, so there is nothing to clean up */
   }
 
-  // ───────────────────────── 内部 ─────────────────────────
+  // ───────────────────────── Internals ─────────────────────────
 
   private async createInner(params: CheckpointCreateParams): Promise<CheckpointCreateResult> {
     if (!this.enabled) {
@@ -231,7 +231,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     await this.ensureRepo();
     const label = params.label ?? new Date().toISOString();
 
-    // 轻量模式：只快照指定路径（大仓库不必全树 add）
+    // Lightweight mode: snapshot only the given paths (a large repo needn't add the whole tree)
     const paths = (params.paths ?? []).filter((p) => p.trim().length > 0);
     if (paths.length > 0) {
       await this.git(["add", "-A", "--", ...paths]);
@@ -249,15 +249,15 @@ export class CheckpointAdapter implements vscode.Disposable {
   }
 
   /**
-   * 历史压缩：只保留最近 `retention` 个快照。
+   * History compaction: keep only the most recent `retention` snapshots.
    *
-   * 单纯 `gc` 删不掉旧 commit —— 它们在 HEAD 的父链上，永远是 reachable。
-   * 所以要**重写父链**：把最近 N 个 tree 用 `commit-tree` 重新串起来，
-   * 让更早的祖先变成 unreachable，再 `gc --prune=now` 真正回收对象。
+   * Plain `gc` cannot delete old commits — they sit on HEAD's parent chain and are therefore always reachable.
+   * So the parent chain must be **rewritten**: re-chain the most recent N trees with `commit-tree`,
+   * making the older ancestors unreachable, and then let `gc --prune=now` actually reclaim the objects.
    *
-   * ⚠️ 滞后阈值（hysteresis）：如果一到 retention 就压，之后**每次 create 都会**
-   * 重写 N 个 commit 再 gc —— 编辑密集的会话每轮卡几秒。所以等攒到
-   * `retention + COMPACT_SLACK` 再一次性压回 `retention`，把摊销成本降到 1/10。
+   * ⚠️ Hysteresis: compacting the moment retention is reached would mean **every subsequent create**
+   * rewrites N commits and gc's again — an edit-heavy session would stall for seconds each round. So wait until
+   * `retention + COMPACT_SLACK` accumulates, then compact back down to `retention` in one go, cutting the amortized cost to 1/10.
    */
   private async compactIfNeeded(): Promise<void> {
     if (this.retention <= 0) return;
@@ -272,7 +272,7 @@ export class CheckpointAdapter implements vscode.Disposable {
       .filter((s) => s.length > 0);
     if (lines.length < 2) return;
 
-    // 保留原来每个快照的 message，这样压缩后 list() 里的 label 不会变成 "compacted xxxx"
+    // Keep each snapshot's original message, so labels in list() don't turn into "compacted xxxx" after compaction
     const keep = lines.slice(0, this.retention).reverse().map((line) => {
       const [id = "", ...rest] = line.split("\t");
       return { id, subject: rest.join("\t") };
@@ -298,8 +298,8 @@ export class CheckpointAdapter implements vscode.Disposable {
     if (this.initialized) return;
     fs.mkdirSync(this.gitDir, { recursive: true });
     if (!fs.existsSync(path.join(this.gitDir, "HEAD"))) {
-      // ⚠️ `init` 不能带 `--work-tree`（git 会报 "GIT_WORK_TREE ... not allowed
-      // without specifying GIT_DIR"），所以这里单独走一条命令，不经过 this.git()
+      // ⚠️ `init` cannot take `--work-tree` (git reports "GIT_WORK_TREE ... not allowed
+      // without specifying GIT_DIR"), so it runs as a separate command, bypassing this.git()
       await exec("git", [`--git-dir=${this.gitDir}`, "init", "-q", "--bare"], {
         windowsHide: true,
         timeout: 30_000,
@@ -309,13 +309,13 @@ export class CheckpointAdapter implements vscode.Disposable {
   }
 
   /**
-   * 执行一条 git 命令。
+   * Run a single git command.
    *
-   * 三个要点：
-   *   - `--git-dir` / `--work-tree` 用参数传（不用环境变量，显式且好调试）
-   *   - `-c user.name/email`：**不依赖用户的全局 git 配置**，否则没配过身份的用户
-   *     在 `git commit` 时会直接失败（这是最容易漏的坑）
-   *   - `timeout`：避免大仓库上 git 卡死拖住整个壳
+   * Three points:
+   *   - `--git-dir` / `--work-tree` are passed as arguments (not environment variables: explicit and easier to debug)
+   *   - `-c user.name/email`: **do not rely on the user's global git config**, otherwise users who never configured an identity
+   *     fail outright on `git commit` (the easiest pitfall to miss)
+   *   - `timeout`: keeps git from hanging on a large repo and dragging the whole shell down with it
    */
   private async git(args: string[]): Promise<string> {
     const { stdout } = await exec(
@@ -343,7 +343,7 @@ export class CheckpointAdapter implements vscode.Disposable {
     }
   }
 
-  /** 串行化：前一个失败也要继续跑下一个（不能因为一次快照失败就卡死后续） */
+  /** Serialize: keep running the next one even if the previous failed (a single failed snapshot must not block everything after it) */
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.queue.then(fn, fn);
     this.queue = run.then(

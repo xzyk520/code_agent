@@ -19,28 +19,28 @@ const DEFAULT_SEARCH_LIMIT = 100;
 const MAX_SEARCH_LIMIT = 500;
 const DEFAULT_REF_LIMIT = 200;
 const MAX_REF_LIMIT = 1_000;
-/** 回退路径最多扫这么多文件（已被名字预筛过的候选） */
+/** The fallback path scans at most this many files (candidates already pre-filtered by name) */
 const FALLBACK_FILE_CAP = 40;
 const FALLBACK_FILE_BYTES = 512 * 1024;
 
 /**
- * 符号服务：三个动作，对应三种问法。
+ * Symbol service: three actions for three kinds of question.
  *
- *   outline    → 这个文件里有哪些函数/类（逐文件）
- *   search     → **哪个文件定义了叫 X 的东西**（全工作区，定义级）
- *   references → **X 在哪些地方被用到**（全工作区，引用级）
+ *   outline    → which functions/classes are in this file (per file)
+ *   search     → **which file defines something called X** (whole workspace, definition level)
+ *   references → **where X is used** (whole workspace, reference level)
  *
- * 三者都不读文件内容，返回的只有「位置」；要看内容再用 `fs.read` / `read_symbol`。
+ * None of them read file content; they return only "positions". Use `fs.read` / `read_symbol` when you need content.
  *
- * 每个符号带**两个**范围：
- *   - `range`：整个符号（含前导注释/docstring）—— `read_symbol` 用它，读函数想带注释
- *   - `selection`：标识符本身 —— `references` 用它；用 `range` 的起始行常常落在注释里，
- *     参考提供者拿不到符号，会返回空结果（这是 v0.3 之前的一个隐性 bug）
+ * Every symbol carries **two** ranges:
+ *   - `range`: the whole symbol (including leading comments/docstring) — `read_symbol` uses it, so reading a function can include its comments
+ *   - `selection`: the identifier itself — `references` uses it; the start line of `range` often lands inside a comment,
+ *     where the reference provider cannot resolve the symbol and returns empty results (a latent bug before v0.3)
  *
- * ⚠️ 返回类型有两种形态（取决于语言扩展注册的 provider）：
- *   - DocumentSymbol[]：有 range / selectionRange / children
- *   - SymbolInformation[]：扁平，只有 location + containerName
- * 必须同时兼容，否则一换语言就崩。
+ * ⚠️ The return type has two shapes (depending on the provider the language extension registers):
+ *   - DocumentSymbol[]: has range / selectionRange / children
+ *   - SymbolInformation[]: flat, only location + containerName
+ * Both must be handled, or things break as soon as you switch languages.
  */
 export function createSymbolsAdapter(logger: Logger) {
   const outline = async (path: string, ctx?: InboundRequestContext): Promise<SymbolsOutlineResult> => {
@@ -73,7 +73,7 @@ export function createSymbolsAdapter(logger: Logger) {
         });
         for (const child of node.children) visit(child, container ? `${container}.${node.name}` : node.name);
       } else {
-        // 扁平形态：provider 往往给了 containerName（属于哪个类），别丢
+        // Flat shape: the provider usually supplies containerName (which class it belongs to); don't drop it
         const own = node.containerName || container;
         symbols.push({
           name: node.name,
@@ -97,10 +97,10 @@ export function createSymbolsAdapter(logger: Logger) {
   };
 
   /**
-   * grep 回退：先按"名字出现在文件里"粗筛，再对命中的文件跑 outline。
+   * grep fallback: rough-filter by "the name appears in the file" first, then run outline on the files that matched.
    *
-   * 为什么不用"函数定义"正则：`parseConfig() {` 这种类方法没有关键字，
-   * 正则必然漏检；而"文件里出现过这个名字"是不会漏的下界。
+   * Why not a "function definition" regex: a class method like `parseConfig() {` has no keyword,
+   * so a regex inevitably misses it; whereas "the name appears somewhere in the file" is a lower bound that never misses.
    */
   const searchByFallback = async (
     query: string,
@@ -115,7 +115,7 @@ export function createSymbolsAdapter(logger: Logger) {
     for (const uri of candidates) {
       if (hits.length >= limit || scanned >= FALLBACK_FILE_CAP) break;
       ctx.throwIfCancelled();
-      if (isIgnored(uri.fsPath)) continue;   // ← node_modules / .gitignore 不占名额
+      if (isIgnored(uri.fsPath)) continue;   // ← node_modules / .gitignore do not count against the cap
 
       let text: string;
       try {
@@ -146,7 +146,7 @@ export function createSymbolsAdapter(logger: Logger) {
     return hits;
   };
 
-  /** 工作区内的 file 路径才接受（多根工作区、依赖索引都可能带出工作区外的符号） */
+  /** Only accept file paths inside the workspace (multi-root workspaces and dependency indexes can bring out symbols from outside it) */
   const inWorkspace = (fsPath: string): boolean => {
     if (isIgnored(fsPath)) return false;
     const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
@@ -163,11 +163,11 @@ export function createSymbolsAdapter(logger: Logger) {
     },
 
     /**
-     * 全工作区按名字找定义。
+     * Find definitions by name across the whole workspace.
      *
-     * 首选 `workspace/symbol`（语言服务的索引，毫秒级）；拿不到就回退到
-     * "按名字粗筛文件 + 逐文件 outline 过滤"，并如实标注 `source: "fallback"`
-     * ——调用方据此知道"结果可能不全"。
+     * Prefer `workspace/symbol` (the language service index, millisecond speed); if that is unavailable, fall back to
+     * "rough-filter files by name + per-file outline filtering", and honestly mark it `source: "fallback"`
+     * — so the caller knows the result may be incomplete.
      */
     async search(params: SymbolsSearchParams, ctx: InboundRequestContext): Promise<SymbolsSearchResult> {
       ctx.throwIfCancelled();
@@ -219,7 +219,7 @@ export function createSymbolsAdapter(logger: Logger) {
     },
 
     /**
-     * 某个位置（**符号标识符所在行**，优先用 `outline` 返回的 `selection.startLine`）的所有引用。
+     * All references at one position (**the line holding the symbol identifier**; prefer the `selection.startLine` returned by `outline`).
      */
     async references(params: SymbolsReferencesParams, ctx: InboundRequestContext): Promise<SymbolsReferencesResult> {
       ctx.throwIfCancelled();
@@ -248,7 +248,7 @@ export function createSymbolsAdapter(logger: Logger) {
           col: loc.range.start.character + 1,
         };
         const key = `${hit.path}:${hit.line}:${hit.col}`;
-        if (seen.has(key)) continue;   // 某些 provider 会返回重复位置
+        if (seen.has(key)) continue;   // some providers return duplicate locations
         seen.add(key);
         all.push(hit);
       }

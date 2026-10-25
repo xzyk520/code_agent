@@ -7,26 +7,26 @@ import { isIgnored } from "../workspaceIgnore";
 
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_FILES_SCANNED = 4_000;
-/** 正则长度上限：超过基本可以断定不是人类写的搜索模式 */
+/** Regex length limit: anything longer is almost certainly not a human-written search pattern */
 const MAX_PATTERN_LENGTH = 300;
-/** 单行参与匹配的最大长度（超出只匹配前缀，避免超长行拖慢） */
+/** Max length of a line that takes part in matching (beyond it only the prefix is matched, so huge lines don't slow it down) */
 const MAX_LINE_FOR_MATCH = 2_000;
-/** 一行最多统计多少个匹配（防止 `a` 这类模式在长行上刷爆计数） */
+/** Max matches counted per line (keeps patterns like `a` from blowing up the count on long lines) */
 const MAX_MATCHES_PER_LINE = 50;
-/** 单文件最多统计多少个匹配，超过标记 capped */
+/** Max matches counted per file; beyond that the file is flagged capped */
 const MAX_FILE_MATCHES = 1_000;
-/** 整体扫描时间预算：超过就带着 truncated 返回，别把扩展宿主拖死 */
+/** Overall scan time budget: once exceeded, return with truncated instead of choking the extension host */
 const MAX_SCAN_MS = 5_000;
 
 /**
- * 代码检索（只在壳内做 I/O，匹配逻辑很薄）。
+ * Code search (only I/O happens in the shell; the matching logic is thin).
  *
- * ❗ 注意：`workspace.findTextInFiles` 至今仍是 **proposed API**（stable
- * @types/vscode 里没有），所以这里不能用它。当前实现是
- * `findFiles` + 逐文件读 + 正则匹配：
- *   - 优点：只用公开 API，行为可预测
- *   - 缺点：大仓库慢（有 4000 文件 / 256KB / 5s 三重上限兜底）
- * 后续优化（TODO）：探测到系统里有 `rg` 就 spawn `rg --json`，否则回落到本实现。
+ * ❗ Note: `workspace.findTextInFiles` is still a **proposed API** (it is not in
+ * stable @types/vscode), so it cannot be used here. The current implementation is
+ * `findFiles` + per-file read + regex matching:
+ *   - Pros: public APIs only, predictable behavior
+ *   - Cons: slow on large repos (backed by three limits: 4000 files / 256KB / 5s)
+ * Future optimization (TODO): if `rg` is detected on the system, spawn `rg --json`; otherwise fall back to this implementation.
  */
 export function createSearchAdapter(logger: Logger) {
   return {
@@ -37,7 +37,7 @@ export function createSearchAdapter(logger: Logger) {
 
       const limit = Math.min(params.maxResults ?? 200, 2_000);
       const contextLines = Math.max(0, Math.min(params.contextLines ?? 0, 5));
-      // 召回模式：只回「哪些文件命中、各几次」，不返回行文本
+      // Recall mode: report only which files matched and how many times, without line text
       const filesOnly = params.filesOnly === true;
 
       const re = buildRegex(query, params.regex === true, params.caseSensitive === true);
@@ -67,7 +67,7 @@ export function createSearchAdapter(logger: Logger) {
           truncated = true;
           break;
         }
-        // 统一的忽略规则（噪声目录 + .gitignore），与 fs.list / diagnostics 一致
+        // Shared ignore rules (noise directories + .gitignore), consistent with fs.list / diagnostics
         if (isIgnored(uri.fsPath)) continue;
 
         let text: string;
@@ -76,7 +76,7 @@ export function createSearchAdapter(logger: Logger) {
           if (stat.size > MAX_FILE_BYTES) continue;
           const raw = await vscode.workspace.fs.readFile(uri);
           const buf = Buffer.from(raw);
-          if (buf.subarray(0, 8192).includes(0)) continue; // 二进制
+          if (buf.subarray(0, 8192).includes(0)) continue; // binary
           text = buf.toString("utf8");
         } catch {
           continue;
@@ -89,9 +89,9 @@ export function createSearchAdapter(logger: Logger) {
 
         for (let i = 0; i < lines.length; i += 1) {
           const full = lines[i] ?? "";
-          // 超长行只匹配前缀：正则的代价随长度指数上升，这里必须设闸
+          // Very long lines match only the prefix: regex cost grows exponentially with length, so a cap is mandatory here
           const line = full.length > MAX_LINE_FOR_MATCH ? full.slice(0, MAX_LINE_FOR_MATCH) : full;
-          // 召回模式按文件累计（上限 MAX_FILE_MATCHES）；命中模式按行限流
+          // Recall mode accumulates per file (capped at MAX_FILE_MATCHES); hit mode throttles per line
           const counts = countMatches(line, re, filesOnly ? MAX_FILE_MATCHES : MAX_MATCHES_PER_LINE);
           if (counts.firstCol === 0) continue;
           if (counts.capped) cappedFile = true;
@@ -105,7 +105,7 @@ export function createSearchAdapter(logger: Logger) {
             continue;
           }
 
-          // 统一格式：text 永远是「裸行」，上下文与匹配数走独立字段
+          // Uniform shape: text is always the bare line; context and match count travel in separate fields
           hits.push({
             path: rel,
             line: i + 1,
@@ -130,7 +130,7 @@ export function createSearchAdapter(logger: Logger) {
       }
 
       ctx.throwIfCancelled();
-      // 排序保证可复现（findFiles 的顺序依赖文件系统）
+      // Sorting makes the result reproducible (findFiles order depends on the filesystem)
       hits.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path.localeCompare(b.path)));
       fileHits.sort((a, b) => a.path.localeCompare(b.path));
 
@@ -145,11 +145,12 @@ export function createSearchAdapter(logger: Logger) {
 }
 
 /**
- * 构造正则，并挡住"明显会爆炸"的模式。
+ * Build the regex, and block patterns that "obviously blow up".
  *
- * 为什么需要：JS 正则不可中断（没有超时 API），一个 `(a+)+$` 就能把扩展宿主卡死，
- * 而模型是完全可能生成这种模式的（它不知道执行成本）。
- * 这里做三道防护：长度上限、嵌套量词启发式、单行长度上限。
+ * Why this is needed: JS regexes cannot be interrupted (there is no timeout API); a
+ * single `(a+)+$` can freeze the extension host, and the model is entirely capable of
+ * generating such a pattern (it has no idea of the execution cost).
+ * Three guards here: length limit, nested-quantifier heuristic, per-line length limit.
  */
 function buildRegex(query: string, isRegex: boolean, caseSensitive: boolean): RegExp {
   const flags = caseSensitive ? "g" : "gi";
@@ -170,7 +171,7 @@ function buildRegex(query: string, isRegex: boolean, caseSensitive: boolean): Re
   }
 }
 
-/** 粗糙但有效的启发式：`(...+)+`、`(...*)*`、`++`、`+*` 之类 */
+/** Crude but effective heuristic: things like `(...+)+`, `(...*)*`, `++`, `+*` */
 export function looksCatastrophic(pattern: string): boolean {
   if (/(\([^)]*[+*][^)]*\)\s*[+*])/.test(pattern)) return true; // (…+)+
   if (/(\[[^\]]*\]\s*[+*])\s*[+*]/.test(pattern)) return true; // […]+ +
@@ -178,7 +179,7 @@ export function looksCatastrophic(pattern: string): boolean {
   return false;
 }
 
-/** 统计一行里的匹配数与第一个匹配的列（1-based）。零宽匹配要手动推进 lastIndex，否则死循环。 */
+/** Count matches in one line and the column of the first match (1-based). Zero-width matches must advance lastIndex manually, or this loops forever. */
 function countMatches(line: string, re: RegExp, perLineLimit: number): { total: number; firstCol: number; capped: boolean } {
   re.lastIndex = 0;
   let total = 0;
@@ -193,7 +194,7 @@ function countMatches(line: string, re: RegExp, perLineLimit: number): { total: 
       capped = true;
       break;
     }
-    if (match[0].length === 0) re.lastIndex += 1; // 零宽匹配：避免原地打转
+    if (match[0].length === 0) re.lastIndex += 1; // zero-width match: avoid spinning in place
     if (re.lastIndex > line.length) break;
   }
   re.lastIndex = 0;

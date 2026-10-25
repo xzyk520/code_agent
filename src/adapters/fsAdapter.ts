@@ -7,30 +7,30 @@ import { resolveTarget, toWorkspaceRelative } from "../paths";
 import type { FsListParams, FsListResult, FsReadParams, FsReadResult } from "../protocol";
 import { isIgnored } from "../workspaceIgnore";
 
-/** 整文件读取上限：超过它就不再"整份读进内存"，改走流式按行读 */
+/** Whole-file read limit: beyond it, stop reading the whole thing into memory and stream line by line instead */
 const MAX_INLINE_BYTES = 512 * 1024;
-/** 单次**返回给模型**的内容上限：与文件多大无关，只看这次读了多少 */
+/** Cap on content **returned to the model** per call: independent of file size, only of how much is read this time */
 const MAX_RETURN_BYTES = 256 * 1024;
 const MAX_RETURN_LINES = 2_000;
-/** 二进制探测：只读开头这么多字节找 NUL */
+/** Binary sniffing: read only this many bytes at the start in search of a NUL */
 const SNIFF_BYTES = 8 * 1024;
 const DEFAULT_LIST_LIMIT = 5_000;
-/** 列表先多取再过滤，避免"前 N 个都被忽略 → 返回空" */
+/** Listing over-fetches before filtering, to avoid "the first N were all ignored → empty result" */
 const LIST_OVERFETCH = 4;
 const LIST_HARD_CAP = 20_000;
 
 /**
- * 文件读取与列举。
+ * File reading and listing.
  *
- * 两个关键事实（都写进了 README §8.1）：
- *   1. `workspace.findFiles` **不读 .gitignore**，只认 files.exclude / search.exclude
- *   2. `exclude` 传 undefined 会用默认排除，传 null 则完全不过滤
+ * Two key facts (both documented in README §8.1):
+ *   1. `workspace.findFiles` **does not read .gitignore**; it only honors files.exclude / search.exclude
+ *   2. `exclude` set to undefined applies the default excludes, while null filters nothing at all
  *
- * 读取策略（v0.4 起）：
- *   - **按"这次要返回多少"限流，而不是按"文件多大"拒绝**
- *   - 小文件：优先用编辑器文档（能看到未保存内容 + 拿到 version）
- *   - 大文件：流式按行读，只读到 `endLine` 为止，内存占用与文件大小无关
- *   - 无论哪条路径，单次返回都受 `MAX_RETURN_BYTES` / `MAX_RETURN_LINES` 约束
+ * Read strategy (since v0.4):
+ *   - **Throttle by "how much to return this time", not by "how big the file is"**
+ *   - Small files: prefer the editor document (sees unsaved content + gets a version)
+ *   - Large files: stream line by line, reading only up to `endLine`, so memory use is independent of file size
+ *   - Either path, a single return is bounded by `MAX_RETURN_BYTES` / `MAX_RETURN_LINES`
  */
 export function createFsAdapter(logger: Logger) {
   return {
@@ -39,7 +39,7 @@ export function createFsAdapter(logger: Logger) {
       const uri = resolveTarget(params.path);
       const rel = toWorkspaceRelative(uri.fsPath);
 
-      // ① 已经在编辑器里打开（可能未保存）→ 直接用文档，拿到最新内容与 version
+      // 1) Already open in an editor (possibly unsaved) → use the document directly for the latest content and version
       const openDoc = vscode.workspace.textDocuments?.find((d) => d.uri.fsPath === uri.fsPath);
       if (openDoc) {
         const result = readFromDocument(openDoc, params);
@@ -47,7 +47,7 @@ export function createFsAdapter(logger: Logger) {
         return result;
       }
 
-      // ② 没打开：先看大小，决定"整份打开"还是"流式按行读"
+      // 2) Not open: check the size first and choose between "open the whole file" and "stream line by line"
       const stat = await vscode.workspace.fs.stat(uri);
       await assertNotBinary(uri, rel);
 
@@ -58,7 +58,7 @@ export function createFsAdapter(logger: Logger) {
           logger.debug(`fs.read ${rel} L${result.startLine}-L${result.endLine}`);
           return result;
         } catch {
-          // 打开失败（非文本文件等）→ 落到流式读
+          // Open failed (non-text file, etc.) → fall back to the streaming read
         }
       }
 
@@ -73,10 +73,10 @@ export function createFsAdapter(logger: Logger) {
       ctx.throwIfCancelled();
       const glob = params.glob && params.glob.length > 0 ? params.glob : "**/*";
       const limit = Math.min(params.maxResults ?? DEFAULT_LIST_LIMIT, LIST_HARD_CAP);
-      // 先多取：过滤（node_modules / .gitignore）之后可能砍掉很多，不能一开始就截断
+      // Over-fetch first: filtering (node_modules / .gitignore) can drop a lot, so don't truncate upfront
       const fetch = Math.min(limit * LIST_OVERFETCH, LIST_HARD_CAP);
 
-      // `exclude: null` 表示"完全不过滤"，要原样透传；undefined 才用默认排除
+      // `exclude: null` means "no filtering at all" and must be passed through as is; only undefined uses the default excludes
       const found = await vscode.workspace.findFiles(glob, params.exclude === null ? null : (params.exclude ?? undefined), fetch);
 
       const paths: string[] = [];
@@ -87,7 +87,7 @@ export function createFsAdapter(logger: Logger) {
         if (paths.length >= limit) break;
       }
 
-      // 取回的数量达到抓取上限，说明可能还有更多
+      // Reaching the fetch cap means there may be more
       const truncated = found.length >= fetch || paths.length >= limit;
       logger.debug(`fs.list ${glob} → ${paths.length} 个文件${truncated ? "（可能被截断）" : ""}`);
       return { paths, truncated };
@@ -95,7 +95,7 @@ export function createFsAdapter(logger: Logger) {
   };
 }
 
-/** 从已打开的文档里取行范围 */
+/** Take a line range from an already open document */
 function readFromDocument(doc: vscode.TextDocument, params: FsReadParams): FsReadResult {
   const totalLines = doc.lineCount;
   const { startLine, endLine, truncated } = planRange(params, totalLines);
@@ -106,10 +106,10 @@ function readFromDocument(doc: vscode.TextDocument, params: FsReadParams): FsRea
 }
 
 /**
- * 大文件：流式按行读，只读到 `endLine`（或字节上限）为止。
+ * Large files: stream line by line, reading only up to `endLine` (or the byte cap).
  *
- * 关键：**内存占用取决于读了多少行，而不是文件多大**。
- * 一个 500MB 的日志，只读第 1000–1010 行也只占十几 KB。
+ * Key point: **memory use depends on how many lines are read, not on how big the file is**.
+ * For a 500MB log, reading just lines 1000–1010 still costs only a dozen KB.
  */
 async function readByStreaming(uri: vscode.Uri, params: FsReadParams): Promise<FsReadResult> {
   const startLine = Math.max(1, Math.trunc(params.startLine ?? 1));
@@ -130,7 +130,7 @@ async function readByStreaming(uri: vscode.Uri, params: FsReadParams): Promise<F
       lineNo += 1;
       if (lineNo < startLine) continue;
       if (lineNo > requestedEnd) {
-        // 请求范围读完了，但文件还有内容 —— 不代表截断
+        // Requested range is done, but the file still has content — that is not truncation
         reachedEof = false;
         break;
       }
@@ -157,7 +157,7 @@ async function readByStreaming(uri: vscode.Uri, params: FsReadParams): Promise<F
   };
 }
 
-/** 二进制探测：开头出现 NUL 就当成二进制，避免把乱码塞进上下文 */
+/** Binary sniffing: a NUL at the start means binary, keeping garbage out of the context */
 async function assertNotBinary(uri: vscode.Uri, rel: string): Promise<void> {
   let fd: fs.promises.FileHandle | undefined;
   try {
@@ -169,13 +169,13 @@ async function assertNotBinary(uri: vscode.Uri, rel: string): Promise<void> {
     }
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("看起来是二进制文件")) throw err;
-    // 打不开就交给后面的读取逻辑报错
+    // If it cannot be opened, let the read logic below report the error
   } finally {
     await fd?.close().catch(() => undefined);
   }
 }
 
-/** 计算合法行范围，并施加"单次最多多少行"的限制 */
+/** Compute a valid line range and apply the "max lines per call" cap */
 function planRange(params: FsReadParams, totalLines: number): { startLine: number; endLine: number; truncated: boolean } {
   const maxLine = Math.max(totalLines, 1);
   const startLine = clamp(params.startLine ?? 1, 1, maxLine);
@@ -184,7 +184,7 @@ function planRange(params: FsReadParams, totalLines: number): { startLine: numbe
   return { startLine, endLine: cappedEnd, truncated: cappedEnd < requestedEnd };
 }
 
-/** 内容超长时按字节截断（行范围是对的，但单行可能极长，例如压缩后的 JS） */
+/** Truncate by bytes when the content is too long (the line range is right, but a single line can be enormous, e.g. minified JS) */
 function capResult(result: FsReadResult, totalLines: number): FsReadResult {
   if (Buffer.byteLength(result.text, "utf8") <= MAX_RETURN_BYTES) return result;
   let text = result.text;

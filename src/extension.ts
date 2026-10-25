@@ -83,10 +83,10 @@ export async function deactivate(): Promise<void> {
 }
 
 /**
- * 壳的装配根：所有依赖在这里一次性接好，其他地方只依赖接口。
+ * Assembly root for the shell: all dependencies are wired up here once, and everything else depends only on interfaces.
  *
- * 这个类**不含业务逻辑**：提示词、工具循环、检索、补丁全在 Python 内核里。
- * 它只负责把内核的意图翻译成 VS Code 动作，以及把用户动作翻译成 RPC。
+ * This class contains **no business logic**: prompts, the tool loop, retrieval, and patches all live in the Python core.
+ * It only translates the core's intents into VS Code actions, and user actions into RPC calls.
  */
 class Shell {
   private readonly log: Logger;
@@ -100,10 +100,10 @@ class Shell {
   private core: CoreApi | undefined;
   private starting: Promise<CoreApi> | undefined;
   private sessionId: string;
-  /** 已落盘的消息条数（面板里的 vs 磁盘上的对齐用） */
+  /** Number of messages already persisted (keeps the panel aligned with disk) */
   private persisted = 0;
-  /** 早前轮次的机械摘要（喂给模型的 L1） */
-  /** 本轮助手输出（ui.delta 累积；chatSend 结束后整段落盘） */
+  /** Mechanical summary of earlier turns (the L1 fed to the model) */
+  /** This turn's assistant output (accumulated from ui.delta; persisted as one block after chatSend ends) */
   private assistantBuffer = "";
   private acceptAllCancelled = false;
   private acceptAllToken = 0;
@@ -118,19 +118,19 @@ class Shell {
   private turnIntent?: { intent: string; mode: Mode; scale?: "small" | "large"; needsProposal?: boolean; reason?: string };
   private readonly turnTools = new Set<string>();
   private readonly turnObservations: string[] = [];
-  /** 本轮生成的图（挂到 assistant 消息 + turn record） */
+  /** Diagrams generated this turn (attached to the assistant message + turn record) */
   private readonly turnDiagrams: DiagramDto[] = [];
-  /** 本轮轨迹（思考/工具/图），用于用户消息下的折叠卡片 */
+  /** This turn's trace (reasoning/tools/diagrams), used for the collapsed card under the user message */
   private readonly turnTrace: TraceStepDto[] = [];
-  /** 本轮错误（chat.send 失败时） */
+  /** This turn's error (when chat.send fails) */
   private turnError: string | undefined;
-  /** 本轮的计划（ui.plan 更新；落进 turn record 与 session meta） */
+  /** This turn's plan (updated by ui.plan; written into the turn record and session meta) */
   private turnPlan: PlanStep[] = [];
-  /** 本轮用户消息 id（右侧轨迹跳转用） */
+  /** This turn's user message id (used for trajectory jumps on the right) */
   private turnUserMessageId: string | undefined;
-  /** 本轮意图规模（决定模型响应时限） */
+  /** Scale of this turn's intent (determines the model response deadline) */
   private turnScale: "small" | "large" = "small";
-  /** 本轮累计消耗（ui.usage 推送） */
+  /** Accumulated usage for this turn (pushed via ui.usage) */
   private turnUsage?: {
     inputTokens: number;
     outputTokens: number;
@@ -138,19 +138,19 @@ class Shell {
     modelWaitMs: number;
     toolMs: number;
   };
-  /** 本轮思考内容：按模型调用分段累积（随 assistant 消息落盘，供回看） */
+  /** This turn's reasoning: accumulated per model call (persisted with the assistant message for later review) */
   private readonly reasoningSegments = new Map<number, string>();
-  /** 每个会话已批准的最高沙箱权限等级 */
+  /** Highest sandbox permission level approved for each session */
   private readonly sandboxApprovals = new Map<string, number>();
-  /** 无 Docker 时，用户已批准受限只读 host 执行的会话 */
+  /** Sessions where the user approved restricted read-only host execution when Docker is unavailable */
   private readonly hostReadonlyApprovals = new Set<string>();
-  /** 无 Docker 时，用户已批准 host 写回退的最高等级（与 Docker 审批分开） */
+  /** Highest host write-fallback level approved per session when Docker is unavailable (tracked separately from Docker approvals) */
   private readonly hostFallbackApprovals = new Map<string, number>();
-  /** 最近一次发送的请求，用于“重试本轮” */
+  /** The most recently sent request, used by "retry this turn" */
   private lastTurnRequest?: { text: string; mode: Mode; attachments: AttachedContext[] };
-  /** 命令级 checkpoint：命令结束后可一键撤销 */
+  /** Command-level checkpoint: one-click undo after the command finishes */
   private readonly commandCheckpoints = new Map<string, { files: string[]; command: string; createdAt: number }>();
-  /** 长命令 job（无硬超时；由 command_wait / command_terminate 管理） */
+  /** Long-running command jobs (no hard timeout; managed via command_wait / command_terminate) */
   private readonly commandJobs = new Map<
     string,
     {
@@ -166,23 +166,23 @@ class Shell {
       cancelled: boolean;
     }
   >();
-  /** 附件限制提示：短暂聚合，合并成一条 toast（避免多选文件时连环弹） */
+  /** Attachment-limit notices: briefly aggregated and merged into a single toast (avoids a burst when selecting many files) */
   private readonly attachmentNotices: string[] = [];
   private attachmentNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly turnFiles = new Set<string>();
-  /** 模型摘要缓存：covered = 已覆盖轮次数；lines 用于增量追加；持久化在 SummaryStore */
+  /** Model summary cache: covered = number of covered turns; lines for incremental appends; persisted in SummaryStore */
   private summaryCache?: { covered: number; coveredMessageIndex: number; text: string; lines: string[] };
   private rules: RuleSet = buildRuleSet({});
   private trusted = false;
   private dockerAvailable = false;
   private readonly sessions: SessionStore;
-  /** 上一轮停在哪个阶段（持久化到磁盘，重载后可判断能否继续） */
+  /** Where the previous turn stopped (persisted to disk so a reload can tell whether it can continue) */
   private turn: TurnStatus = "idle";
   private turnDetail: string | undefined;
   private readonly edit: ReturnType<typeof createEditAdapter>;
   private busy = false;
   private usage = "";
-  /** 停用标志：保证 dispose 幂等，且停用后不再拉起内核/发请求 */
+  /** Shutdown flag: keeps dispose idempotent and prevents starting the core or sending requests after shutdown */
   private disposed = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -199,7 +199,7 @@ class Shell {
       this.config.checkpointRetention,
     );
 
-    // 写入通道与提案暂存：提案被「接受」时才真正调用 this.edit 落盘
+    // Write channel and proposal staging: this.edit is only actually called to write to disk when a proposal is "accepted"
     this.edit = createEditAdapter(this.log);
     this.confirm = createConfirmAdapter(context, this.log);
     this.proposals = new ProposalAdapter(this.diff, this.edit, this.log);
@@ -211,7 +211,7 @@ class Shell {
     this.runner = createRunAdapter({
       logger: this.log,
       policy: () => ({
-        // 默认命令走 Docker；agent 显式请求 host 时由 runCommand 的审批门闸 override
+        // Commands use Docker by default; when the agent explicitly requests host, runCommand's approval gate overrides this
         sandbox: this.dockerAvailable ? "docker" : "off",
         dockerImage: this.config.permissions.dockerImage,
       }),
@@ -248,8 +248,8 @@ class Shell {
     await this.refreshPermissions();
     await this.initSandbox();
 
-    // 所有"可释放资源"只有一个所有者：context.subscriptions。
-    // VS Code 会在 deactivate() 后统一 dispose，避免我们与它双重释放。
+    // All "releasable resources" have exactly one owner: context.subscriptions.
+    // VS Code disposes everything uniformly after deactivate(), so we never double-dispose.
     this.context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, this.panel, {
         webviewOptions: { retainContextWhenHidden: false },
@@ -311,7 +311,7 @@ class Shell {
           return;
         }
 
-        // 分流：只改模型相关 → 热更新（不重启进程）；其余（core/pythonPath/checkpoint…）→ 重启
+        // Routing: model-only changes → hot reload (no process restart); everything else (core/pythonPath/checkpoint…) → restart
         if ((event.affectsConfiguration("beeCode.model") || event.affectsConfiguration("beeCode.subagent") || event.affectsConfiguration("beeCode.summary")) && this.core) {
           void this.resolveApiKey().then((resolved) => {
             if (!this.core) return undefined;
@@ -352,13 +352,13 @@ class Shell {
   }
 
   /**
-   * 停用时的**有序**清理。
+   * **Ordered** cleanup on shutdown.
    *
-   * 只做 subscriptions 覆盖不到的那件事：**按顺序停内核**（它是子进程 + 可能正在跑工具），
-   * 其余资源（面板、命令、监听、状态栏、日志、适配器）都登记在 `context.subscriptions`，
-   * 由 VS Code 在 `deactivate()` 返回后统一释放 —— 单一所有者，不会双重 dispose。
+   * It only does the one thing subscriptions can't cover: **stop the core in order** (it's a child process and may be running tools).
+   * Everything else (panel, commands, listeners, status bar, log, adapters) is registered in `context.subscriptions`
+   * and released by VS Code after `deactivate()` returns — a single owner, so nothing is double-disposed.
    *
-   * 幂等：`disposed` 标志保证重复调用只生效一次。
+   * Idempotent: the `disposed` flag ensures repeated calls take effect only once.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
@@ -366,7 +366,7 @@ class Shell {
 
     for (const record of this.commandJobs.values()) record.job.kill();
     this.commandJobs.clear();
-    // 先把最后几条消息落盘，再停内核
+    // Flush the last few messages to disk first, then stop the core
     await this.sessions.updateStatus(this.sessionId, "idle").catch(() => undefined);
     await this.sessions.flush().catch(() => undefined);
 
@@ -379,9 +379,9 @@ class Shell {
     this.log.info("Deactivated");
   }
 
-  // ───────────────────────── 会话与上下文 ─────────────────────────
+  // ───────────────────────── Sessions and context ─────────────────────────
 
-  /** 首次激活：读到上次的 sessionId 就续上，读不到就新建一个 */
+  /** First activation: resume the stored sessionId if present, otherwise create a new one */
   private async ensureSession(): Promise<void> {
     const existing = await this.sessions.open(this.sessionId);
     if (existing.length === 0 && !this.sessions.meta(this.sessionId)) {
@@ -412,7 +412,7 @@ class Shell {
     await this.refreshTrajectory();
 
     const meta = this.sessions.meta(this.sessionId);
-    const status = meta?.status ?? "idle";   // 未写过的状态一律当 idle，别误报"被中断"
+    const status = meta?.status ?? "idle";   // an unset status is always treated as idle; don't falsely report "interrupted"
     const note = this.interruptionNote(status, meta?.statusDetail);
     if (note) {
       this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: note });
@@ -444,7 +444,7 @@ class Shell {
     }
   }
 
-  /** 追加一条消息到磁盘（用户/助手/系统都走这里） */
+  /** Append a message to disk (user/assistant/system all go through here) */
   private remember(
     role: "user" | "assistant" | "system",
     text: string,
@@ -463,13 +463,13 @@ class Shell {
   }
 
   /**
-   * 构建发给模型的历史：**不是整份 transcript**，而是 `contextBuilder` 裁剪后的结果。
+   * Build the history sent to the model: **not the full transcript**, but the result trimmed by `contextBuilder`.
    *
-   * 摘要 + 最近 N 条逐字；超预算先缩摘要，再从最旧的消息丢。
+   * Summary + the most recent N messages verbatim; when over budget, shrink the summary first, then drop the oldest messages.
    */
   private async modelContext(): Promise<{ summary?: string; history: ChatMessage[] }> {
     const all = await this.sessions.open(this.sessionId);
-    // 机械裁剪负责"取最近 8 条 + 兜底摘要"；模型摘要负责"更早轮次的可读总结"
+    // Mechanical trimming handles "take the last 8 messages + fallback summary"; the model summary handles "readable summaries of earlier turns"
     const built = buildContext(all, undefined);
     const jobNote = this.activeCommandJobNote();
     const history: ChatMessage[] = [...built.messages];
@@ -480,7 +480,7 @@ class Shell {
     return { summary: summary ?? built.summary, history };
   }
 
-  /** 聊天回滚：摘要按"仍保留的轮次"截断，并同步落盘 */
+  /** Chat rollback: truncate the summary to the "turns still retained" and persist the change */
   private async truncateSummary(messageLine: number): Promise<void> {
     const turns = (await this.turns.list(this.sessionId)).filter((turn) => turn.messageIndex <= messageLine);
     const cache = this.summaryCache;
@@ -502,7 +502,7 @@ class Shell {
     this.log.info(`Summary truncated with chat rollback to ${lines.length} turns`);
   }
 
-  /** 附件限制提示先入队，250ms 内的多条合并成一条 toast + 一条系统消息 */
+  /** Attachment-limit notices are queued first; several within 250ms merge into one toast + one system message */
   private queueAttachmentNotice(message: string): void {
     if (!this.attachmentNotices.includes(message)) this.attachmentNotices.push(message);
     if (this.attachmentNoticeTimer) clearTimeout(this.attachmentNoticeTimer);
@@ -528,7 +528,7 @@ class Shell {
     void vscode.window.showWarningMessage(`Bee Code: ${merged}`);
   }
 
-  /** 从轮次记录加载每轮轨迹（用户消息下的折叠卡片） */
+  /** Load each turn's trace from the turn records (the collapsed card under the user message) */
   private async refreshTurns(): Promise<void> {
     const turns = await this.turns.list(this.sessionId);
     this.panel.setTurns(
@@ -546,17 +546,17 @@ class Shell {
     );
   }
 
-  /** 从轮次记录重建右侧轨迹（重载/切换会话/回滚后用） */
+  /** Rebuild the right-side trajectory from turn records (used after reload/session switch/rollback) */
   private async refreshTrajectory(): Promise<void> {
     const turns = await this.turns.list(this.sessionId);
     const messages = await this.sessions.open(this.sessionId);
     const items: Array<{ id: string; mode: Mode; intent: string; detail?: string }> = [];
     for (const turn of turns) {
-      // 回滚等"合成轮"没有用户消息，不进轨迹
+      // Rollback and similar "synthetic turns" have no user message, so keep them out of the trajectory
       if (!turn.userText || turn.userText.trim().length === 0) continue;
       let id = turn.userMessageId;
       if (!id) {
-        // 旧版本轮次记录没有 userMessageId：按 messageIndex 往前找最近一条用户消息
+        // Older turn records lack userMessageId: walk back from messageIndex to find the nearest user message
         const start = Math.min(turn.messageIndex - 1, messages.length - 1);
         for (let index = start; index >= 0; index -= 1) {
           const candidate = messages[index];
@@ -572,7 +572,7 @@ class Shell {
     this.panel.setTrajectory(items);
   }
 
-  /** 从磁盘恢复摘要；会话被外部截断时丢弃（避免摘要覆盖不存在的轮次） */
+  /** Restore the summary from disk; discard it if the session was truncated externally (avoids summarizing turns that no longer exist) */
   private async loadSummary(totalMessages: number): Promise<void> {
     const stored = await this.summaries.load(this.sessionId);
     if (!stored || stored.lines.length === 0) {
@@ -596,11 +596,11 @@ class Shell {
   }
 
   /**
-   * 用模型给"被折叠的轮次"生成摘要（增量）。
+   * Use the model to summarize "folded turns" (incrementally).
    *
-   * 只把**新折叠进来**的轮次发给模型，结果追加到已有摘要行后面，
-   * 避免历史越长、每次摘要越贵（O(n²)）。
-   * 失败或 mock 内核返回空 → 退回机械摘要。
+   * Only **newly folded** turns are sent to the model, and the result is appended after the existing summary lines,
+   * so a longer history doesn't make every summary costlier (O(n²)).
+   * On failure, or when the mock core returns empty → fall back to the mechanical summary.
    */
   private async modelSummary(totalMessages: number): Promise<string | undefined> {
     const turns = await this.turns.list(this.sessionId);
@@ -633,7 +633,7 @@ class Shell {
         lines = [...(cached?.lines ?? []), ...newLines];
         text = `[早前对话摘要 · 模型生成]\n${lines.join("\n")}`;
       } else if (result.summary.trim()) {
-        // 内核没给逐条结果（数量不齐）：整段替换，缓存重置为当前覆盖范围
+        // The core returned no per-turn results (count mismatch): replace the whole summary and reset the cache to the current coverage
         lines = result.summary.split("\n").filter((line) => line.trim().length > 0);
         text = result.summary;
       }
@@ -656,7 +656,7 @@ class Shell {
     return cached?.text;
   }
 
-  /** 一轮结束时落盘"意图 + 回答 + 工具 + 文件"，供后续按意图总结 */
+  /** At the end of a turn, persist "intent + answer + tools + files" for later intent-based summarization */
   private async appendTurn(userText: string, assistant: string, fallbackMode: Mode): Promise<void> {
     const all = await this.sessions.open(this.sessionId);
     const intent = this.turnIntent?.intent || userText.replace(/\s+/g, " ").trim().slice(0, 120);
@@ -689,7 +689,7 @@ class Shell {
       ts: Date.now(),
       messageIndex: all.length,
     });
-    // 会话标题跟随"最近一次用户意图"，比第一条消息更能概括这个会话
+    // The session title follows the "latest user intent", which summarizes the session better than the first message
     if (intent.trim().length > 0) this.sessions.rename(this.sessionId, intent.trim().slice(0, 40));
     this.turnIntent = undefined;
     this.turnTools.clear();
@@ -700,17 +700,17 @@ class Shell {
     this.turnFiles.clear();
   }
 
-  /** 「继续上次的操作」：把历史带上，让内核接着上下文做 */
+  /** "Continue the previous operation": carry the history so the core can pick up the context */
   private async continueTurn(): Promise<void> {
     await this.send("继续上次未完成的操作（上一次停在工具调用阶段）。", this.panel.getMode(), []);
   }
 
-  /** 「重新生成提案」：上一次的虚拟文件已随内存丢失，让内核重新产出 */
+  /** "Regenerate proposal": the previous virtual files were lost with memory, so ask the core to produce them again */
   private async regenerateProposal(): Promise<void> {
     await this.send("请重新生成上一次的改动提案。", this.panel.getMode(), []);
   }
 
-  /** 重载/切换会话后恢复“上次重试未完成”的状态和待重试请求 */
+  /** After a reload/session switch, restore the "previous retry unfinished" state and the pending retry request */
   private async restoreRetryState(): Promise<void> {
     const pending = await this.retries.loadPending(this.sessionId);
     if (!pending) {
@@ -743,7 +743,7 @@ class Shell {
     );
   }
 
-  /** 新建会话：换 id、清空面板、重开上下文 */
+  /** New session: new id, clear the panel, reopen the context */
   private async newSession(): Promise<void> {
     this.killSessionCommandJobs();
     await this.sessions.flush();
@@ -767,7 +767,7 @@ class Shell {
     this.panel.setHint("已新建会话。");
   }
 
-  /** 切换历史会话 */
+  /** Switch to a historical session */
   private async pickSession(): Promise<void> {
     const metas = this.sessions.list();
     const items = await Promise.all(
@@ -816,12 +816,12 @@ class Shell {
     this.panel.setHint(`已切换到会话「${picked.label}」（${messages.length} 条消息）。`);
     this.panel.pushState();
   }
-  // ───────────────────────── 内核生命周期 ─────────────────────────
+  // ───────────────────────── Core lifecycle ─────────────────────────
 
   private async ensureCore(): Promise<CoreApi> {
     if (this.core?.alive) return this.core;
     if (this.starting) return this.starting;
-    // 停用后（含 deactivate 之后 VS Code 仍在回收 subscriptions 的窗口）绝不再拉起内核
+    // After shutdown (including the window where VS Code is still collecting subscriptions after deactivate), never start the core again
     if (this.disposed) throw new Error("Bee Code 已停用");
 
     this.starting = (async () => {
@@ -830,7 +830,7 @@ class Shell {
         core = this.config.coreMode === "mock" ? new MockCore(this.log, () => this.firstWorkspaceFile()) : this.createPythonCore();
       } catch (err) {
         if (err instanceof CoreNotFoundError) {
-          // 安装模式下最常见的失败：扩展目录里没有 beecode 包
+          // Most common failure in installed mode: the extension directory has no beecode package
           this.panel.setHint("找不到内核：请在工作区开发 beecode，或设置 beeCode.core.coreRoot");
           this.log.error(err.message);
         }
@@ -897,7 +897,7 @@ class Shell {
   }
 
   private createPythonCore(): CoreApi {
-    // 开发时内核在工作区、打包后内核在扩展目录 —— 由 locator 决定，别写死 cwd
+    // During development the core lives in the workspace; when packaged it lives in the extension directory — let the locator decide, don't hardcode cwd
     const spec = locateCore({
       configuredRoot: this.config.coreRoot,
       configuredArgs: this.config.coreArgs,
@@ -919,7 +919,7 @@ class Shell {
   }
 
   private async restartCore(): Promise<void> {
-    if (this.disposed) return;   // 停用中不再拉起新进程
+    if (this.disposed) return;   // don't start a new process while shutting down
     if (this.core) {
       await this.core.shutdown().catch(() => undefined);
       this.core.dispose();
@@ -930,7 +930,7 @@ class Shell {
     this.updateStatus();
   }
 
-  /** 停止当前会话仍在跑的命令 job（切换会话/用户停止/停用） */
+  /** Stop command jobs still running in the current session (session switch/user stop/shutdown) */
   private killSessionCommandJobs(): void {
     for (const [id, record] of this.commandJobs) {
       if (record.sessionId !== this.sessionId) continue;
@@ -961,7 +961,7 @@ class Shell {
     this.updateStatus();
   }
 
-  // ───────────────────────── 用户动作 ─────────────────────────
+  // ───────────────────────── User actions ─────────────────────────
 
   private async send(text: string, mode: Mode, attachments: AttachedContext[], autoFocus = true): Promise<void> {
     if (this.disposed) return;
@@ -970,7 +970,7 @@ class Shell {
       return;
     }
 
-    // 没有工作区就没有代码可读、没有检查点可落 —— 先说清楚，而不是让内核抛 ModuleNotFound
+    // Without a workspace there's no code to read and no checkpoint to write — say so up front instead of letting the core throw ModuleNotFound
     if (isWorkspaceEmpty()) {
       await this.promptOpenWorkspace();
       return;
@@ -979,7 +979,7 @@ class Shell {
     const trimmed = text.trim();
     this.focusHighlight.clear();
 
-    // 用户没手动附加时，自动附上"光标所在的整个函数"（不在函数里就上下 N 行）
+    // When the user hasn't attached anything manually, automatically attach "the whole function under the cursor" (or N lines above/below when outside a function)
     const clamped = clampAttachments(attachments, this.config.attachments);
     let effectiveAttachments = clamped.items;
     for (const notice of clamped.notices) this.queueAttachmentNotice(notice);
@@ -1042,7 +1042,7 @@ class Shell {
     try {
       const core = await this.ensureCore();
       const meta = this.sessions.meta(this.sessionId);
-      // 历史是**裁剪过**的：摘要 + 最近 N 条，而不是整份 transcript
+      // History is **trimmed**: summary + the last N messages, not the full transcript
       const ctx = await this.modelContext();
       const params: ChatSendParams = {
         sessionId: this.sessionId,
@@ -1050,10 +1050,10 @@ class Shell {
         text: userText,
         attachments: effectiveAttachments.map(toAttachment),
         ...(focus ? { focus: focusDto(focus) } : {}),
-        // 本轮用户消息已经通过 text 单独传，别在 history 里重复一次
+        // This turn's user message is already passed separately via text; don't repeat it in history
         history: stripTrailingUser(ctx.history, userText),
         summary: ctx.summary,
-        // 上一轮未完成的计划：跨轮延续（全部完成就不带了）
+        // Unfinished plan from the previous turn: carried across turns (omitted when everything is done)
         ...(pendingPlan(meta?.plan) ? { plan: pendingPlan(meta?.plan) } : {}),
         ...(meta?.lastIntent ? { lastIntent: meta.lastIntent } : {}),
       };
@@ -1079,7 +1079,7 @@ class Shell {
       const turnFailed = Boolean(this.turnError);
       const assistantText = this.assistantBuffer;
       if (assistantText.trim()) {
-        // 先写进面板 state：pushState 会按 state 重渲染，不写的话回合结束时回复会「消失」
+        // Write to the panel state first: pushState re-renders from state, so without this the reply "disappears" when the turn ends
         this.panel.addMessage({ id: `a_${Date.now()}`, role: "assistant", text: assistantText });
         const segments = [...this.reasoningSegments.entries()]
           .sort((a, b) => a[0] - b[0])
@@ -1087,7 +1087,7 @@ class Shell {
         this.remember("assistant", assistantText, segments.length > 0 ? segments : undefined, this.turnDiagrams);
         this.assistantBuffer = "";
       }
-      // 落盘轮次记录（意图 + 回答 + 工具 + 文件），供上下文压缩时按意图总结
+      // Persist the turn record (intent + answer + tools + files) for intent-based summarization during context compression
       await this.appendTurn(userText, assistantText, mode).catch((err: unknown) => {
         this.log.warn(`Failed to write turn record: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -1100,7 +1100,7 @@ class Shell {
     }
   }
 
-  /** 重试上一轮：截掉失败的 assistant/error，保留之前的用户消息，重新发送同一请求 */
+  /** Retry the previous turn: drop the failed assistant/error, keep the earlier user message, and resend the same request */
   private async retryLastTurn(): Promise<void> {
     if (this.busy || this.disposed) {
       this.panel.setHint("当前还有任务在跑，先停止再重试。");
@@ -1119,7 +1119,7 @@ class Shell {
         break;
       }
     }
-    // 只有最后一条用户消息确实属于这次请求时才回滚；否则保留历史，让 send 追加新消息
+    // Only roll back when the last user message really belongs to this request; otherwise keep the history and let send append a new message
     const canRollback = userIndex >= 0 && all[userIndex]?.text === request.text;
     const truncateAt = canRollback ? userIndex : all.length;
     const kept = await this.sessions.truncate(this.sessionId, truncateAt);
@@ -1143,7 +1143,7 @@ class Shell {
     await this.send(request.text, request.mode, request.attachments, false);
   }
 
-  /** 接受一个或多个提案：逐个 拉正文 → 写盘 → 通知内核 */
+  /** Accept one or more proposals: for each, fetch the body → write to disk → notify the core */
   private async acceptProposals(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const failed: string[] = [];
@@ -1169,7 +1169,7 @@ class Shell {
     const dto = this.proposals.get(id);
     if (!dto) return false;
 
-    // ① 权限门闸（用户已点"接受"，但没有 deny 规则 / 未受信任时仍然拒绝）
+    // ① Permission gate (the user already clicked "accept", but still deny when a deny rule applies / the workspace isn't trusted)
     try {
       await this.assertWriteAllowed(dto.path, localContext(), { userApproved: true });
     } catch (err) {
@@ -1179,12 +1179,12 @@ class Shell {
       return false;
     }
 
-    // ② 写入前自动快照：不再依赖内核"记得调 checkpoint"
+    // ② Automatic snapshot before writing: no longer relies on the core "remembering to call checkpoint"
     if (this.config.checkpointEnabled) {
       const checkpoint = await this.checkpoint.create({ label: `accept ${dto.path}` }).catch(() => undefined);
       if (checkpoint?.id) {
         this.log.debug(`Automatic checkpoint ${checkpoint.id.slice(0, 8)} (${dto.path})`);
-        // 代码快照的同时快照聊天记录：回滚时可以选"代码 + 聊天一起回"
+        // Snapshot the chat record alongside the code snapshot: rollback can then choose "code + chat together"
         const messages = await this.sessions.open(this.sessionId);
         await this.chatIndex.save(checkpoint.id, this.sessionId, messages.length);
       }
@@ -1230,7 +1230,7 @@ class Shell {
       this.panel.setHint("没有待处理的提案。");
       return;
     }
-    // 批量接受可能很久（每个提案要拉正文 + 写盘）：允许中途取消
+    // Accepting in bulk may take a while (each proposal fetches its body + writes to disk): allow canceling midway
     this.acceptAllCancelled = false;
     const token = ++this.acceptAllToken;
     this.panel.setHint(`正在接受 ${ids.length} 个提案…（可运行「取消批量接受」）`);
@@ -1243,7 +1243,7 @@ class Shell {
     this.refreshProposals();
   }
 
-  /** 「取消批量接受」命令：不中断正在写的那一个，但不再继续下一个 */
+  /** "Cancel batch accept" command: doesn't interrupt the one currently being written, but stops starting the next */
   private cancelAcceptAll(): void {
     this.acceptAllCancelled = true;
     this.acceptAllToken += 1;
@@ -1255,7 +1255,7 @@ class Shell {
     await this.rejectProposals(ids);
   }
 
-  /** 打开某个提案的 diff：左=磁盘现状，右=提案内容 */
+  /** Open a proposal's diff: left = current disk contents, right = proposed contents */
   private async showProposal(id: string): Promise<void> {
     const core = await this.ensureCore().catch(() => undefined);
     if (!core) return;
@@ -1263,21 +1263,21 @@ class Shell {
     if (!opened) void vscode.window.showWarningMessage("Bee Code: 无法打开提案预览。");
   }
 
-  /** mock 的提案指向一个真实存在的文件，否则点「查看」会看到空 diff */
+  /** The mock proposal points at a file that actually exists; otherwise clicking "view" shows an empty diff */
   private async firstWorkspaceFile(): Promise<string | undefined> {
     const found = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,py,md}", "**/node_modules/**", 1);
     const uri = found[0];
     return uri ? toWorkspaceRelative(uri.fsPath) : undefined;
   }
 
-  // ───────────────────────── 权限 ─────────────────────────
+  // ───────────────────────── Permissions ─────────────────────────
 
-  /** 重新读取权限规则与信任状态（启动 + 配置变更时调用） */
-  // ───────────────────────── 沙箱 ─────────────────────────
+  /** Re-read permission rules and trust state (called at startup + on configuration changes) */
+  // ───────────────────────── Sandbox ─────────────────────────
 
   /**
-   * 启动时检测 docker；不可用时**只在第一次 / 配置变化时**询问，
-   * 之后静默按"无沙箱策略"运行（避免每次启动都弹窗）。
+   * Detect docker at startup; when unavailable, ask **only the first time / when configuration changes**,
+   * then run silently under the "no sandbox policy" (avoids a prompt on every startup).
    */
   private async initSandbox(force = false): Promise<void> {
     const detected = await detectDocker();
@@ -1333,7 +1333,7 @@ class Shell {
     await this.initSandbox(true);
   }
 
-  /** 统一的策略判定（纯函数在 policy.ts，这里只注入上下文） */
+  /** Unified policy decision (the pure functions live in policy.ts; this only injects the context) */
   private policyFor(
     action: "read" | "write" | "run",
     opts: { role?: AgentRole; insideWorkspace: boolean; readOnlyCommand?: boolean },
@@ -1349,7 +1349,7 @@ class Shell {
     });
   }
 
-  /** 工作区外路径：先确认再放行；批准后把目录记入内存（重启失效） */
+  /** Path outside the workspace: confirm before allowing; once approved, remember the directory in memory (lost on restart) */
   private async ensurePathAccess(rawPath: string, ctx: InboundRequestContext, role: AgentRole): Promise<void> {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) throw deniedError("未打开工作区");
@@ -1397,19 +1397,19 @@ class Shell {
   }
 
   /**
-   * 写入门闸。
+   * Write gate.
    *
-   * `userApproved` = 用户刚在提案里点了「接受」。区分它，是为了避免"点一次接受又问一次"：
-   *   - deny → 拒绝（无论如何）
-   *   - 显式 ask 规则 → 永远确认（用户明确要求每写必问）
-   *   - 模式默认 ask → 提案路径视为已确认；内核直接调 edit.apply 时仍要确认
-   *   - 敏感路径 + 模式放行 → 确认一次（模式放行 ≠ 用户知情）
+   * `userApproved` = the user just clicked "accept" on the proposal. It is distinguished to avoid "asking again right after accepting":
+   *   - deny → reject (no matter what)
+   *   - explicit ask rule → always confirm (the user explicitly asked to be prompted on every write)
+   *   - mode defaults to ask → proposal paths count as already confirmed; the core calling edit.apply directly still needs confirmation
+   *   - sensitive path + mode allows → confirm once (mode allowance ≠ user awareness)
    */
   /**
-   * 写入门闸。
+   * Write gate.
    *
-   * 三层叠加：沙箱策略（policy.ts）→ 规则引擎（permissions.ts）→ 敏感路径二次确认。
-   * `userApproved` = 用户刚在提案里点了「接受」，用来避免"点一次接受又问一次"。
+   * Three layers: sandbox policy (policy.ts) → rule engine (permissions.ts) → second confirmation for sensitive paths.
+   * `userApproved` = the user just clicked "accept" on the proposal, used to avoid "asking again right after accepting".
    */
   private async assertWriteAllowed(
     rawPath: string,
@@ -1455,10 +1455,10 @@ class Shell {
   }
 
   /**
-   * 命令执行：
-   *   - sandbox 请求：Docker 可用时首次审批，可选本会话都允许
-   *   - host 请求：每次危险审批，必须 justification
-   *   - 没有 docker：只读白名单走 host 受限只读；写请求走 host 审批 + checkpoint
+   * Command execution:
+   *   - sandbox request: first approval when Docker is available, optionally allow for the whole session
+   *   - host request: dangerous approval every time, justification required
+   *   - no docker: read-only allowlist goes through restricted read-only host; write requests go through host approval + checkpoint
    */
   private async runCommand(params: RunParams, ctx: InboundRequestContext): Promise<RunResult> {
     const role: AgentRole = params.role === "subagent" ? "subagent" : "main";
@@ -1650,7 +1650,7 @@ class Shell {
       gateHandled = true;
     }
 
-    // 已有会话级沙箱批准时，不再重复弹普通命令确认
+    // When a session-level sandbox approval already exists, don't prompt again for ordinary commands
     if (!gateHandled) {
       if (!noDocker && requested !== "host" && ranks[requested] <= approved) gateHandled = true;
       if (requested === "host" && ranks.host <= approved) gateHandled = true;
@@ -1682,7 +1682,7 @@ class Shell {
             { id: "yes", label: "执行" },
             { id: "no", label: "取消" },
           ],
-          // 无沙箱时每条都要问（不给"记住"）；有 docker 且非 fullAccess 时可记住
+          // Prompt every time when there's no sandbox (no "remember"); with docker and non-fullAccess, remembering is allowed
           rememberKey: this.dockerAvailable && !this.config.permissions.fullAccess ? `run:${params.command}` : undefined,
         },
         ctx,
@@ -1690,7 +1690,7 @@ class Shell {
       if (answer.choice !== "yes") throw deniedError("用户取消执行");
     }
 
-    // 命令级 checkpoint：写操作前快照，结束后给出变更清单与一键撤销
+    // Command-level checkpoint: snapshot before writes, then show the change list and one-click undo when done
     const writesPossible =
       requested === "host" || hostWriteFallback || (!noDocker && requested !== "sandbox-readonly");
     const checkpointId = writesPossible
@@ -1719,7 +1719,7 @@ class Shell {
     this.commandJobs.set(job.id, record);
     job.onFinished(() => {
       void this.finalizeCommandJob(record);
-      // 给首次等待的结果一个微小窗口；超过窗口仍未交付才发完成通知，避免重复
+      // Give the first wait's result a small window; send the completion notice only if it still hasn't been delivered after that, to avoid duplicates
       setTimeout(() => this.notifyCommandJobFinished(record), 300);
     });
     const yieldMs = Math.max(1_000, Math.min(params.yieldMs ?? 120_000, 300_000));
@@ -1727,7 +1727,7 @@ class Shell {
     return await this.commandJobResult(record, snapshot, true);
   }
 
-  /** 把 job 状态变成模型可见的 RunResult；running 时保留 jobId 供 command_wait 续等 */
+  /** Turn job state into a model-visible RunResult; while running, keep jobId so command_wait can keep waiting */
   private async commandJobResult(
     record: NonNullable<ReturnType<Shell["commandJobs"]["get"]>>,
     snapshot: CommandJobSnapshot,
@@ -1841,7 +1841,7 @@ class Shell {
     this.remember("system", text);
   }
 
-  /** 让模型在后续轮次知道还有哪些后台任务；不把历史输出重复塞进上下文 */
+  /** Let the model know in later turns which background tasks are still running; don't stuff historical output into the context again */
   private activeCommandJobNote(): string | undefined {
     const lines: string[] = [];
     for (const record of this.commandJobs.values()) {
@@ -1920,7 +1920,7 @@ class Shell {
     }
   }
 
-  /** 点击「已读取文件」chip：打开文件并把光标放到对应行范围 */
+  /** Clicking the "file already read" chip: open the file and move the cursor to the corresponding line range */
   private async openRead(path: string, startLine?: number, endLine?: number): Promise<void> {
     try {
       const uri = resolveTarget(path);
@@ -1935,8 +1935,8 @@ class Shell {
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       this.log.debug(`Jumped to ${path}:${start + 1}-${end + 1}`);
 
-      // 跳转后重新画一次高亮：面板 chip 可能已经存在很久，实时高亮早就过期了。
-      // addRead 自带 6 秒定时清除，且会去重（同一范围不会重复叠加）。
+      // Redraw the highlight after jumping: the panel chip may have existed for a long time, so the live highlight expired long ago.
+      // addRead clears itself after 6 seconds and deduplicates (the same range never stacks).
       if (this.config.focus.highlight) {
         this.focusHighlight.addRead({ path, startLine: start + 1, endLine: end + 1 });
       }
@@ -1972,10 +1972,10 @@ class Shell {
   }
 
   /**
-   * 解析 API Key：**SecretStorage 优先，环境变量兜底**。
+   * Resolve the API key: **SecretStorage first, environment variable as fallback**.
    *
-   * 为什么这个顺序：显式配置 > 环境默认。环境变量适合 CI / 不想把 key 存进凭据库的场景；
-   * 但它对整个进程可见，所以永远排在 SecretStorage 之后。
+   * Why this order: explicit configuration > environment default. Environment variables suit CI / cases where the key shouldn't go into the credential store;
+   * but they're visible to the whole process, so they always come after SecretStorage.
    */
   private async resolveApiKey(): Promise<{ key?: string; source: "secret" | "env" | "none" }> {
     const fromSecret = await this.context.secrets.get(this.config.apiKeyId);
@@ -1986,9 +1986,9 @@ class Shell {
   }
 
   /**
-   * 解析子代理密钥：SecretStorage（`beeCode.subagent.apiKeyId`）→ 环境变量 → **主代理密钥**。
+   * Resolve the subagent key: SecretStorage (`beeCode.subagent.apiKeyId`) → environment variable → **main agent key**.
    *
-   * 绝大多数情况用户只想"子代理用便宜模型，但仍用同一个 key"，所以最后一级回退到主代理是合理的。
+   * In most cases the user just wants "the subagent to use a cheaper model but still the same key", so falling back to the main agent at the last level makes sense.
    */
   private async resolveSummaryKey(): Promise<{ key?: string; source: "secret" | "env" | "main" | "none" }> {
     const fromSecret = await this.context.secrets.get(this.config.summary.apiKeyId);
@@ -2010,7 +2010,7 @@ class Shell {
     return { source: "none" };
   }
 
-  /** 子代理实际生效的端点/模型（空 = 沿用主代理） */
+  /** Effective endpoint/model for the subagent (empty = inherit from the main agent) */
   private effectiveSubagent(): { baseUrl: string; model: string; maxSteps: number; supportsVision: "auto" | "on" | "off"; enabled: boolean } {
     return {
       enabled: this.config.subagent.enabled,
@@ -2021,7 +2021,7 @@ class Shell {
     };
   }
 
-  /** 把 base_url 归一化成 `.../models`（用于连通性自检） */
+  /** Normalize base_url into `.../models` (used for the connectivity self-check) */
   private modelsUrl(baseUrl: string): string | undefined {
     const base = baseUrl.trim().replace(/\/+$/, "");
     if (!base) return undefined;
@@ -2030,7 +2030,7 @@ class Shell {
     return `${base}/models`;
   }
 
-  /** 测试连接：GET {base}/models，把 HTTP 状态翻译成人话（main / subagent 共用） */
+  /** Test connection: GET {base}/models, translating HTTP status into plain language (shared by main / subagent) */
   private async testModel(which: "main" | "subagent" = "main"): Promise<void> {
     const label = which === "subagent" ? "子代理" : "主代理";
     const subagent = this.effectiveSubagent();
@@ -2078,7 +2078,7 @@ class Shell {
     }
   }
 
-  /** 配置子代理：终端可留空（= 沿用主代理），密钥可留空（= 沿用主代理密钥） */
+  /** Configure subagent: endpoint may be left empty (= inherit main agent), key may be left empty (= inherit main agent key) */
   private async configureSubagent(): Promise<void> {
     const main = this.config.model;
     const current = this.config.subagent;
@@ -2135,7 +2135,7 @@ class Shell {
     );
     void vscode.window.showInformationMessage("Bee Code: 子代理配置完成。");
 
-    // 只改了密钥时配置监听不会触发，这里主动热更新一次
+    // Configuration listeners don't fire when only the key changed, so trigger a hot reload here
     const sub = this.effectiveSubagent();
     const [mainKey, subKey] = await Promise.all([this.resolveApiKey(), this.resolveSubagentKey()]);
     await this.core
@@ -2154,7 +2154,7 @@ class Shell {
       .catch(() => undefined);
   }
 
-  /** 配置摘要模型：端点 → 模型 → 密钥 → 测试保存（留空 = 沿用主模型） */
+  /** Configure summary model: endpoint → model → key → test and save (empty = inherit main model) */
   private async configureSummary(): Promise<void> {
     const main = this.config.model;
     const current = this.config.summary;
@@ -2226,7 +2226,7 @@ class Shell {
       `Bee Code: 摘要模型配置完成${probe.ok ? `（${probe.message}）` : ""}。`,
     );
 
-    // 只改密钥时配置监听不会触发，这里主动热更新一次
+    // Configuration listeners don't fire when only the key changed, so trigger a hot reload here
     const sub = this.effectiveSubagent();
     const [mainKey, subKey, summaryKey] = await Promise.all([
       this.resolveApiKey(),
@@ -2251,7 +2251,7 @@ class Shell {
       .catch(() => undefined);
   }
 
-  /** GET /models 做连通性/模型自检；不需要真的发一次 chat 请求 */
+  /** GET /models for a connectivity/model self-check; no need to actually send a chat request */
   private async probeModels(
     baseUrl: string,
     model: string,
@@ -2286,7 +2286,7 @@ class Shell {
     }
   }
 
-  /** 清除子代理密钥（环境变量与"沿用主代理"不归我们管） */
+  /** Clear the subagent key (environment variables and "inherit main agent" aren't ours to manage) */
   private async clearSubagentKey(): Promise<void> {
     const existing = await this.context.secrets.get(this.config.subagent.apiKeyId);
     if (!existing) {
@@ -2304,7 +2304,7 @@ class Shell {
     void vscode.window.showInformationMessage("Bee Code: 已清除子代理 API Key。");
   }
 
-  /** 清除凭据库里的密钥（环境变量不归我们管） */
+  /** Clear the key in the credential store (environment variables aren't ours to manage) */
   private async clearModelKey(): Promise<void> {
     const existing = await this.context.secrets.get(this.config.apiKeyId);
     if (!existing) {
@@ -2341,7 +2341,7 @@ class Shell {
     });
     if (model === undefined) return;
 
-    // 已经配置过就允许"直接回车保持不变"——每次改端点都要重输 key 太烦
+    // If already configured, allow "press Enter to keep it unchanged" — retyping the key every time the endpoint changes is tedious
     const existing = await this.resolveApiKey();
     const keyHint =
       existing.source === "secret"
@@ -2378,7 +2378,7 @@ class Shell {
     this.log.info(`Model configured: ${this.config.model.model} @ ${this.config.model.baseUrl} (key stored)`);
     void vscode.window.showInformationMessage("Bee Code: 模型配置完成。");
 
-    // 配置变更监听会走 modelReload（不重启进程），这里不重复调用
+    // Configuration-change listeners trigger modelReload (no process restart), so don't call it again here
     const resolved = await this.resolveApiKey();
     if (this.core && resolved.key) {
       await this.core
@@ -2388,14 +2388,14 @@ class Shell {
   }
 
   /**
-   * 回滚到某个检查点。
+   * Roll back to a checkpoint.
    *
-   * 两种语义（用户选）：
-   *   - 仅代码：文件回到快照，聊天保留，**追加一条回滚通知**让模型知道
-   *   - 代码 + 聊天：文件与对话一起回到快照时刻（JSONL 截断）
+   * Two semantics (the user chooses):
+   *   - Code only: files return to the snapshot, chat is kept, and **a rollback notice is appended** so the model knows
+   *   - Code + chat: files and conversation both return to the snapshot moment (JSONL truncated)
    *
-   * 两种都会把目标之后的快照作废（影子仓库 HEAD 回退 + 删除对应聊天快照），
-   * 之后的新快照从目标点继续。
+   * Both invalidate snapshots after the target (rewind the shadow repository HEAD + delete the corresponding chat snapshots),
+   * and new snapshots continue from the target point.
    */
   private async restoreCheckpoint(): Promise<void> {
     const records = await this.checkpoint.list();
@@ -2460,7 +2460,7 @@ class Shell {
       `Rolled back to ${picked.id.slice(0, 8)}: restored ${result.restored.length} files, invalidated ${voided.length} later snapshots`,
     );
 
-    // 回滚后待审提案必然基于旧代码，直接清掉，避免误点「接受」
+    // Pending proposals after a rollback are necessarily based on the old code, so clear them to avoid accidentally clicking "accept"
     this.proposals.clear();
     this.panel.setProposals(this.proposals.visible());
 
@@ -2471,14 +2471,14 @@ class Shell {
         await this.noteRollback(picked.id, picked.label, false);
         return;
       }
-      // 快照只存行号：截断 JSONL 到那一行，消息全文仍然只有一份
+      // Snapshots store only the line number: truncate the JSONL to that line; the full message text still exists only once
       const kept = await this.sessions.truncate(this.sessionId, snapshot.line);
       this.panel.restore(
         kept.map((m) => ({ id: m.id, role: m.role, text: m.text, ...(m.reasoning ? { reasoning: m.reasoning } : {}), ...(m.diagrams ? { diagrams: m.diagrams } : {}) })),
         this.sessions.meta(this.sessionId)?.mode,
       );
       this.persisted = kept.length;
-      // 轮次记录也截断到同一位置；摘要随之截断（已覆盖的轮次按 messageIndex 对齐）
+      // Truncate the turn records to the same point; the summary follows (covered turns align by messageIndex)
       await this.turns.truncate(this.sessionId, snapshot.line);
       await this.truncateSummary(snapshot.line);
       await this.retries.clearPending(this.sessionId);
@@ -2520,7 +2520,7 @@ class Shell {
       `Bee Code: 已回滚 ${result.restored.length} 个文件（聊天记录保留）。`,
     );
   }
-  /** 回滚后写一条系统消息，并把它记成一轮"意图"，让后续摘要能覆盖这次回滚 */
+  /** After a rollback, write a system message and record it as a turn "intent" so later summaries cover this rollback */
   private async noteRollback(
     checkpointId: string,
     label: string,
@@ -2549,10 +2549,10 @@ class Shell {
     this.log.info(`Rollback notice written to session (${withChat ? "with chat rollback" : "code only"})`);
   }
   /**
-   * 导出诊断包（已脱敏）。
+   * Export a diagnostics bundle (already redacted).
    *
-   * 落点：`<globalStorage>/diagnostics/` —— 扩展私有目录，不会被误提交进 git，
-   * 也不在用户工作区里制造文件。用户要发 issue 时再「另存为…」到桌面/文档。
+   * Destination: `<globalStorage>/diagnostics/` — an extension-private directory that won't be committed to git by mistake,
+   * and doesn't create files in the user's workspace. Users can "Save as…" to the desktop/documents when filing an issue.
    */
   /** Command palette: choose the user-visible UI language. */
   private async switchLanguage(): Promise<void> {
@@ -2601,13 +2601,13 @@ class Shell {
     }
   }
 
-  // ───────────────────────── 内核通知 ─────────────────────────
+  // ───────────────────────── Core notifications ─────────────────────────
 
   private onCoreNotification(method: string, params: unknown): void {
     switch (method) {
       case "ui.delta": {
         const p = params as UiDeltaParams;
-        this.assistantBuffer += p.text;   // 落盘用（面板的流式展示是另一条通路）
+        this.assistantBuffer += p.text;   // for persistence (the panel's streaming display is a separate path)
         this.panel.appendDelta(p.text);
         return;
       }
@@ -2681,7 +2681,7 @@ class Shell {
       }
       case "ui.intent": {
         const p = params as UiIntentParams;
-        // 意图分析本身不展示（不产生消息）；面板只更新模式徽标与提示
+        // Intent analysis itself isn't displayed (it produces no message); the panel only updates the mode badge and hint
         this.turnScale = p.scale === "large" ? "large" : "small";
         this.turnIntent = {
           intent: p.intent,
@@ -2820,7 +2820,7 @@ class Shell {
     this.updateStatus();
   }
 
-  // ───────────────────────── 适配器注册 ─────────────────────────
+  // ───────────────────────── Adapter registration ─────────────────────────
 
   private registerAdapters(): void {
     const fs = createFsAdapter(this.log);
@@ -2829,7 +2829,7 @@ class Shell {
     const diagnostics = createDiagnosticsAdapter(this.log);
     const secrets = createSecretAdapter(this.context, this.log);
 
-    // 泛型 register：方法名与参数/返回类型强绑定，写错编译期就报
+    // Generic register: method names are tightly bound to parameter/return types, so mistakes fail at compile time
     this.server.register("fs.read", async (params, ctx) => {
       await this.ensurePathAccess(params.path, ctx, params.role === "subagent" ? "subagent" : "main");
       return fs.read(params, ctx);
@@ -2854,14 +2854,14 @@ class Shell {
     this.server.register("secrets.get", (params) => secrets.get(params));
     this.server.register("confirm.ask", (params, ctx) => this.confirm.ask(params, ctx));
 
-    // 用 info 而不是 debug：log channel 默认级别是 info，debug 会被过滤掉
+    // Use info rather than debug: the log channel's default level is info, so debug output gets filtered out
     this.log.info(`Registered RPC methods: ${this.server.listed().join(", ")}`);
 
     this.verifyProtocolContract();
   }
 
   /**
-   * 命令对账：已注册 ↔ package.json 声明。两边不一致时命令面板会静默缺项 / 点击报错。
+   * Command reconciliation: registered ↔ declared in package.json. When the two disagree, the command palette silently misses entries / clicking errors out.
    */
   private verifyCommands(registered: string[]): void {
     const problems = undeclaredCommands(this.context, registered);
@@ -2874,11 +2874,11 @@ class Shell {
   }
 
   /**
-   * 协议自检：把「运行时注册的方法」与 `protocol/contract.json` 对账。
+   * Protocol self-check: reconcile "methods registered at runtime" against `protocol/contract.json`.
    *
-   * 这是唯一能发现「TS 侧加了方法但 Python 契约没跟上」（或反之）的机制——
-   * 类型在编译后消失，Python 也看不到 TypeScript，只能靠这份 JSON 做共同真相。
-   * 失败不阻塞启动（可能是工作区里没有契约文件），但会显著地提示。
+   * This is the only mechanism that can catch "TS added a method but the Python contract didn't follow" (or vice versa) —
+   * types disappear after compilation, and Python can't see TypeScript either; this JSON is the shared source of truth.
+   * Failure doesn't block startup (the workspace may not contain a contract file), but it is reported prominently.
    */
   private verifyProtocolContract(): void {
     const check = loadContract([
@@ -2901,7 +2901,7 @@ class Shell {
     );
   }
 
-  // ───────────────────────── 杂项 ─────────────────────────
+  // ───────────────────────── Miscellaneous ─────────────────────────
 
   private setBusy(busy: boolean): void {
     this.busy = busy;
@@ -2930,10 +2930,10 @@ class Shell {
   }
 
   /**
-   * 没有工作区时的统一引导：面板里留一条记录 + 弹一次带操作按钮的提示。
+   * Unified guidance when there's no workspace: leave a record in the panel + show one prompt with action buttons.
    *
-   * 为什么不让它直接失败：内核拿不到 workspaceRoots 时，读文件/落检查点/diff
-   * 全都会以「路径越界」「找不到工作区」这类间接错误暴露，用户根本猜不到原因。
+   * Why not just fail: when the core can't get workspaceRoots, reading files/writing checkpoints/diffs
+   * all surface as indirect errors like "path out of bounds" or "workspace not found", and the user can't guess the cause.
    */
   private async promptOpenWorkspace(): Promise<void> {
     const message = "Bee Code: 请先打开一个工作区（文件夹），扩展需要它来读取代码与保存检查点。";
@@ -2959,13 +2959,13 @@ function toAttachment(context: AttachedContext): Attachment {
 }
 
 /**
- * 历史末尾若正好是本轮用户输入，去掉它。
+ * If the end of the history is exactly this turn's user input, drop it.
  *
- * 壳先把用户消息写进会话存储、再构建上下文，所以 `history` 的最后一条就是本轮输入；
- * 而 `text` 又会单独传一次。不去重的话内核会收到两份同样的用户消息。
+ * The shell writes the user message to the session store before building the context, so the last entry in `history` is this turn's input;
+ * and `text` is passed separately as well. Without deduplication the core would receive two copies of the same user message.
  */
 function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] {
-  // 后面可能追加了后台任务系统提示；跳过尾部 system 再找当前用户消息
+  // A background-task system notice may have been appended afterwards; skip trailing system messages before looking for the current user message
   let index = history.length - 1;
   while (index >= 0 && history[index]?.role === "system") index -= 1;
   const candidate = history[index];
@@ -2975,7 +2975,7 @@ function stripTrailingUser(history: ChatMessage[], text: string): ChatMessage[] 
   return history;
 }
 
-/** 防御性夹取：面板状态可能来自旧版本或被篡改 */
+/** Defensive clamping: the panel state may come from an older version or have been tampered with */
 function clampAttachments(
   items: AttachedContext[],
   limits: { maxCount: number; maxTotalChars: number; maxCharsPerItem: number },
@@ -3011,7 +3011,7 @@ function clampAttachments(
   return { items: out, notices };
 }
 
-/** 成本展示：12.3k tok · 8.4s；没有数据时返回空串 */
+/** Cost display: 12.3k tok · 8.4s; returns an empty string when there's no data */
 function formatTurnCost(inputTokens?: number, outputTokens?: number, elapsedMs?: number): string {
   const tokens = (inputTokens ?? 0) + (outputTokens ?? 0);
   const seconds = (elapsedMs ?? 0) / 1000;
@@ -3022,31 +3022,31 @@ function formatTurnCost(inputTokens?: number, outputTokens?: number, elapsedMs?:
   return parts.join(" · ");
 }
 
-/** 未完成的计划（全部 done 就没必要再带给模型） */
+/** Unfinished plan (no need to pass it to the model when everything is done) */
 function pendingPlan(plan: PlanStep[] | undefined): PlanStep[] | undefined {
   if (!plan || plan.length === 0) return undefined;
   return plan.some((step) => step.status !== "done") ? plan : undefined;
 }
 
-/** 权限拒绝：用 PathPolicyError 这个 name，让壳的 rpcCodeFor 映射成 DENIED(-32013) */
+/** Permission denial: use the name PathPolicyError so the shell's rpcCodeFor maps it to DENIED(-32013) */
 function deniedError(reason: string): Error {
   const err = new Error(reason);
   err.name = "PathPolicyError";
   return err;
 }
 
-/** 本地动作（非 RPC 触发）用的上下文：不可取消 */
+/** Context for local actions (not triggered by RPC): not cancellable */
 function localContext(): InboundRequestContext {
   return {
     id: "local",
     signal: new AbortController().signal,
     throwIfCancelled() {
-      /* 本地动作不可取消 */
+      /* Local actions are not cancellable */
     },
   };
 }
 
-/** FocusInfo → 面板附件（kind=focus，内核据此生成"光标附近"标题） */
+/** FocusInfo → panel attachment (kind=focus, the core uses it to generate the "near the cursor" heading) */
 function toFocusContext(info: FocusInfo): AttachedContext {
   return {
     path: info.path,
@@ -3059,7 +3059,7 @@ function toFocusContext(info: FocusInfo): AttachedContext {
   };
 }
 
-/** FocusInfo → 协议里的 FocusDto（不含正文，正文走 attachment） */
+/** FocusInfo → the protocol's FocusDto (no body; the body goes through the attachment) */
 function focusDto(info: FocusInfo): FocusDto {
   return {
     path: info.path,

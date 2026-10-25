@@ -5,35 +5,39 @@ import type { ModelConfigDto, Mode } from "./protocol";
 import { normalizeLocale, type Locale } from "./i18n";
 
 /**
- * 壳侧配置收敛层。
+ * Shell-side configuration convergence layer.
  *
- * 设计要点：
- *   1. **快照制**：`readConfig()` 返回普通对象，设置变了不会自动更新 —— 调用方负责重读。
- *   2. **拿不到密钥**：这里只有 `apiKeyId`（SecretStorage 的键名），密钥本身由 extension 取。
- *   3. **运行时校验**：用户在 settings.json 里手写错了类型，就回退默认值并记录问题，
- *      而不是让 `step > "30"` 这类比较静默出错。
+ * Design notes:
+ *   1. **Snapshot semantics**: `readConfig()` returns a plain object, so settings changes are not
+ *      reflected automatically -- the caller is responsible for re-reading.
+ *   2. **No access to the secret**: only `apiKeyId` (the SecretStorage key name) lives here; the
+ *      secret itself is fetched by the extension.
+ *   3. **Runtime validation**: if the user writes the wrong type in settings.json we fall back to the
+ *      default and record the problem, rather than letting comparisons such as `step > "30"` fail
+ *      silently.
  */
 /**
- * 密钥环境变量回退名。
+ * Environment variable fallback name for the API key.
  *
- * 用途：不想把 key 存在 VS Code 凭据库时（或 CI 里），可以设环境变量；
- * 优先级低于 SecretStorage（显式配置 > 环境默认）。
+ * Purpose: when you do not want to store the key in the VS Code credential store (or in CI) you can
+ * set an environment variable instead; its priority is below SecretStorage (explicit config >
+ * environment default).
  */
 export const API_KEY_ENV = "BEE_CODE_API_KEY";
-/** 子代理密钥的环境变量回退名 */
+/** Environment variable fallback name for the subagent key */
 export const SUBAGENT_API_KEY_ENV = "BEE_CODE_SUBAGENT_API_KEY";
 export const SUMMARY_API_KEY_ENV = "BEE_CODE_SUMMARY_API_KEY";
 
 export interface ShellConfig {
-  /** 用户可见 UI / 日志语言；模型提示词和工具描述始终英文 */
+  /** Language for user-visible UI / logs; model prompts and tool descriptions stay English */
   language: Locale;
   coreMode: "python" | "mock";
   pythonPath: string;
-  /** 含 beecode/ 包的目录；空串 = 自动探测（工作区 → 扩展目录） */
+  /** Directory containing the beecode/ package; empty string = auto-detect (workspace -> extension dir) */
   coreRoot: string;
-  /** 解释器参数；空数组 = 默认 `["-m","beecode"]` */
+  /** Interpreter arguments; empty array = default `["-m","beecode"]` */
   coreArgs: string[];
-  /** 子进程工作目录（已解析占位符）；无工作区时为空串，由 coreLocator 决定回退 */
+  /** Child process working directory (placeholders already resolved); empty string when there is no workspace, in which case coreLocator picks the fallback */
   cwd: string;
   model: ModelConfigDto;
   apiKeyId: string;
@@ -53,31 +57,31 @@ export interface ShellConfig {
   permissions: PermissionsConfig;
   subagent: SubagentConfig;
   summary: SummaryConfig;
-  /** 面板初始模式（auto = 自动判断） */
+  /** Initial panel mode (auto = decide automatically) */
   focus: FocusConfig;
   attachments: AttachmentsConfig;
 }
 
-/** 附件（代码选区/文件）的数量与体积上限 */
+/** Limits on the number and size of attachments (code selections / files) */
 export interface AttachmentsConfig {
   maxCount: number;
   maxTotalChars: number;
   maxCharsPerItem: number;
 }
 
-/** 光标附近代码的读取策略 */
+/** Strategy for reading code near the cursor */
 export interface FocusConfig {
-  /** 发送时自动附上光标所在的函数/代码块 */
+  /** Automatically attach the function/code block under the cursor when sending */
   autoAttach: boolean;
-  /** 不在函数里时，上下各取多少行 */
+  /** How many lines to take above and below when not inside a function */
   fallbackLines: number;
-  /** 函数超过这么多行就退化成代码块 */
+  /** Degrade to a code block once a function exceeds this many lines */
   maxLines: number;
-  /** 是否在编辑器里高亮"agent 读了哪一段" */
+  /** Whether to highlight "which section the agent read" in the editor */
   highlight: boolean;
 }
 
-/** 子代理配置：空字符串 = 沿用主代理 */
+/** Subagent config: empty string = inherit from the main agent */
 export interface SubagentConfig {
   enabled: boolean;
   baseUrl: string;
@@ -87,14 +91,14 @@ export interface SubagentConfig {
   supportsVision: "auto" | "on" | "off";
 }
 
-/** 摘要模型：空 model = 沿用主 agent 的模型 */
+/** Summary model: empty model = reuse the main agent's model */
 export interface SummaryConfig {
   baseUrl: string;
   model: string;
   apiKeyId: string;
 }
 
-/** 权限相关配置（规则原文由 permissions.ts 解析） */
+/** Permission-related config (raw rule text is parsed by permissions.ts) */
 export interface PermissionsConfig {
   mode: "plan" | "manual" | "acceptEdits" | "auto" | "bypass";
   allow: string[];
@@ -103,13 +107,13 @@ export interface PermissionsConfig {
   sandbox: "off" | "docker" | "auto";
   dockerImage: string;
   requireTrust: boolean;
-  /** 开放完整权限：免掉审批（但不解除"未信任"和"工作区外"的限制） */
+  /** Grant full permissions: skip approvals (but the "untrusted" and "outside workspace" restrictions remain) */
   fullAccess: boolean;
 }
 
 export interface ConfigReadResult {
   config: ShellConfig;
-  /** 校验发现的问题（已回退默认值）。启动时写日志并提示用户，不阻塞运行。 */
+  /** Problems found during validation (defaults were used instead). Logged and surfaced to the user at startup; does not block execution. */
   problems: string[];
 }
 
@@ -189,10 +193,10 @@ export function readConfig(): ConfigReadResult {
 }
 
 /**
- * 带类型校验的读取器：每次 `get` 都验证真实类型与取值范围。
+ * Reader with type validation: every `get` verifies the real type and the value range.
  *
- * 为什么不能只写 `cfg.get<number>(...)`：泛型只是在**编译期**声称类型，
- * 运行时完全可能是 `"30"`（用户在 settings.json 里手写字符串）。
+ * Why not just write `cfg.get<number>(...)`: a generic only *claims* a type at **compile time**; at
+ * runtime the value can very well be `"30"` (a user hand-writing a string in settings.json).
  */
 class Reader {
   readonly problems: string[] = [];
@@ -255,11 +259,12 @@ class Reader {
 }
 
 /**
- * 把 `${workspaceFolder}` / `${workspaceFolder:name}` / `${userHome}` / `${env:X}` 换成真实路径。
+ * Replace `${workspaceFolder}` / `${workspaceFolder:name}` / `${userHome}` / `${env:X}` with real paths.
  *
- * ⚠️ `getConfiguration().get()` **不会**替你展开这些占位符 —— 拿到的就是原始字符串。
- * 没有工作区时 `${workspaceFolder}` 展开成空串（而不是 `process.cwd()`：
- * 扩展宿主进程的 cwd 通常是 VS Code 安装目录，几乎肯定不是用户想要的）。
+ * ⚠️ `getConfiguration().get()` does **not** expand these placeholders for you -- you get the raw string.
+ * With no workspace `${workspaceFolder}` expands to an empty string (rather than `process.cwd()`:
+ * the extension host process cwd is usually the VS Code install directory, which is almost certainly
+ * not what the user wants).
  */
 export function resolvePlaceholders(raw: string, workspaceRoot?: string): string {
   if (!raw) return "";
@@ -270,7 +275,7 @@ export function resolvePlaceholders(raw: string, workspaceRoot?: string): string
     .trim();
 }
 
-/** 每个会话一个 id；壳不解释它，只做路由 */
+/** One id per session; the shell does not interpret it, it only routes on it */
 export function newSessionId(): string {
   return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -287,17 +292,17 @@ export function defaultInstruction(mode: Mode): string {
   }
 }
 
-/** 工作区根（多根时取第一个；内核也会收到全部根） */
+/** Workspace roots (the first one when there are several; the kernel also receives all roots) */
 export function workspaceRoots(): string[] {
   return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
 }
 
-/** 没有打开任何文件夹时，扩展的绝大多数能力都无从谈起（读文件、检查点、diff） */
+/** With no folder open, most of the extension's capabilities are moot (reading files, checkpoints, diff) */
 export function isWorkspaceEmpty(): boolean {
   return workspaceRoots().length === 0;
 }
 
-/** 供 footer/日志用（不含任何密钥；baseUrl 由 Logger 统一脱敏） */
+/** For the footer/log (contains no secrets; baseUrl is redacted centrally by Logger) */
 export function describeConfig(cfg: ShellConfig): string {
   const model = cfg.model.model || "<未配置>";
   const base = cfg.model.baseUrl || "<未配置>";

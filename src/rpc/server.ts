@@ -2,20 +2,20 @@ import type { InboundRequestContext, InboundRequestHandler } from "../coreApi";
 import type { Logger } from "../log";
 import { RpcError, type ShellMethod, type ShellMethodParams, type ShellMethodResults } from "../protocol";
 
-/** 强类型处理器：方法名决定参数与返回类型，适配器不再需要 `as never` */
+/** Strongly typed handler: the method name determines params and return type, so adapters no longer need `as never` */
 export type ShellHandler<K extends ShellMethod> = (
   params: ShellMethodParams[K],
   ctx: InboundRequestContext,
 ) => Promise<ShellMethodResults[K]>;
 
 /**
- * 壳侧 RPC 服务端：把内核发来的 method 路由到适配器。
+ * Shell-side RPC server: routes the methods sent by the kernel to adapters.
  *
- * 只做三件事：查表、记录耗时、把异常翻译成 JSON-RPC 错误。
- * **不放业务逻辑** —— 业务在适配器和内核里。
+ * It does only three things: look up the table, log timing, and translate exceptions into JSON-RPC errors.
+ * **No business logic** -- that lives in the adapters and the kernel.
  *
- * `register` 是泛型的：写错方法名或参数类型会在**编译期**报错，
- * 而不是等到运行时 `METHOD_NOT_FOUND`。
+ * `register` is generic: a wrong method name or param type fails at **compile time** instead of
+ * surfacing later at runtime as `METHOD_NOT_FOUND`.
  */
 export class ShellServer {
   private readonly handlers = new Map<ShellMethod, ShellHandler<ShellMethod>>();
@@ -24,10 +24,10 @@ export class ShellServer {
 
   register<K extends ShellMethod>(method: K, handler: ShellHandler<K>): void {
     if (this.handlers.has(method)) {
-      // 重复注册是启动期的编程错误：静默覆盖会让"新 handler 没生效"极难排查
+      // Duplicate registration is a startup programming error: silently overwriting would make "the new handler never took effect" very hard to diagnose
       throw new Error(`重复注册 RPC 方法: ${method}`);
     }
-    // 单次协变断言：对外保持强类型，对内用统一签名存表
+    // A single covariant assertion: strong types outward, one uniform signature in the internal table
     this.handlers.set(method, handler as unknown as ShellHandler<ShellMethod>);
   }
 

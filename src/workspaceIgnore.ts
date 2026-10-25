@@ -4,14 +4,15 @@ import ignore, { type Ignore } from "ignore";
 import * as vscode from "vscode";
 
 /**
- * 工作区文件过滤（路径噪声 + `.gitignore`）。
+ * Workspace file filtering (path noise + `.gitignore`).
  *
- * 为什么单独一个模块：fs / search / diagnostics 三个适配器都需要同一套判断，
- * 之前 fsAdapter 与 searchAdapter 各抄了一份 `buildGitignoreMatcher`，
- * 再加 diagnostics 就是三份 —— 规则一旦不同步，就会出现「搜索搜不到、诊断却报出来」的诡异现象。
+ * Why a separate module: the fs / search / diagnostics adapters all need the same judgement, and
+ * previously fsAdapter and searchAdapter each had their own copy of `buildGitignoreMatcher`; adding
+ * diagnostics would have made three -- and once the rules drift apart you get the bizarre state where
+ * "search cannot find it but diagnostics reports it".
  */
 
-/** 与 `paths.ts` 的禁止目录保持一致，另外补上常见构建产物 */
+/** Kept in sync with the forbidden directories in `paths.ts`, plus the usual build outputs */
 const NOISE_SEGMENTS = new Set([
   "node_modules",
   ".git",
@@ -27,11 +28,11 @@ const NOISE_SEGMENTS = new Set([
 ]);
 
 export interface IgnoreMatcher {
-  /** 绝对路径是否应被跳过（噪声目录 或 .gitignore 命中） */
+  /** Whether an absolute path should be skipped (noise directory or a .gitignore hit) */
   ignores(absolutePath: string): boolean;
 }
 
-/** 纯路径判断：不读磁盘，用于快速排除 node_modules/.git/构建产物 */
+/** Pure path check: does not touch the disk; used to rule out node_modules/.git/build outputs quickly */
 export function isNoisePath(absolutePath: string): boolean {
   const segments = absolutePath.split(/[\\/]+/).map((s) => s.toLowerCase());
   return segments.some((seg) => NOISE_SEGMENTS.has(seg));
@@ -46,9 +47,9 @@ interface CachedMatcher {
 const cache = new Map<string, CachedMatcher>();
 
 /**
- * 读取工作区根的 `.gitignore` 并构造匹配器（带缓存，按 mtime+size 失效）。
+ * Read the workspace root's `.gitignore` and build a matcher (cached, invalidated by mtime+size).
  *
- * 已知限制：只读**根**的 `.gitignore`，子目录里的暂不支持（见 README）。
+ * Known limitation: only the **root** `.gitignore` is read; ones in subdirectories are not supported yet (see README).
  */
 export function buildGitignoreMatcher(root?: string): Ignore | undefined {
   const workspaceRoot = root ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -71,9 +72,9 @@ export function buildGitignoreMatcher(root?: string): Ignore | undefined {
 }
 
 /**
- * 统一入口：这个绝对路径要不要跳过？
+ * Single entry point: should this absolute path be skipped?
  *
- * 先做零成本的段名判断，再查 `.gitignore`（缓存过，成本也很低）。
+ * Do the zero-cost segment check first, then consult `.gitignore` (cached, so also cheap).
  */
 export function isIgnored(absolutePath: string, root?: string): boolean {
   if (isNoisePath(absolutePath)) return true;
@@ -85,6 +86,6 @@ export function isIgnored(absolutePath: string, root?: string): boolean {
   if (!matcher) return false;
 
   const rel = path.relative(workspaceRoot, absolutePath);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return false;   // 工作区外不判断
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return false;   // outside the workspace: no judgement
   return matcher.ignores(rel.split(path.sep).join("/"));
 }

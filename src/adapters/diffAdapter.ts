@@ -6,30 +6,30 @@ import { resolveTarget } from "../paths";
 import type { DiffOpenParams, DiffOpenResult } from "../protocol";
 
 /**
- * 虚拟文档 scheme —— 带 publisher 前缀，避免与其他扩展撞名（scheme 是全局命名空间）。
+ * Virtual document scheme — prefixed with the publisher to avoid colliding with other extensions (schemes are a global namespace).
  *
- * VS Code 的 diff 编辑器原生就是「左红右绿」，我们只负责**喂两份内容**：
- *   左侧 = 虚拟文档（写入前的 baseText）
- *   右侧 = 真实文件（写入后的内容）
+ * VS Code's diff editor is natively "red on the left, green on the right"; we only **feed it two pieces of content**:
+ *   left  = virtual document (baseText before the write)
+ *   right = real file (content after the write)
  *
- * 所以这里只做三件事：注册一个只读虚拟文档 scheme、把内容放进有上限的内存表、调 `vscode.diff`。
+ * So there are only three things here: register a read-only virtual document scheme, put content into a size-capped in-memory table, and call `vscode.diff`.
  */
 const SCHEME = "beecode-xzyk520-base";
 
-/** 内存表上限：条数与总字节都限制，防止一次会话里审阅几十个大文件把内存吃光 */
+/** In-memory table caps: both entry count and total bytes, so reviewing dozens of large files in one session cannot eat all the memory */
 const MAX_ENTRIES = 50;
 const MAX_BYTES = 20 * 1024 * 1024;
 
 interface StoredContent {
   text: string;
   bytes: number;
-  /** 对应的真实文件绝对路径（用于「同一文件重新提案时原地刷新」） */
+  /** Absolute path of the corresponding real file (used to refresh in place when the same file is proposed again) */
   realPath: string;
 }
 
 export class DiffAdapter implements vscode.Disposable {
   private readonly store = new Map<string, StoredContent>();
-  /** 每个真实文件最近一次使用的 id —— 重新提案且预览仍打开时可原地刷新 */
+  /** Most recently used id per real file — allows an in-place refresh when it is proposed again and the preview is still open */
   private readonly latestIdByPath = new Map<string, string>();
   private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
   private readonly registration: vscode.Disposable;
@@ -46,7 +46,7 @@ export class DiffAdapter implements vscode.Disposable {
   async open(params: DiffOpenParams): Promise<DiffOpenResult> {
     let target: vscode.Uri;
     try {
-      // 和其他适配器一致：越界/敏感文件在这里就被拒绝（不能借 diff 预览读工作区外的东西）
+      // Consistent with the other adapters: out-of-bounds/sensitive files are rejected right here (a diff preview must not read outside the workspace)
       target = resolveTarget(params.path);
     } catch (err) {
       this.logger.warn(`diff.open 拒绝 ${params.path}: ${err instanceof Error ? err.message : String(err)}`);
@@ -65,7 +65,7 @@ export class DiffAdapter implements vscode.Disposable {
     const base = this.virtualUri(target, id);
 
     if (reusing) {
-      // 预览还开着：原地刷新，而不是再堆一个同名标签
+      // Preview is still open: refresh in place instead of piling up another tab with the same name
       this.onDidChangeEmitter.fire(base);
     }
 
@@ -83,10 +83,10 @@ export class DiffAdapter implements vscode.Disposable {
   }
 
   /**
-   * 预览一个**提案**：左侧 = 真实文件（当前），右侧 = 虚拟的"修正后"版本。
+   * Preview a **proposal**: left = real file (current), right = the virtual "corrected" version.
    *
-   * 与 `open()` 方向相反：那里左边是"改之前"，这里左边是"现在磁盘上的"，
-   * 右边是内核给的候选内容。用户看到的绿色就是"接受后会写进去的东西"。
+   * The opposite direction from `open()`: there the left side is "before the change", whereas here the left side is "what is on disk now"
+   * and the right side is the candidate content from the core. The green the user sees is "what would be written on accept".
    */
   async openProposal(params: { path: string; text: string; title?: string }): Promise<DiffOpenResult> {
     let target: vscode.Uri;
@@ -123,9 +123,9 @@ export class DiffAdapter implements vscode.Disposable {
   }
 
   /**
-   * 多文件总览：用公开的 `vscode.changes`（内部命令 `_workbench.openMultiDiffEditor` 不稳定）。
+   * Multi-file overview: uses the public `vscode.changes` (the internal `_workbench.openMultiDiffEditor` command is unstable).
    *
-   * 右侧一律用**真实文件**，所以不需要 `newText` 参数 —— 传了也不会用。
+   * The right side is always the **real file**, so no `newText` parameter is needed — it would be ignored anyway.
    */
   async openChanges(entries: Array<{ path: string; baseText: string }>): Promise<DiffOpenResult> {
     if (entries.length === 0) return { opened: false };
@@ -156,7 +156,7 @@ export class DiffAdapter implements vscode.Disposable {
     }
   }
 
-  /** 幂等：重复调用不会二次注销 provider */
+  /** Idempotent: repeated calls do not unregister the provider a second time */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -167,17 +167,17 @@ export class DiffAdapter implements vscode.Disposable {
     this.totalBytes = 0;
   }
 
-  // ───────────────────────── 内部 ─────────────────────────
+  // ───────────────────────── Internals ─────────────────────────
 
   private virtualUri(target: vscode.Uri, id: string): vscode.Uri {
     return vscode.Uri.from({
       scheme: SCHEME,
-      path: `/${path.basename(target.fsPath)}`, // path 必须以 / 开头
+      path: `/${path.basename(target.fsPath)}`, // path must start with /
       query: id,
     });
   }
 
-  /** 预览文档是否还开着（决定「原地刷新」还是「新开标签」） */
+  /** Whether the preview document is still open (decides between "refresh in place" and "new tab") */
   private isDocumentOpen(id: string): boolean {
     return (vscode.workspace.textDocuments ?? []).some(
       (doc) => doc.uri.scheme === SCHEME && doc.uri.query === id,
@@ -185,7 +185,7 @@ export class DiffAdapter implements vscode.Disposable {
   }
 
   private remember(id: string, text: string, realPath: string): void {
-    this.forget(id); // 覆盖同一 id 时先把旧的字节数减掉
+    this.forget(id); // when overwriting the same id, subtract the old byte count first
     const bytes = Buffer.byteLength(text, "utf8");
     this.store.set(id, { text, bytes, realPath });
     this.totalBytes += bytes;
@@ -203,10 +203,10 @@ export class DiffAdapter implements vscode.Disposable {
   }
 
   /**
-   * 超限时淘汰「最旧且当前没被打开」的条目。
+   * When over the cap, evict the "oldest entry that is not currently open".
    *
-   * 为什么不直接淘汰最旧：如果那个 diff 正开着，内容被清掉后左侧会变成空文件，
-   * 用户看到的是「整个文件都被删了」——宁可暂时超一点额度。
+   * Why not just evict the oldest: if that diff is open, wiping its content turns the left side into an empty file,
+   * and what the user sees is "the whole file was deleted" — better to exceed the budget for a little while.
    */
   private evictIfNeeded(): void {
     if (this.store.size <= MAX_ENTRIES && this.totalBytes <= MAX_BYTES) return;

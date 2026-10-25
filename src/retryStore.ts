@@ -4,7 +4,7 @@ import type { Logger } from "./log";
 
 export type RetryStatus = "waiting" | "starting" | "done" | "failed" | "cancelled";
 
-/** 一条可持久化的模型重试事件；只追加，不参与聊天消息投影。 */
+/** One persistable model-retry event; append-only and not projected into chat messages. */
 export interface RetryEvent {
   ts: number;
   sessionId: string;
@@ -15,7 +15,7 @@ export interface RetryEvent {
   reason?: string;
 }
 
-/** 最近一次尚未确认完成的请求；用于重载后恢复“重试本轮”。 */
+/** The most recent request that has not been confirmed complete; used to restore "retry this turn" after a reload. */
 export interface PendingTurn {
   sessionId: string;
   text: string;
@@ -25,14 +25,15 @@ export interface PendingTurn {
 }
 
 /**
- * 模型重试事件 / 待完成请求的持久化。
+ * Persistence for model-retry events / pending requests.
  *
- * 存储：
- *   <sessions>/<sessionId>.retries.jsonl   一行一个事件，只追加
- *   <sessions>/<sessionId>.pending.json    最近一次未完成请求（原子覆盖）
+ * Storage:
+ *   <sessions>/<sessionId>.retries.jsonl   one event per line, append-only
+ *   <sessions>/<sessionId>.pending.json    the latest incomplete request (atomically overwritten)
  *
- * 重试事件在等待退避前写入；如果进程在等待中崩溃，重载后仍能看到
- * 最后状态是 waiting/starting，而不是把“正在重试”误当成从未发生。
+ * A retry event is written before waiting for the backoff; if the process crashes while waiting, a
+ * reload still shows the last status as waiting/starting instead of mistaking "retrying right now" for
+ * something that never happened.
  */
 export class RetryStore {
   constructor(
@@ -40,7 +41,7 @@ export class RetryStore {
     private readonly logger: Logger,
   ) {}
 
-  /** 追加一条重试事件；失败只记日志，不影响主流程。 */
+  /** Append a retry event; a failure is only logged and does not affect the main flow. */
   async append(event: RetryEvent): Promise<void> {
     try {
       await fs.promises.mkdir(this.dir, { recursive: true });
@@ -50,7 +51,7 @@ export class RetryStore {
     }
   }
 
-  /** 同步追加：通知线程里用，保证事件在返回前已经落盘。 */
+  /** Synchronous append: used from the notification thread so the event is on disk before returning. */
   appendSync(event: RetryEvent): void {
     try {
       fs.mkdirSync(this.dir, { recursive: true });
@@ -60,7 +61,7 @@ export class RetryStore {
     }
   }
 
-  /** 读取某会话的全部重试事件（坏行跳过）。 */
+  /** Read all retry events of a session (bad lines are skipped). */
   async load(sessionId: string): Promise<RetryEvent[]> {
     let raw: string;
     try {
@@ -76,7 +77,7 @@ export class RetryStore {
         const parsed = JSON.parse(trimmed) as RetryEvent;
         if (typeof parsed.status === "string" && typeof parsed.ts === "number") out.push(parsed);
       } catch {
-        // 崩溃留下的半行：忽略
+        // A partial line left by a crash: ignore
       }
     }
     return out;
@@ -87,7 +88,7 @@ export class RetryStore {
     return events[events.length - 1];
   }
 
-  /** 保存最近一次请求；在调用模型前落盘。 */
+  /** Save the most recent request; write to disk before calling the model. */
   async savePending(pending: PendingTurn): Promise<void> {
     const file = this.pendingFileOf(pending.sessionId);
     const tmp = `${file}.tmp`;

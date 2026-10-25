@@ -28,15 +28,15 @@ export interface PythonCoreOptions {
   pythonPath: string;
   args: string[];
   cwd: string;
-  /** 追加的环境变量（PYTHONPATH / 编码相关），与 process.env 合并 */
+  /** Extra environment variables (PYTHONPATH / encoding related), merged with process.env */
   env?: Record<string, string>;
   logger: Logger;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-/** 一轮对话可能跨多轮工具调用，给宽松上限（实现自己决定，不暴露给调用方） */
+/** One chat turn may span several tool-call rounds, so allow a generous limit (implementation detail, not exposed to callers) */
 const CHAT_TIMEOUT_MS = 30 * 60 * 1000;
-/** Python 冷启动 + import 依赖可能很慢，给足时间 */
+/** Python cold start + importing dependencies can be slow, so allow plenty of time */
 const INITIALIZE_TIMEOUT_MS = 60_000;
 
 interface Pending {
@@ -47,13 +47,13 @@ interface Pending {
 }
 
 /**
- * 真实内核：子进程 + NDJSON JSON-RPC（双向）。
+ * The real kernel: child process + NDJSON JSON-RPC (bidirectional).
  *
- * 传输细节在 `transport.ts`；这里只负责 RPC 语义：
- *   - 出站请求跟踪（pending）：超时、进程退出时全部 reject
- *   - 入站请求处理（inbound）：AbortController + 取消映射
- *   - 生命周期：start / initialize / shutdown（幂等）/ dispose（同步暴力）
- *   - 密钥只通过 stdin 的 initialize 报文传入，不碰 argv / 环境变量
+ * Transport details live in `transport.ts`; this file only handles RPC semantics:
+ *   - Outbound request tracking (pending): timeouts, reject everything when the process exits
+ *   - Inbound request handling (inbound): AbortController + cancellation mapping
+ *   - Lifecycle: start / initialize / shutdown (idempotent) / dispose (synchronous and forceful)
+ *   - Secrets travel only in the initialize message over stdin, never through argv / environment
  */
 export class PythonCore implements CoreApi {
   readonly kind = "python" as const;
@@ -66,7 +66,7 @@ export class PythonCore implements CoreApi {
   private requestHandler: InboundRequestHandler | undefined;
   private readonly inbound = new Map<string, AbortController>();
   private disposed = false;
-  /** shutdown 的幂等锚点 */
+  /** Idempotency anchor for shutdown */
   private stopping: Promise<void> | undefined;
 
   constructor(private readonly opts: PythonCoreOptions) {
@@ -89,7 +89,7 @@ export class PythonCore implements CoreApi {
 
   start(): void {
     if (this.transport.started) return;
-    this.stopping = undefined; // 允许重启后再次优雅停止
+    this.stopping = undefined; // allow a graceful stop again after a restart
     this.transport.start({
       onLine: (line) => this.onLine(line),
       onError: (err) => this.failAll(new Error(`内核启动失败：${err.message}`)),
@@ -100,7 +100,7 @@ export class PythonCore implements CoreApi {
     });
   }
 
-  // ───────────────────────── 出站 ─────────────────────────
+  // ───────────────────────── outbound ─────────────────────────
 
   async initialize(params: InitializeParams): Promise<InitializeResult> {
     this.start();
@@ -145,13 +145,14 @@ export class PythonCore implements CoreApi {
   }
 
   /**
-   * 取消当前会话。
+   * Cancel the current session.
    *
-   * 顺序很重要：
-   *   1. 先 abort 壳侧在飞的入站请求（内核正在等我们干活的那些）
-   *   2. **再 reject 在飞的 `chat.send`**：否则壳会一直等到 30 分钟超时，
-   *      而调用方（extension）已经把 busy 复位了 → 用户可以再发一轮 → 两个 agent loop 并发
-   *   3. 最后通知内核（失败就忽略，进程可能已经不在）
+   * The order matters:
+   *   1. Abort the shell-side inbound requests in flight first (the ones the kernel is waiting on us for)
+   *   2. **Then reject the in-flight `chat.send`**: otherwise the shell waits for the 30-minute timeout,
+   *      while the caller (extension) has already cleared busy -> the user can send another turn -> two
+   *      agent loops run concurrently
+   *   3. Finally notify the kernel (ignore failures; the process may already be gone)
    */
   async abort(sessionId: string): Promise<void> {
     for (const [key, controller] of this.inbound) {
@@ -169,8 +170,8 @@ export class PythonCore implements CoreApi {
   }
 
   /**
-   * 优雅停止：发 `shutdown` 请求，等对端自己退，超时再 kill。
-   * 幂等 —— 多次调用返回同一个 Promise，避免并发重复收尾。
+   * Graceful stop: send a `shutdown` request, let the peer exit on its own, kill if it times out.
+   * Idempotent -- repeated calls return the same Promise, avoiding duplicated cleanup under concurrency.
    */
   shutdown(): Promise<void> {
     this.stopping ??= this.doShutdown();
@@ -180,10 +181,10 @@ export class PythonCore implements CoreApi {
   private async doShutdown(): Promise<void> {
     if (!this.transport.started) return;
     try {
-      // 先发 shutdown 再置 disposed：否则 request() 会以"内核未运行"直接拒绝，等于没通知
+      // Send shutdown before setting disposed: otherwise request() rejects immediately with "kernel not running" and nothing is notified
       await this.request("shutdown", {}, 3_000);
     } catch {
-      /* 内核可能已崩，忽略 */
+      /* The kernel may already have crashed; ignore */
     }
     this.disposed = true;
     this.transport.endInput();
@@ -201,8 +202,8 @@ export class PythonCore implements CoreApi {
   }
 
   /**
-   * 释放资源：**同步**、尽力而为、不抛错、幂等。
-   * 与 `shutdown()` 的分工：这里不等待、不礼貌，直接 kill 并清空回调。
+   * Release resources: **synchronous**, best-effort, never throws, idempotent.
+   * Division of labour with `shutdown()`: no waiting and no politeness here -- kill directly and clear callbacks.
    */
   dispose(): void {
     this.disposed = true;
@@ -214,7 +215,7 @@ export class PythonCore implements CoreApi {
     this.exitHandlers.clear();
   }
 
-  // ───────────────────────── 入站 ─────────────────────────
+  // ───────────────────────── inbound ─────────────────────────
 
   private onLine(line: string): void {
     let msg: JsonRpcMessage;
@@ -231,7 +232,7 @@ export class PythonCore implements CoreApi {
     }
     if (isResponse(msg)) {
       if (typeof msg.id !== "number") {
-        // 我们自己发的请求 id 都是 number；对端回了个 string id 就是对端 bug，不能静默丢
+        // Request ids we send are always numbers; a string id from the peer is a peer bug, so do not drop it silently
         this.opts.logger.warn(`收到非数字 id 的响应（${typeof msg.id}），已忽略`);
         return;
       }
@@ -289,7 +290,7 @@ export class PythonCore implements CoreApi {
     }
   }
 
-  // ───────────────────────── 底层 ─────────────────────────
+  // ───────────────────────── low level ─────────────────────────
 
   private request(method: string, params: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<unknown> {
     if (!this.transport.alive) {
@@ -299,7 +300,7 @@ export class PythonCore implements CoreApi {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        // 超时也顺手取消内核侧的工作
+        // Also cancel the kernel-side work on timeout
         void this.notify("$/cancelRequest", { id });
         reject(new Error(`RPC 超时：${method}（${Math.round(timeoutMs / 1000)}s）`));
       }, timeoutMs);
@@ -329,7 +330,7 @@ export class PythonCore implements CoreApi {
     }
   }
 
-  /** 把某个方法所有在飞请求立刻 reject（用于 abort；避免调用方挂到超时） */
+  /** Reject every in-flight request for a given method immediately (used by abort; keeps callers from hanging until the timeout) */
   private rejectPending(method: string, err: Error): void {
     for (const [id, pending] of this.pending) {
       if (pending.method !== method) continue;

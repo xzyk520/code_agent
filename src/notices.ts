@@ -1,4 +1,4 @@
-/** 把多条附件提示合并成一条（去重；过长时截断，toast 放得下） */
+/** Merge several attachment notices into one (deduplicated; truncated when too long so the toast fits) */
 export function mergeNotices(notices: string[]): string {
   const unique = [...new Set(notices)];
   if (unique.length === 0) return "";

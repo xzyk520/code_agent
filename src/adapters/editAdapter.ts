@@ -5,20 +5,20 @@ import type { Logger } from "../log";
 import { resolveTarget } from "../paths";
 import type { EditApplyParams, EditApplyResult } from "../protocol";
 
-/** 单次写入上限：模型抽风生成几 MB 文本时，宁可拒绝也不要塞爆 undo 栈 */
+/** Per-write cap: when the model goes off the rails and emits several MB, refuse rather than blow up the undo stack */
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 
 /**
- * 唯一写入通道（README §10.2）。
+ * The only write channel (README §10.2).
  *
- * 硬规则：
- *   1. 用 WorkspaceEdit 而不是 TextEditor.edit（不依赖编辑器可见、进 undo 栈）
- *   2. 一次 applyEdit = 一个 undo 单元
- *   3. expectedVersion 不匹配 → 拒绝写入并回报 conflict（不覆盖用户的编辑）
- *   4. 先算后写：newText 由内核算好，这里不解析 patch、不做容错
- *   5. 换行符跟随目标文件（CRLF 文件不会被写成 LF，否则 git 会显示整个文件都改了）
- *   6. 新建文件走 createFile + insert（replace 对不存在的文件无效），并自动建父目录
- *   7. 有未保存修改的文件拒绝 delete（否则用户的编辑会被静默丢掉）
+ * Hard rules:
+ *   1. Use WorkspaceEdit rather than TextEditor.edit (independent of editor visibility, lands in the undo stack)
+ *   2. One applyEdit = one undo unit
+ *   3. expectedVersion mismatch → refuse the write and report conflict (never overwrite the user's edit)
+ *   4. Compute first, write second: the core computes newText; no patch parsing or error tolerance here
+ *   5. Newlines follow the target file (a CRLF file is never written as LF, or git shows the entire file as changed)
+ *   6. New files go through createFile + insert (replace does nothing for a missing file), and parent dirs are created
+ *   7. Refuse delete for files with unsaved changes (otherwise the user's edits are silently lost)
  */
 export function createEditAdapter(logger: Logger) {
   return {
@@ -37,7 +37,7 @@ export function createEditAdapter(logger: Logger) {
         }
       }
 
-      // 只打开一次：既用于版本比对，也用于决定「改已有文件」还是「新建文件」
+      // Open once: used both for the version comparison and to decide between "modify existing file" and "create new file"
       const doc = await openIfExists(uri);
 
       if (doc && typeof params.expectedVersion === "number" && params.expectedVersion !== doc.version) {
@@ -51,7 +51,7 @@ export function createEditAdapter(logger: Logger) {
       }
 
       if (!doc && (op === "delete" || typeof params.expectedVersion === "number")) {
-        // delete 一个不存在的文件、或「期望某个版本」却读不到文件 —— 都是调用方状态过期
+        // Deleting a file that does not exist, or expecting a version yet finding no file — both mean stale caller state
         return { applied: false, message: `文件不存在：${params.path}` };
       }
 
@@ -67,7 +67,7 @@ export function createEditAdapter(logger: Logger) {
           return { applied: false, message: "WorkspaceEdit 被拒绝（文件可能被锁定）" };
         }
         logger.info(`edit.apply delete ${params.path}${params.reason ? ` (${params.reason})` : ""}`);
-        // 文件已不存在，version 没有意义 —— 不要返回陈旧值
+        // The file is gone, so a version is meaningless — do not return a stale value
         return { applied: true };
       }
 
@@ -97,7 +97,7 @@ export function createEditAdapter(logger: Logger) {
   };
 }
 
-/** 打开文档；不存在（或不是文本文件）时返回 undefined，而不是抛错 */
+/** Open the document; return undefined when it is missing (or not a text file) instead of throwing */
 async function openIfExists(uri: vscode.Uri): Promise<vscode.TextDocument | undefined> {
   try {
     return await vscode.workspace.openTextDocument(uri);
@@ -107,15 +107,15 @@ async function openIfExists(uri: vscode.Uri): Promise<vscode.TextDocument | unde
 }
 
 /**
- * 统一换行符到目标文件的风格。
+ * Normalize newlines to the target file's style.
  *
- * 不这么做的话：CRLF 文件被整文件写成 LF → `git diff` 显示「整个文件都改了」，
- * 用户的 .gitattributes / editorconfig 规则全部被绕过。
+ * Without this: a CRLF file rewritten entirely as LF makes `git diff` show "the whole file
+ * changed", and the user's .gitattributes / editorconfig rules are all bypassed.
  */
 export function adaptEol(text: string, eol?: vscode.EndOfLine): string {
   const lf = text.replace(/\r\n/g, "\n");
   if (eol === undefined) {
-    // 新文件：跟随 `files.eol`；auto 时按平台惯例
+    // New file: follow `files.eol`; when auto, use the platform convention
     const configured = vscode.workspace.getConfiguration("files").get<string>("eol");
     const crlf = configured === "\r\n" || (configured !== "\n" && process.platform === "win32");
     return crlf ? lf.replace(/\n/g, "\r\n") : lf;
@@ -123,12 +123,12 @@ export function adaptEol(text: string, eol?: vscode.EndOfLine): string {
   return eol === vscode.EndOfLine.CRLF ? lf.replace(/\n/g, "\r\n") : lf;
 }
 
-/** 新建文件前确保父目录存在（createFile 不会自动创建目录） */
+/** Ensure the parent directory exists before creating a file (createFile does not create directories) */
 async function ensureParentDir(uri: vscode.Uri): Promise<void> {
   const dir = vscode.Uri.file(path.dirname(uri.fsPath));
   try {
     await vscode.workspace.fs.createDirectory(dir);
   } catch {
-    // 目录已存在或无法创建：交给 createFile 自己报错，避免吞掉真实原因
+    // Directory already exists or cannot be created: let createFile report the error, so the real cause is not swallowed
   }
 }

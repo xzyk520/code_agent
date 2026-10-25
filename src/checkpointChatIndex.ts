@@ -3,21 +3,22 @@ import * as path from "node:path";
 import type { Logger } from "./log";
 
 /**
- * 检查点配套的「聊天记录快照」——**只存行号**，不复制消息。
+ * The "chat history snapshot" that accompanies a checkpoint -- **stores only a line number**, no message copies.
  *
- * 会话本身就是 append-only JSONL（一行一条消息，见 `sessionStore.ts`），
- * 所以"聊天记录在某一刻的样子"等价于"文件里有多少行"。存行号的好处：
- *   - 快照文件只有几十字节，100 个检查点也不会膨胀
- *   - 消息全文只有一份（会话 JSONL），不会出现"快照与现状不一致"
- *   - 回滚聊天 = 把 JSONL 截断到那一行
+ * The session itself is append-only JSONL (one message per line, see `sessionStore.ts`), so "what the
+ * chat history looked like at a given moment" is equivalent to "how many lines the file has". Storing the
+ * line number has advantages:
+ *   - the snapshot file is a few dozen bytes, so 100 checkpoints do not bloat anything
+ *   - the message text exists only once (the session JSONL), so a "snapshot disagrees with reality" state cannot occur
+ *   - rolling back the chat = truncating the JSONL to that line
  *
- * 目录布局：`<globalStorage>/checkpoints/<checkpointId>.json`
+ * Directory layout: `<globalStorage>/checkpoints/<checkpointId>.json`
  *   { id, sessionId, line, createdAt }
  */
 export interface ChatSnapshotMeta {
   id: string;
   sessionId: string;
-  /** 快照时刻的消息条数（= JSONL 行数） */
+  /** Number of messages at snapshot time (= number of JSONL lines) */
   line: number;
   createdAt: number;
 }
@@ -40,7 +41,7 @@ export class CheckpointChatIndex {
     return path.join(this.dir, `${safe}.json`);
   }
 
-  /** 记录"这个检查点对应聊天记录的第几行" */
+  /** Record "which line of the chat history this checkpoint corresponds to" */
   async save(id: string, sessionId: string, line: number): Promise<void> {
     const meta: ChatSnapshotMeta = {
       id,
@@ -64,7 +65,7 @@ export class CheckpointChatIndex {
       const raw = await fs.promises.readFile(this.fileOf(id), "utf8");
       const parsed = JSON.parse(raw) as Partial<ChatSnapshotMeta> & { messageCount?: number; messages?: unknown[] };
       if (typeof parsed.id !== "string" || typeof parsed.sessionId !== "string") return undefined;
-      // 兼容旧格式（曾存过全文 + messageCount）：取条数当行号
+      // Backwards compatible with the old format (which stored the full text + messageCount): use the count as the line number
       const line =
         typeof parsed.line === "number"
           ? parsed.line
@@ -84,7 +85,7 @@ export class CheckpointChatIndex {
     }
   }
 
-  /** 删除一批快照（代码检查点被作废时调用） */
+  /** Delete a batch of snapshots (called when code checkpoints are invalidated) */
   async remove(ids: string[]): Promise<void> {
     await Promise.all(
       ids.map(async (id) => {
@@ -97,7 +98,7 @@ export class CheckpointChatIndex {
     );
   }
 
-  /** 枚举元信息（QuickPick 里标注"含聊天快照 · 第 N 行"） */
+  /** Enumerate metadata (annotated in the QuickPick as "includes chat snapshot · line N") */
   async list(): Promise<ChatSnapshotMeta[]> {
     let names: string[];
     try {
