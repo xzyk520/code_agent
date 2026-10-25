@@ -74,6 +74,15 @@ async function main() {
     mkdirSync(runtimeDir, { recursive: true });
     run("tar", ["-xzf", archive, "-C", runtimeDir, "--strip-components=1"]);
 
+    // VSIX/ZIP paths are case-insensitive, but the Unix terminfo database ships
+    // entries such as 2621A/2621a and Eterm/eterm. The Python core does not need
+    // terminfo, so drop the whole directory instead of failing the package step.
+    const terminfo = join(runtimeDir, "share", "terminfo");
+    if (existsSync(terminfo)) {
+      rmSync(terminfo, { recursive: true, force: true });
+      console.log("Removed runtime/share/terminfo (case-insensitive VSIX paths).");
+    }
+
     const python = join(runtimeDir, "bin", "python3");
     if (!existsSync(python)) throw new Error(`Python not found after extract: ${python}`);
     run(python, ["-m", "pip", "install", "--no-warn-script-location", "httpx>=0.27", "pydantic>=2.7"]);
