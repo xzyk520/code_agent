@@ -280,13 +280,20 @@ class Shell {
       },
       clearModelKey: () => this.clearModelKey(),
       crashMock: () => {
-        if (this.core instanceof MockCore) this.core.simulateCrash("用户通过命令触发");
-        else void vscode.window.showInformationMessage("Bee Code: 当前内核不是 mock 模式，无法模拟崩溃。");
+        if (this.core instanceof MockCore) {
+          this.core.simulateCrash(tr(this.config.language, "用户通过命令触发", "Triggered by a user command"));
+        } else {
+          void vscode.window.showInformationMessage(
+            tr(this.config.language, "Bee Code: 当前内核不是 mock 模式，无法模拟崩溃。", "Bee Code: The current core is not in mock mode, so a crash cannot be simulated."),
+          );
+        }
       },
       pickSession: () => this.pickSession(),
       clearRemembered: () => {
         clearRememberedChoices(this.context);
-        void vscode.window.showInformationMessage("Bee Code: 已清除记住的确认选择。");
+        void vscode.window.showInformationMessage(
+          tr(this.config.language, "Bee Code: 已清除记住的确认选择。", "Bee Code: Remembered confirmation choices cleared."),
+        );
       },
       pickFiles: () => this.pickFiles(),
       focus: { fallbackLines: this.config.focus.fallbackLines, maxLines: this.config.focus.maxLines },
@@ -418,10 +425,10 @@ class Shell {
       this.panel.addMessage({ id: `sys_${Date.now()}`, role: "system", text: note });
       this.panel.setHint(
         status === "tool"
-          ? "上一轮停在工具调用：发「继续上次的操作」即可接着做。"
+          ? tr(this.config.language, "上一轮停在工具调用：发「继续上次的操作」即可接着做。", "The previous turn stopped at a tool call. Send \"Continue the previous operation\" to pick up where it left off.")
           : status === "awaiting-decision"
-            ? "上次的提案已失效：发「重新生成提案」可以让 agent 再给一次。"
-            : "上一轮生成被中断，已作废。",
+            ? tr(this.config.language, "上次的提案已失效：发「重新生成提案」可以让 agent 再给一次。", "The previous proposal is no longer valid. Send \"Regenerate proposal\" to have the agent produce it again.")
+            : tr(this.config.language, "上一轮生成被中断，已作废。", "The previous generation was interrupted and discarded."),
       );
       this.turn = "idle";
       this.turnDetail = undefined;
