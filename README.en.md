@@ -180,6 +180,9 @@ The README is also the Marketplace listing body.
 
 ## Docs
 
+- [Publishing to GitHub / Marketplace](docs/publishing.md)
+
+
 | Document | Contents |
 | --- | --- |
 | [docs/architecture.en.md](docs/architecture.en.md) | Layered design, three-mode prompts, model access and compatibility matrix, IPC contract, context engineering, write + review flow, industry comparison |

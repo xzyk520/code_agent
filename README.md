@@ -180,6 +180,9 @@ Topics: vscode-extension, coding-agent, ai, agents, mcp, skills, deepseek, opena
 
 ## 文档
 
+- [发布到 GitHub / Marketplace](docs/publishing.md)
+
+
 | 文档 | 内容 |
 | --- | --- |
 | [docs/architecture.md](https://github.com/xzyk520/code_agent/blob/main/docs/architecture.md) | 分层设计、三模式提示词、模型接入与兼容矩阵、IPC 契约、上下文工程、写入+待审流程、工业界对照 |
