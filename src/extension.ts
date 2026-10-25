@@ -185,6 +185,8 @@ class Shell {
   private libraryView?: LibraryViewProvider;
   private readonly commandTerminal = new CommandTerminal();
   private readonly approvals = new ApprovalQueue();
+  /** Proposals whose diff has already been opened automatically (one preview per proposal). */
+  private readonly autoOpenedProposals = new Set<string>();
   /** Where the previous turn stopped (persisted to disk so a reload can tell whether it can continue) */
   private turn: TurnStatus = "idle";
   private turnDetail: string | undefined;
@@ -793,6 +795,7 @@ class Shell {
 
   /** New session: new id, clear the panel, reopen the context */
   private async newSession(): Promise<void> {
+    this.autoOpenedProposals.clear();
     await this.diff.closeAll();
     this.killSessionCommandJobs();
     await this.sessions.flush();
@@ -906,6 +909,7 @@ class Shell {
       placeHolder: tr(this.config.language, "选择要恢复的会话", "Select a session to restore"),
     });
     if (!picked || picked.id === this.sessionId) return;
+    this.autoOpenedProposals.clear();
     await this.diff.closeAll();
 
     this.killSessionCommandJobs();
@@ -1648,6 +1652,18 @@ class Shell {
 
     const evaluation = this.describePermission("run", params.command);
     if (evaluation.decision === "deny") throw deniedError(evaluation.reason);
+
+    // Never ask to run a command while file proposals are still undecided: the user must be
+    // able to save/reject the edit first, and the command must see the resulting file.
+    if (this.proposals.count() > 0) {
+      this.panel.setHint(tr(this.config.language, "请先处理待审文件，然后再审批命令。", "Resolve the pending file proposal before approving the command."));
+      this.panel.setActivity(tr(this.config.language, "等待文件审批…", "Waiting for file approval…"));
+      try {
+        await this.proposals.waitForIdle(ctx.signal);
+      } catch {
+        throw deniedError(tr(this.config.language, "等待文件审批时被取消", "Cancelled while waiting for file approval"));
+      }
+    }
 
     let gateHandled = false;
     this.commandTerminal.show();
@@ -3290,8 +3306,14 @@ class Shell {
   }
 
   private refreshProposals(): void {
-    this.panel.setProposals(this.proposals.visible());
+    const visible = this.proposals.visible();
+    this.panel.setProposals(visible);
     this.updateStatus();
+    for (const proposal of visible) {
+      if (proposal.status !== "pending" || this.autoOpenedProposals.has(proposal.id)) continue;
+      this.autoOpenedProposals.add(proposal.id);
+      void this.showProposal(proposal.id);
+    }
   }
 
   // ───────────────────────── Adapter registration ─────────────────────────

@@ -28,6 +28,7 @@ export class ProposalAdapter implements vscode.Disposable {
   private readonly textCache = new Map<string, { text: string; bytes: number }>();
   private textCacheBytes = 0;
   private disposed = false;
+  private readonly idleWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; signal?: AbortSignal; onAbort?: () => void }> = [];
 
   constructor(
     private readonly diff: DiffAdapter,
@@ -60,6 +61,7 @@ export class ProposalAdapter implements vscode.Disposable {
 
   remove(id: string): void {
     this.byId.delete(id);
+    this.notifyIdle();
   }
 
   get(id: string): ProposalDto | undefined {
@@ -70,6 +72,7 @@ export class ProposalAdapter implements vscode.Disposable {
     this.byId.clear();
     this.textCache.clear();
     this.textCacheBytes = 0;
+    this.notifyIdle();
   }
 
   /** A write-capable command may have changed any file: pending proposals are no longer safe to apply. */
@@ -78,12 +81,16 @@ export class ProposalAdapter implements vscode.Disposable {
       if (dto.status !== "pending") continue;
       this.byId.set(id, { ...dto, status: "stale", summary: dto.summary ?? reason });
     }
+    this.notifyIdle();
   }
 
   /** The file was modified after the proposal was generated → mark it stale; the UI then prompts to "regenerate" */
   markStale(id: string): void {
     const dto = this.byId.get(id);
-    if (dto) this.byId.set(id, { ...dto, status: "stale" });
+    if (dto) {
+      this.byId.set(id, { ...dto, status: "stale" });
+      this.notifyIdle();
+    }
   }
 
   /** All proposals the panel should show: pending + stale (stale ones must stay visible, or they "vanish into thin air") */
@@ -163,6 +170,7 @@ export class ProposalAdapter implements vscode.Disposable {
     await this.diff.closeProposal(dto.path);
     this.byId.delete(id);
     this.forgetText(id);
+    this.notifyIdle();
     await decide(id, "accept").catch((err: unknown) => {
       this.logger.warn(`proposal.decide(accept) failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -179,9 +187,46 @@ export class ProposalAdapter implements vscode.Disposable {
     await this.diff.closeProposal(dto.path);
     this.byId.delete(id);
     this.forgetText(id);
+    this.notifyIdle();
     await decide(id, "reject").catch((err: unknown) => {
       this.logger.warn(`proposal.decide(reject) failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  }
+
+  /** Wait until every pending proposal has been accepted, rejected, or removed. */
+  waitForIdle(signal?: AbortSignal): Promise<void> {
+    if (this.pending().length === 0) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        resolve: () => {
+          if (waiter.onAbort) signal?.removeEventListener("abort", waiter.onAbort);
+          resolve();
+        },
+        reject: (err: Error) => {
+          if (waiter.onAbort) signal?.removeEventListener("abort", waiter.onAbort);
+          reject(err);
+        },
+        signal,
+        onAbort: undefined as (() => void) | undefined,
+      };
+      if (signal) {
+        waiter.onAbort = () => {
+          this.idleWaiters.splice(this.idleWaiters.indexOf(waiter), 1);
+          reject(new Error("cancelled while waiting for proposal decisions"));
+        };
+        if (signal.aborted) {
+          waiter.onAbort();
+          return;
+        }
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      this.idleWaiters.push(waiter);
+    });
+  }
+
+  private notifyIdle(): void {
+    if (this.pending().length > 0) return;
+    for (const waiter of this.idleWaiters.splice(0)) waiter.resolve();
   }
 
   dispose(): void {

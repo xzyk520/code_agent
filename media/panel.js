@@ -1302,12 +1302,6 @@
       const actions = document.createElement("div");
       actions.className = "proposal-actions";
 
-      const view = document.createElement("button");
-      view.textContent = tr("查看改动", "View changes");
-      view.addEventListener("click", () => post({ type: "proposal.diff", id: item.id }));
-
-      actions.appendChild(view);
-
       // A stale proposal cannot be accepted (its content no longer matches the latest file); it can only be viewed or discarded
       if (!stale) {
         const accept = document.createElement("button");
