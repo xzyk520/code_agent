@@ -66,7 +66,7 @@
     el.proposalsTitle.textContent = tr("待审提案", "Proposals");
     el.acceptAll.textContent = tr("全部接受", "Accept all");
     el.rejectAll.textContent = tr("全部拒绝", "Reject all");
-    el.input.placeholder = tr("描述你的需求…（Ctrl+Enter 发送）", "Describe what you need… (Ctrl+Enter to send)");
+    el.input.placeholder = tr("描述你的需求…（Enter 发送，Shift+Enter 换行）", "Describe what you need… (Enter to send, Shift+Enter for a new line)");
     el.retry.textContent = tr("重试本轮", "Retry this turn");
     el.send.textContent = tr("发送", "Send");
     renderMode();
@@ -690,10 +690,10 @@
     el.modeBadge.title = tr("模式由意图分析自动选择", "Mode selected automatically from intent");
     el.input.placeholder =
       state.mode === "builder"
-        ? "Describe the change to implement… (Ctrl+Enter to send)"
+        ? "Describe the change to implement… (Enter to send, Shift+Enter for a new line)"
         : state.mode === "debugger"
-          ? "Describe the error or unexpected behavior… (Ctrl+Enter to send)"
-          : "Tell me what you want to do (the mode is chosen automatically)… (Ctrl+Enter to send)";
+          ? "Describe the error or unexpected behavior… (Enter to send, Shift+Enter for a new line)"
+          : "Tell me what you want to do (the mode is chosen automatically)… (Enter to send, Shift+Enter for a new line)";
   }
 
   /** Chips for files the agent has read (one per path; re-reads update the line range and flash) */
@@ -1217,10 +1217,11 @@
 
 
   el.input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      send();
-    }
+    // Enter sends; Shift+Enter inserts a newline. Ctrl/Cmd+Enter is kept as an alias.
+    if (event.key !== "Enter" || event.isComposing) return;
+    if (event.shiftKey) return;
+    event.preventDefault();
+    send();
   });
 
   window.addEventListener("message", (event) => {
