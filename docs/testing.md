@@ -333,3 +333,81 @@ Bee Code: Export diagnostics (redacted)
 - 只测试你信任的 MCP server；它会以你的用户权限执行命令。
 - `mcp.json` 可能包含环境变量密钥，已被 `.gitignore` 忽略。
 - 不要在重要仓库首次测试写入/命令能力；先用临时目录。
+
+
+## 轮内压缩与更早历史
+
+这是两层不同机制，要分别测。
+
+### 轮内压缩（同一轮）
+
+触发条件：当前消息估算超过：
+
+```text
+beeCode.model.contextWindow × 0.7
+```
+
+默认窗口 32768，预算约 22937 tokens。为了容易触发，临时设置：
+
+```json
+{
+  "beeCode.model.contextWindow": 4096,
+  "beeCode.agent.maxTurnTokens": 100000
+}
+```
+
+然后在一个临时工作区准备 5 个大文件，发送：
+
+```text
+依次读取 a.txt、b.txt、c.txt、d.txt、e.txt 全文，然后汇总每个文件的要点。
+```
+
+预期在 `Bee Code: Show logs` 中看到类似：
+
+```text
+In-turn compaction: Folded N earlier tool results into digests
+In-turn compaction: Removed N earlier conversation fragments
+In-turn compaction: Model summary replaced N earlier messages
+Context is approaching the limit and was compacted: ...
+```
+
+面板也会出现上下文接近上限的警告。
+
+验证：
+
+- 后续轮次仍能回答；
+- 当前计划、后台任务 jobId 不丢；
+- 摘要后仍能引用最近文件；
+- 失败时不会卡死。
+
+### 更早历史（跨轮）
+
+跨轮历史由扩展的 `contextBuilder` 处理，默认：
+
+```text
+最近 8 条消息 + 更早内容的摘要
+```
+
+测试：
+
+1. 在临时工作区连续进行 5–6 轮，每轮让 agent 读一个不同的大文件；
+2. 每轮都明确一个独特结论，例如：
+   - 第一轮：记录 `MARKER-A`
+   - 第二轮：记录 `MARKER-B`
+3. 然后发送：
+
+```text
+我们第一轮让你读的是哪个文件？当时记录的 marker 是什么？
+```
+
+预期：
+
+- 日志出现 `Model summary` / `Summary restored`；
+- 模型能回答较早轮次的意图或摘要；
+- 重载窗口后继续问，摘要仍然有效。
+
+注意：
+
+- 轮内压缩是 Python 内核的 `_compact`；
+- 跨轮摘要由扩展的 `contextBuilder` + `SummaryStore` 完成；
+- 两者的日志和触发条件不同，不要混在一起判断。
