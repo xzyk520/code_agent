@@ -55,7 +55,7 @@
   /** @typedef {{ id: string, role: "user" | "assistant" | "system", text: string, reasoning?: string, diagrams?: Array<{ id: string, kind: string, title?: string, source: string }> }} ChatMessage */
   /** @typedef {{ id: string, path: string, additions?: number, deletions?: number, status: string, summary?: string }} Proposal */
   /** @typedef {{ path: string, startLine?: number, endLine?: number, kind?: string }} Attachment */
-  /** @typedef {{ locale?: "zh" | "en", mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, retryAvailable?: boolean, hint?: string }} PanelState */
+  /** @typedef {{ locale?: "zh" | "en", mode: Mode, busy: boolean, messages?: ChatMessage[], proposals?: Proposal[], attachments?: Attachment[], plan?: Array<{ text: string, status: string }>, turns?: Array<{ userMessageId?: string, status?: string, error?: string, inputTokens?: number, outputTokens?: number, elapsedMs?: number, modelWaitMs?: number, toolMs?: number, trace?: Array<any> }>, trajectory?: Array<{ id: string, mode: Mode, intent: string, detail?: string }>, commandCheckpoints?: Array<{ id: string, files: string[], command: string }>, retryAvailable?: boolean, hint?: string }} PanelState */
 
   /** @type {{ mode: Mode, busy: boolean }} */
   let state = { mode: "chat", busy: false };
@@ -1398,9 +1398,9 @@
           for (const diagram of item.diagrams || []) renderDiagramCard(diagram);
         }
         el.trajectoryList.textContent = "";
-        trajectoryItems = [];
         clearLiveReasoning();
         clearStreaming();
+        renderTrajectory(Array.isArray(next.trajectory) ? next.trajectory : []);
         subagents.clear();
         for (const checkpoint of next.commandCheckpoints || []) renderCommandCheckpoint(checkpoint);
         planNode = null;

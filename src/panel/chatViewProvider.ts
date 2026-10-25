@@ -94,6 +94,7 @@ export interface PanelState {
   attachments: AttachedContext[];
   plan?: PlanStep[];
   turns?: TurnView[];
+  trajectory?: Array<{ id: string; mode: Mode; intent: string; detail?: string }>;
   commandCheckpoints?: Array<{ id: string; files: string[]; command: string }>;
   retryAvailable?: boolean;
   hint?: string;
@@ -337,10 +338,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Session trace: lists each turn by intent; clicking jumps to the matching message */
   setTrajectory(items: Array<{ id: string; mode: Mode; intent: string; detail?: string }>): void {
+    this.state.trajectory = items;
     this.post({ type: "trajectory", items });
   }
 
   addTrajectoryItem(item: { id: string; mode: Mode; intent: string; detail?: string }): void {
+    this.state.trajectory = [...(this.state.trajectory ?? []), item];
     this.post({ type: "trajectoryItem", item });
   }
 
