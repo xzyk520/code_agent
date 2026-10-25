@@ -1004,6 +1004,45 @@
   /** Reasoning content: split by "model call number" (display only, not added to context, but persisted with the message) */
   /** @type {Map<number, { node: HTMLDetailsElement, body: HTMLElement }>} */
   const reasoningBlocks = new Map();
+  /** @type {Array<{ name: string, node: HTMLDetailsElement, summary: HTMLElement, body: HTMLElement }>} */
+  const liveTools = [];
+
+  function clearLiveTools() {
+    for (const entry of liveTools.splice(0)) entry.node.remove();
+  }
+
+  /** @param {any} msg */
+  function renderToolEvent(msg) {
+    const name = String(msg.name || "tool");
+    if (msg.status === "start") {
+      const node = document.createElement("details");
+      node.className = "msg tool-live";
+      node.open = true;
+      node.dataset.toolName = name;
+      const summary = document.createElement("summary");
+      summary.className = "tool-live-title";
+      summary.textContent = tr(`调用工具：${name}`, `Calling tool: ${name}`);
+      const body = document.createElement("pre");
+      body.className = "tool-live-body";
+      body.textContent = msg.args ? (typeof msg.args === "string" ? msg.args : JSON.stringify(msg.args, null, 2)) : "";
+      node.append(summary, body);
+      el.messages.appendChild(node);
+      liveTools.push({ name, node, summary, body });
+      scrollToLatest();
+      return;
+    }
+    const entry = [...liveTools].reverse().find((item) => item.name === name);
+    if (!entry) return;
+    entry.summary.textContent =
+      msg.status === "error"
+        ? tr(`工具失败：${name}`, `Tool failed: ${name}`)
+        : tr(`工具完成：${name}`, `Tool finished: ${name}`);
+    if (msg.summary || msg.detail) {
+      entry.body.textContent = String(msg.detail || msg.summary || "");
+    }
+    if (msg.status === "error") entry.node.classList.add("tool-error");
+    scrollToLatest();
+  }
 
   function clearLiveReasoning() {
     for (const entry of reasoningBlocks.values()) entry.node.remove();
@@ -1325,6 +1364,7 @@
         state = { mode: next.mode, busy: next.busy };
         locale = next.locale === "en" ? "en" : "zh";
         applyLocale();
+        clearLiveTools();
         el.messages.textContent = "";
         const turnsByUser = new Map();
         for (const turn of next.turns || []) {
@@ -1387,6 +1427,10 @@
         setActivity(typeof msg.text === "string" ? msg.text : "");
         break;
       }
+      case "tool": {
+        renderToolEvent(msg);
+        break;
+      }
       case "approval": {
         renderApproval(msg);
         break;
@@ -1405,7 +1449,7 @@
         // Lightweight status: never re-render the message list (otherwise the streaming reply would be cleared)
         state.mode = /** @type {Mode} */ (msg.mode);
         state.busy = Boolean(msg.busy);
-        if (!state.busy) setMessagesBusy(false);   // Safety net: always clear busy when the turn ends
+        if (!state.busy) { clearLiveTools(); setMessagesBusy(false); }   // Safety net: always clear busy when the turn ends
         renderMode();
         renderBusy();
         el.hint.textContent = String(msg.hint ?? "");

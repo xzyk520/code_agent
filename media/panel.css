@@ -999,3 +999,22 @@ textarea,
   flex-wrap: wrap;
   gap: 6px;
 }
+
+
+/* Live tool call cards (removed when the turn ends; the persisted trace card takes over) */
+.tool-live {
+  border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+  background: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.08));
+  padding: 5px 8px;
+}
+.tool-live-title { cursor: pointer; font-size: 0.9em; opacity: 0.9; }
+.tool-live-body {
+  margin: 5px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+}
+.tool-live.tool-error { border-left-color: var(--vscode-errorForeground); }

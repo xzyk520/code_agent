@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { ConfirmAskParams, DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams } from "../protocol";
+import type { ConfirmAskParams, DiagramDto, Mode, PlanStep, ProposalDto, TraceStepDto, UiDiagramParams, UiPlanParams, UiReadParams, UiRetryParams, UiSubagentParams, UiToolParams } from "../protocol";
 import { tr, type Locale } from "../i18n";
 
 /** A message to display in the panel (shell-side view model, independent of the protocol) */
@@ -224,6 +224,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Live progress line shown while a turn is classifying / thinking / running a tool */
   setActivity(text: string): void {
     this.post({ type: "activity", text });
+  }
+
+  /** Append/update a live tool card in the conversation. */
+  toolEvent(params: UiToolParams): void {
+    this.post({ type: "tool", ...params });
   }
 
   /** Ask the user inside the panel (no native QuickPick). Returns the chosen option id or null. */

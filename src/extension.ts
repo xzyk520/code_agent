@@ -3125,6 +3125,7 @@ class Shell {
             `${p.status === "start" ? "Running tool" : p.status === "end" ? "Done" : "Failed"}: ${p.name}`,
           ),
         );
+        if (p.name !== "model" && p.name !== "guard") this.panel.toolEvent(p);
         this.panel.setHint(tr(this.config.language, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}：${p.name}`, `${p.status === "start" ? "运行" : p.status === "end" ? "完成" : "失败"}: ${p.name}`));
         return;
       }
